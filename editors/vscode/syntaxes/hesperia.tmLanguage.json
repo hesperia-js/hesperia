@@ -1,0 +1,4 @@
+{
+  "scopeName": "source.hesperia.tsx",
+  "patterns": [{ "include": "source.tsx" }]
+}

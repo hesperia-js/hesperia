@@ -1,0 +1,10 @@
+[test]
+coveragePathIgnorePatterns = [
+  "**/dist/**",
+  "**/.hesperia/**",
+  "**/node_modules/**",
+  "**/tests/**",
+  "**/data:text/**",
+]
+coverageReporter = ["text", "lcov"]
+coverageDir = ".hesperia/coverage"

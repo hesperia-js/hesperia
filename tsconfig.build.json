@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "noEmitOnError": true,
+    "declaration": true,
+    "rewriteRelativeImportExtensions": true,
+    "rootDir": "./src",
+    "outDir": "./dist"
+  },
+  "files": [
+    "src/index.ts",
+    "src/compiler/index.ts",
+    "src/client.ts",
+    "src/aeolia/index.ts",
+    "src/runtime/index.ts",
+    "src/runtime/error-boundary.ts",
+    "src/routing/route-host.ts",
+    "src/tooling/cli.ts",
+    "src/routing/index.ts"
+  ],
+  "include": []
+}

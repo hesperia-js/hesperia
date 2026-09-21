@@ -1,0 +1,105 @@
+{
+  "name": "hesperia",
+  "version": "0.0.0",
+  "description": "Ergonomic Frontend Framework for building reactive web applications",
+  "keywords": [
+    "framework",
+    "front-end",
+    "reactive",
+    "server",
+    "typescript",
+    "web"
+  ],
+  "homepage": "https://github.com/hesperia-js/hesperia",
+  "bugs": "https://github.com/hesperia-js/hesperia/issues",
+  "license": "MPL-2.0",
+  "author": {
+    "name": "Halk <Werberth Lins>",
+    "email": "halkliff@pm.me",
+    "url": "https://halkliff.dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hesperiajs/hesperia.git"
+  },
+  "bin": {
+    "hesperia": "./dist/tooling/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./compiler": {
+      "types": "./dist/compiler/index.d.ts",
+      "import": "./dist/compiler/index.js",
+      "default": "./dist/compiler/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.js",
+      "default": "./dist/runtime/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js",
+      "default": "./dist/client.js"
+    },
+    "./routing": {
+      "types": "./dist/routing/index.d.ts",
+      "import": "./dist/routing/index.js",
+      "default": "./dist/routing/index.js"
+    },
+    "./aeolia": {
+      "types": "./dist/aeolia/index.d.ts",
+      "import": "./dist/aeolia/index.js",
+      "default": "./dist/aeolia/index.js"
+    }
+  },
+  "scripts": {
+    "build": "bunx tsc -p tsconfig.build.json",
+    "test": "bun run build && bun test tests/compiler tests/runtime tests/data tests/tooling tests/routing tests/editor",
+    "test:coverage": "bun run build && bun test tests/compiler tests/runtime tests/data tests/tooling tests/routing tests/editor --coverage",
+    "test:browser": "node node_modules/@playwright/test/cli.js test",
+    "test:package": "bun run build && bun test tests/package",
+    "test:editor": "bun run build && bun run --cwd editors/vscode typecheck && bun run --cwd editors/vscode build && bun run --cwd editors/vscode build:test && powershell -NoProfile -ExecutionPolicy Bypass -File editors/vscode/test.ps1",
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json",
+    "check": "bun run build && bun run typecheck && bun run lint && bun run fmt:check && bun test tests/compiler tests/runtime tests/data tests/tooling tests/routing tests/editor && bun run test:browser && bun test tests/package && bun run test:editor",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix"
+  },
+  "dependencies": {
+    "@jridgewell/remapping": "2.3.5",
+    "@jridgewell/trace-mapping": "0.3.31",
+    "esrap": "2.3.7",
+    "oxc-parser": "0.149.0",
+    "oxc-transform": "0.149.0",
+    "parse5": "8.0.1",
+    "typescript": "7.0.2",
+    "vscode-languageserver": "10.1.1",
+    "vscode-languageserver-textdocument": "1.0.14"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/bun": "1.4.2",
+    "aeolia": "file:../aeolia",
+    "happy-dom": "20.14.3",
+    "oxfmt": "0.67.0",
+    "oxlint": "1.82.0",
+    "playwright": "1.63.0"
+  },
+  "peerDependencies": {
+    "aeolia": "0.0.0"
+  },
+  "packageManager": "bun@1.4.2"
+}

@@ -1,0 +1,23 @@
+import { mount } from "hesperia";
+import Native, { nativeFormEvents } from "../Native.tsx";
+
+const application = mount(
+  document.getElementById("app")!,
+  Native,
+  {},
+  {
+    onError(error) {
+      document.documentElement.dataset.fault =
+        error instanceof Error ? error.message : String(error);
+    },
+  },
+);
+await application.settled();
+
+Object.assign(window, {
+  nativeFixture: {
+    events: nativeFormEvents,
+    dispose: () => application.dispose(),
+  },
+});
+document.documentElement.dataset.ready = "true";
