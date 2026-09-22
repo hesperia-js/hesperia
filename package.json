@@ -20,7 +20,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hesperiajs/hesperia.git"
+    "url": "https://github.com/hesperia-js/hesperia.git"
   },
   "bin": {
     "hesperia": "./dist/tooling/cli.js"
