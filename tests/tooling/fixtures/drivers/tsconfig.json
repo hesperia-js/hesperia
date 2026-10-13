@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ESNext", "DOM"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "allowJs": true,
+    "checkJs": true,
+    "skipLibCheck": true,
+    "types": ["bun"]
+  },
+  "files": [
+    "application-routing-browser.mjs",
+    "async-route-outcomes-browser.mjs",
+    "development-browser.mjs",
+    "development-deletion-browser.mjs",
+    "routing-page-task-browser.mjs",
+    "routing-public-flows-browser.mjs",
+    "routing-public-flows.d.mts",
+    "globals.d.mts"
+  ]
+}

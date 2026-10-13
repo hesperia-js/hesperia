@@ -4,6 +4,21 @@ Reader: a junior TypeScript engineer familiar with Hesperia routing and the brow
 
 Audit date: 2026-09-11.
 
+## Current runtime status
+
+This audit predates the Navigation runtime implementation. Its candidate review,
+browser observations, and statements that fallback work is unfinished describe
+the 2026-09-11 research snapshot. The current API and routing behavior are
+documented in [routing](routing.md). The runtime uses the native Navigation API
+only when the required interception support is present; otherwise it uses the
+History-event fallback. That fallback tracks the current entry and entries
+created through Hesperia or the installed History wrappers. The classic History
+API does not expose earlier entry keys or indexes, so the fallback cannot list
+or traverse an entry created before tracking began. It also cannot provide the
+same interception events for direct `window.location` changes. During a
+fallback Back or Forward, the address may change while Hesperia checks the
+route; a rejected move restores the previous tracked entry.
+
 Hesperia has approval to use the native Navigation API, while retaining the project's Baseline 2024 compatibility objective. This document records what the current platform and the concrete polyfill candidate can prove. It does not select a dependency, change the browser support floor, or define behavior for foreign history entries.
 
 ## The compatibility problem

@@ -1,0 +1,38 @@
+{
+  "name": "@hesperia/tailwind",
+  "version": "1.0.0-alpha.1",
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hesperia-js/hesperia.git",
+    "directory": "packages/tailwind"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "bunx tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@hesperia/postcss": "workspace:*",
+    "@tailwindcss/postcss": "4.3.3",
+    "tailwindcss": "4.3.3"
+  },
+  "devDependencies": {
+    "@hesperia/postcss": "workspace:*",
+    "@hesperia/tooling": "workspace:*",
+    "postcss": "8.5.28"
+  },
+  "peerDependencies": {
+    "@hesperia/tooling": "1.0.0-alpha.1",
+    "postcss": "^8.5.16"
+  }
+}

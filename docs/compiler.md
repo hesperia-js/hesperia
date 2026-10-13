@@ -44,7 +44,41 @@ export function total(values: readonly number[]) {
 
 Loops inside a component execute as part of its body. They do not change the component's usual single-execution lifetime or turn local variables into signals. A binding read in immediate loop work is still a forbidden component-body read, including reads in conditions, updates, or defaults. Deferred event and effect callbacks retain their separate execution timing.
 
-Ordinary async functions support native `for await...of`. Such a function can be declared inside a component and called later from an effect or event. Direct async iteration in a component body is not supported by the current component await driver and produces `HES-ASYNC-ITERATION` at the authored loop. Component bodies continue to use the established await behavior for registered queries and child renders.
+Ordinary async functions support native `for await...of`. Such a function can be declared inside a component and called later from an effect or event. Direct async iteration in a component body is not supported by the current component await driver and produces `HES-ASYNC-ITERATION` at the authored loop. Component bodies may await registered queries, child renders, and dynamic import Promises emitted by Hesperia. An enclosing async boundary is required.
+
+Call an async helper from a deferred event or effect. The component body does not await the helper, so its loop stays ordinary async work.
+
+Here, `AsyncIterable<string>` is a source that supplies strings asynchronously.
+Clicking the button starts collecting them and updates the displayed values as
+they arrive.
+
+```tsx
+import { type Component } from "hesperia";
+import * as client from "hesperia/client";
+
+function Values(props: Component.Props<{ values: AsyncIterable<string> }>) {
+  const received = client.state<string[]>([]);
+  const error = client.state("");
+
+  async function collect() {
+    try {
+      for await (const value of props.values()) {
+        received.update((current) => [...current, value]);
+      }
+    } catch (cause) {
+      error.set(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  return (
+    <section>
+      <button on:click={() => void collect()}>Collect values</button>
+      <output>{received().join(", ")}</output>
+      <output>{error()}</output>
+    </section>
+  );
+}
+```
 
 Native `try`, `catch`, and `finally` preserve JavaScript's handling of returns, thrown values, and loop exits. Catch bindings remain local to their catch clause, including destructured bindings and their defaults. Creating a callback inside one of these blocks does not execute its body. Immediate binding reads in a component still fail checking, while deferred event and effect callbacks can read bindings when they run.
 
@@ -53,6 +87,8 @@ Native `switch` statements preserve case order, fallthrough, and `break`. The ca
 Classes retain native inheritance, private names, fields, methods, and static blocks. Class creation evaluates the parent class expression, computed names, static fields, and static blocks. Instance fields and method bodies run later. Component-body binding checks respect that distinction, and browser dependency checking includes the methods and fields of retained classes.
 
 Assignments, including compound and logical assignments, and spreads in arrays, function arguments, or constructor arguments preserve native evaluation order. Array holes remain holes; spreading an iterable uses its iterator. Regular expression and bigint literals produce native JavaScript values. Destructuring assignment and writes that replace an extracted keyed-list parameter are not implemented. Updating a property of the referenced object is distinct from replacing that parameter.
+
+Comma expressions in ordinary JavaScript evaluate each operand from left to right and return the last value. For example, `(record(), value)` calls `record` before returning `value`. Earlier operands keep their side effects and signal reads. A call such as `(0, object.method)()` also keeps JavaScript's behavior: it calls the method without binding `this` to `object`.
 
 Browser checking rejects references to native `eval` and the native `Function` constructor, including direct aliases and explicit access through `globalThis`, `window`, or `self`. It also follows proven aliases to those global objects, finite computed property names, and constant-name `Reflect.get` lookups; an unknown computed property on a proven global object fails closed. A finite property union that includes `constructor` remains unsafe unless the receiver is proven to use a safe own constructor or a known ordinary constructor.
 
@@ -69,8 +105,12 @@ export function loadEditor(compact: boolean) {
 }
 ```
 
-Browser generation publishes the possible modules and preserves lazy execution: only the selected module runs when the import is called. Source and options expressions are evaluated once; a thrown operand rejects the returned promise. Repeated imports retain native module identity. Ordinary authored `.ts` and `.mts` helpers use the same canonical generation pipeline as `.tsx`, so their import transformations are included in the final browser build.
+Browser generation publishes the possible modules and preserves lazy execution: only the selected module runs when the import is called. Source and options expressions are evaluated once; a thrown operand rejects the returned promise. Repeated JavaScript module imports retain native module identity. Ordinary authored `.ts` and `.mts` helpers use the same canonical generation pipeline as `.tsx`, so their import transformations are included in the final browser build.
+
+The compiler registers the original dynamic import Promise for component awaits
+without assigning it to a component. A module-level variable can hold that Promise
+for several components to await, each within its own lifetime. This does not make
+arbitrary Promises valid component waits. See [asset imports](assets.md) for direct
+and stored-Promise examples.
 
 Extracted route guards can also import finite TypeScript targets lazily. The compiler includes those modules and their dependencies in the emitted graph, including module initialization, side-effect imports, and dependencies reached through `yield` or `yield*`. They still execute at the native import timing, and shared dependencies initialize once. Browser capability checking applies to that emitted graph before publication.
-
-This is not complete JavaScript syntax support. Dynamic import analysis and the generated runtime's dependency checks remain under integration. The [implementation ledger](implementation-milestone.md) records current verification and the remaining browser milestone work.

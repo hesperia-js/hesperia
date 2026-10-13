@@ -1,0 +1,47 @@
+{
+  "name": "@hesperia/compiler",
+  "version": "1.0.0-alpha.1",
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hesperia-js/hesperia.git",
+    "directory": "packages/compiler"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./tooling": {
+      "types": "./dist/tooling.d.ts",
+      "import": "./dist/tooling.js",
+      "default": "./dist/tooling.js"
+    },
+    "./editor": {
+      "types": "./dist/editor.d.ts",
+      "import": "./dist/editor.js",
+      "default": "./dist/editor.js"
+    }
+  },
+  "scripts": {
+    "build": "bunx tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@jridgewell/remapping": "2.3.5",
+    "@jridgewell/trace-mapping": "0.3.31",
+    "esrap": "2.3.7",
+    "hesperia": "workspace:*",
+    "oxc-parser": "0.149.0",
+    "oxc-transform": "0.149.0",
+    "parse5": "8.0.1",
+    "typescript": "7.0.2"
+  }
+}

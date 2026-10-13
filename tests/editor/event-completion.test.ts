@@ -1,34 +1,40 @@
 import { expect, test } from "bun:test";
-import { EditorProject } from "../../src/editor/project.ts";
+import { EditorProject } from "../../packages/language-server/src/project.ts";
 
-test("native event completion works in unfinished attributes and replaces only the event name", () => {
+test("native event completion works in unfinished attributes and replaces only the event name", async () => {
   for (const markup of ["<button on:| />", "<button on:|", "<button on:dr|agend />"]) {
     const authored = `const emoji = "🐈";\r\nexport const App = () => ${markup}`;
     const offset = authored.indexOf("|");
     const source = authored.replace("|", "");
-    const project = new EditorProject([{ filename: "events.tsx", source }]);
+    const project = await EditorProject.create([{ filename: "events.tsx", source }]);
+
     try {
-      const items = project.completions("events.tsx", offset);
+      const items = await project.completions("events.tsx", offset);
       const drag = items.find((item) => item.label === "dragstart");
+
       expect(drag).toBeDefined();
+
       expect(items.some((item) => item.label === "dragStart")).toBe(false);
+
       expect(drag?.insertText).toBe("dragstart");
+
       expect(drag?.replacement).toStrictEqual({
         start: source.indexOf("on:") + 3,
         end: source.indexOf("on:") + 3 + (markup.includes("dr|agend") ? 7 : 0),
       });
+
       if (markup.includes("dr|"))
         expect(items.every((item) => item.label.startsWith("dr"))).toBe(true);
       else
         for (const event of ["click", "dragend", "mouseenter", "mouseleave", "keydown"])
           expect(items.some((item) => item.label === event)).toBe(true);
     } finally {
-      project.dispose();
+      await project.dispose();
     }
   }
 });
 
-test("event completion uses the matching DOM event map for complete and unfinished JSX", () => {
+test("event completion uses the matching DOM event map for complete and unfinished JSX", async () => {
   for (const [markup, event] of [
     ["<button on:| />", "htmlEvent"],
     ["<svg><circle on:| /></svg>", "svgEvent"],
@@ -48,21 +54,24 @@ test("event completion uses the matching DOM event map for complete and unfinish
       interface MathMLElementEventMap { mathEvent: MouseEvent }
     }
     export const App = () => ${markup}`;
-    const project = new EditorProject([
+    const project = await EditorProject.create([
       { filename: "events.tsx", source: authored.replace("|", "") },
     ]);
+
     try {
-      const items = project.completions("events.tsx", authored.indexOf("|"));
+      const items = await project.completions("events.tsx", authored.indexOf("|"));
+
       expect(items.find((item) => item.label === event)?.detail).toContain("MouseEvent");
+
       for (const other of ["htmlEvent", "svgEvent", "mathEvent"].filter((name) => name !== event))
         expect(items.some((item) => item.label === other)).toBe(false);
     } finally {
-      project.dispose();
+      await project.dispose();
     }
   }
-});
+}, 45000);
 
-test("native event completion stays out of expressions, strings, comments and components", () => {
+test("native event completion stays out of expressions, strings, comments and components", async () => {
   for (const source of [
     'export const text = "on:|";',
     'export const App = () => <button title="on:|" />;',
@@ -71,17 +80,18 @@ test("native event completion stays out of expressions, strings, comments and co
     "export const App = () => <Child on:| />;",
     "// on:|\nexport const value = 1;",
   ]) {
-    const project = new EditorProject([
+    const project = await EditorProject.create([
       { filename: "events.tsx", source: source.replace("|", "") },
     ]);
+
     try {
       expect(
-        project
-          .completions("events.tsx", source.indexOf("|"))
-          .some((item) => item.label === "dragstart"),
+        (await project.completions("events.tsx", source.indexOf("|"))).some(
+          (item) => item.label === "dragstart",
+        ),
       ).toBe(false);
     } finally {
-      project.dispose();
+      await project.dispose();
     }
   }
-});
+}, 45000);

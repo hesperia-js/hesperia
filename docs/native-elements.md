@@ -71,6 +71,51 @@ Hesperia removes these listeners when their component is destroyed. Exceptions
 from a handler follow rendering error handling. Custom event names receive the
 base `Event` type.
 
+Pass a handler and static options as a readonly pair when you need `capture`,
+`once`, or `passive`. The same options can be composed with helpers from
+`hesperia/events`:
+
+```tsx
+import { capture, once } from "hesperia/events";
+
+export default function FocusOnce() {
+  return (
+    <button
+      on:click={capture(
+        once(function (event) {
+          this.focus();
+          event.clientX;
+        }),
+      )}
+    >
+      Focus once
+    </button>
+  );
+}
+```
+
+`capture`, `once`, and `passive` each set their option to `true` and preserve the
+handler and other options. `preventDefault()` and `stopPropagation()` remain
+handler calls; they are not registration options. For example, a submit handler
+can still call `event.preventDefault()` before reading a form.
+
+The compiler checks option names and values before rendering. Option values must
+be static booleans, and an options object cannot be spread or mutated. Constant
+string keys are accepted when the compiler can resolve them. Destructuring with
+a computed binding key remains outside this compiler profile and receives its
+existing `HES-PATTERN` diagnostic.
+
+The helpers are also available from the `events` export of `hesperia/client`,
+including `client.events` when importing that module as a namespace. They return
+a fresh handler/options pair. Sharing a `once` pair between elements gives each
+element its own native listener and independent once behavior.
+
+Suspending a cached page suppresses callback delivery while preserving its nodes
+and listener registrations. A native `once` listener remains consumed after it
+fires; restoring the page resumes the remaining listeners. Component destruction
+removes them. For options computed at runtime, use the element's native
+`addEventListener` with component cleanup.
+
 An application that owns the whole document can pass a `Document` to `mount`.
 Its shell belongs in the project's root `app.tsx`, where Hesperia permits
 document-level JSX. The example below shows manual mounting. A generated
@@ -141,6 +186,29 @@ an `input` inside SVG's `foreignObject` has type `HTMLInputElement`. SVG values
 such as `r={3}` and `viewBox="0 0 10 10"` are supplied as attribute values; the
 browser exposes the corresponding native objects when you read the element.
 CSS in a `style` attribute is a string.
+
+HTML `src` attributes accept a native `Blob` as well as a URL string on any HTML
+element except `script`; executable elements remain string-only. A video `poster`
+accepts the same values. For responsive images, `srcset`
+accepts either the browser's usual string or pairs such as
+`[[smallImage, "480w"], [largeImage, "960w"]]`; each source can be a Blob or a URL
+string, and each descriptor uses native `w` or `x` notation. Hesperia creates an
+object URL for each Blob source and updates the existing element when a reactive
+value changes. It revokes an old object URL after replacement and releases the
+current one when the element is destroyed. A page kept in the route cache retains
+its object URLs until restoration or final destruction. Author-supplied URL
+strings remain untouched and are never revoked by Hesperia. These attributes do
+not change executable-markup restrictions. `File` values are accepted as Blob
+subtypes, including files from another same-origin Document. Hesperia creates
+each object URL through the target element's Document. If that Document has no
+URL API, the render reports a `blob-url` fault instead of stringifying the File
+or Blob. Authored `iframe`, `embed`, and `object` elements are rejected with
+guidance to use the official `Embed` component from `hesperia/embed`; direct
+calls to the native element runtime are guarded the same way. Independently
+created browser DOM is outside this JSX policy.
+
+See the [Embed guide](embed.md) for sandbox permissions, iframe events, Blob
+sources, and sizing behavior.
 
 The compiler accepts a restricted set of HTML compositions. Paragraphs with
 text and phrasing children are supported when the browser parser preserves the

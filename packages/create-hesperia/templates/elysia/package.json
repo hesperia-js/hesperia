@@ -1,0 +1,26 @@
+{
+  "name": "HESPERIA_PROJECT_NAME",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "hesperia dev",
+    "build": "hesperia build",
+    "preview": "bun run build && bun src/server-entry.ts",
+    "start": "bun src/server-entry.ts",
+    "check": "hesperia check"
+  },
+  "dependencies": {
+    "@elysia/eden": "1.4.10",
+    "@hesperia/elysia": "1.0.0-alpha.1",
+    "@hesperia/hosting": "1.0.0-alpha.1",
+    "aeolia": "1.0.0-alpha.1",
+    "elysia": "1.4.30",
+    "hesperia": "1.0.0-alpha.1"
+  },
+  "devDependencies": {
+    "@hesperia/language-server": "1.0.0-alpha.1",
+    "@hesperia/tooling": "1.0.0-alpha.1",
+    "@types/bun": "1.4.2",
+    "typescript": "7.0.2"
+  }
+}

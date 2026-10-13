@@ -1,5 +1,5 @@
 import { component, defineComponent, dynamic, element, mount } from "hesperia/runtime";
-import { errorBoundary } from "../../../dist/runtime/error-boundary.js";
+import { errorBoundary } from "../../../packages/hesperia/dist/runtime/error-boundary.js";
 import { ErrorView, FailingContent, errorEvents } from "../ErrorViews.tsx";
 
 const errors: string[] = [];
@@ -28,11 +28,14 @@ const app = mount(
     onError: (error) => errors.push(String(error)),
   },
 );
+
 Object.assign(window, {
   errorBoundaryFixture: {
     snapshot: () => ({ events: errorEvents(), errors: errors.slice() }),
     dispose: () => app.dispose(),
   },
 });
+
 await app.settled();
+
 document.documentElement.dataset.ready = "true";

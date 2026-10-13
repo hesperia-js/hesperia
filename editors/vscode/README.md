@@ -88,5 +88,4 @@ the test host and run `test.ps1 -CodePath <absolute-Code.exe-path>` directly.
 
 Source edits rebuild an immutable TypeScript checking snapshot. Rename,
 refactoring, semantic highlighting, and workspace-wide symbol search are not
-advertised by this initial extension. The milestone ledger tracks the remaining
-compiler and language-profile work.
+advertised by this initial extension.

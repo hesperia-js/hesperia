@@ -1,5 +1,5 @@
 import { mount } from "hesperia";
-import Native, { nativeFormEvents } from "../Native.tsx";
+import Native, { nativeFormEvents, nativeOptionEvents } from "../Native.tsx";
 
 const application = mount(
   document.getElementById("app")!,
@@ -12,12 +12,15 @@ const application = mount(
     },
   },
 );
+
 await application.settled();
 
 Object.assign(window, {
   nativeFixture: {
     events: nativeFormEvents,
+    optionEvents: nativeOptionEvents,
     dispose: () => application.dispose(),
   },
 });
+
 document.documentElement.dataset.ready = "true";

@@ -1,0 +1,69 @@
+<style>
+  .markup-panel {
+    color: rgb(12, 34, 56);
+  }
+</style>
+<style media="print" title="Imported print style element">
+  .markup-panel {
+    outline: 11px solid rgb(5, 6, 7);
+  }
+</style>
+<link rel="stylesheet" href="./panel.css" />
+<link rel="stylesheet" href="/css/imported-markup.css" />
+<link rel="stylesheet" href="data:text/css,.markup-panel%7Bcolor%3Argb(90%2C%2090%2C%2090)%7D" />
+<link
+  rel="stylesheet"
+  media="print"
+  title="Imported print style element"
+  href="./native.css?variant=preserved#native-sheet"
+  integrity="sha384-qYRJ3A50BiBXLNqqGGqb9VAapBCUAxjCgwQhYHoI9VMHBbD36CZ0O8i/95pjNEaW"
+  crossorigin="anonymous"
+  referrerpolicy="no-referrer"
+  fetchpriority="high"
+  nonce="imported-protected"
+  type="text/css"
+  hreflang="en"
+  data-request-contract="retained"
+/>
+<link
+  rel="stylesheet"
+  media="print"
+  title="Imported print style element"
+  href="https://hesperia.invalid/css/imported-native-remote.css?revision=remote#native"
+  crossorigin="anonymous"
+  referrerpolicy="no-referrer"
+  fetchpriority="low"
+  data-request-contract="remote"
+/>
+<link rel="stylesheet" media="print" href="/css/imported-markup-print.css" />
+<link
+  rel="stylesheet"
+  disabled
+  title="Imported disabled sheet"
+  href="/css/imported-markup-disabled.css"
+/>
+<link
+  rel="alternate stylesheet"
+  title="Imported alternate sheet"
+  href="/css/imported-markup-alternate.css"
+/>
+<button
+  class="markup-panel"
+  title="from-file"
+  style="
+    background-color: rgb(1, 2, 3);
+    background-image:
+      url(data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=),
+      url(&quot;./assets/panel\)tile.png?inline=one,two&quot;/**/);
+    --invalid-url: url(foo bar.png);
+  "
+>
+  Markup button
+  <span class="markup-encoding-probe" id="encoding-probe">encoding probe</span>
+  <img alt="query resource" id="markup-query-image" src="./assets/pixel.png?variant=small#frame" />
+  <img
+    alt="responsive resource"
+    id="markup-srcset-image"
+    srcset="./assets/density-1.png 1x, ./assets/density-2.png 2x"
+  />
+</button>

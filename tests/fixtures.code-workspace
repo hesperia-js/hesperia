@@ -1,0 +1,30 @@
+{
+  "folders": [
+    { "name": "Installed package app", "path": "package/fixtures/installed-app" },
+    { "name": "Linked packages", "path": "package/fixtures/applications/linked" },
+    { "name": "Embed", "path": "package/fixtures/applications/embed" },
+    { "name": "Package hosting", "path": "package/fixtures/applications/hosting" },
+    { "name": "Isolated tooling", "path": "package/fixtures/applications/isolated-tooling" },
+    { "name": "Async routing", "path": "tooling/fixtures/applications/application-routing" },
+    { "name": "Route outcomes", "path": "tooling/fixtures/applications/async-route-outcomes" },
+    { "name": "Cached page tasks", "path": "tooling/fixtures/applications/routing-page-task" },
+    {
+      "name": "Public routing flows",
+      "path": "tooling/fixtures/applications/routing-public-flows",
+    },
+    { "name": "Production hosting", "path": "tooling/fixtures/applications/production-host" },
+    {
+      "name": "Conditional captures",
+      "path": "compiler/fixtures/applications/conditional-capture",
+    },
+    { "name": "Native Blob attributes", "path": "editor/fixtures/applications/blob-attributes" },
+    {
+      "name": "Creator frontend template",
+      "path": "../packages/create-hesperia/templates/frontend",
+    },
+    {
+      "name": "Creator and Elysia template",
+      "path": "../packages/create-hesperia",
+    },
+  ],
+}

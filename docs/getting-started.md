@@ -2,34 +2,51 @@
 
 Reader: a TypeScript application author who knows JSX and wants to build their first Hesperia application.
 
-Create a local application, configure its tools and startup, then add the document shell, routes, and page-specific head content. This guide describes the first browser milestone; the examples build a small task-workspace skeleton.
+Create a local application, configure its tools and startup, then add the document shell, routes, and page-specific head content. This guide uses the frontend-only starter to build a small task-workspace skeleton.
 
 ## Create an application from the local checkout
 
-The current packages have version `0.0.0`. Use the built local packages for this experiment; a public `create` package is planned for the developer-experience milestone. The existing CLI already has `init`, `dev`, `check`, `build`, and `preview` commands.
+These instructions create an application from locally built Hesperia packages.
+The installed application checks use package archives and dependency overrides.
+Aeolia comes from the exact published `1.0.0-alpha.1` dependency. Registry
+installation of Hesperia requires the matching workspace release to be published.
 
-For your current checkout, run the following in PowerShell. Choose a new application directory; `init` requires an empty destination. Bun is required, and the milestone uses Bun 1.4.2 and TypeScript 7.0.2.
+The creator defaults to an Elysia host. Without `--host`, an interactive terminal prompts for the host; Enter selects Elysia and option 2 selects no host. The commands below use `--host none` explicitly for this frontend-only example. See [the Elysia guide](elysia.md) for the default starter's server and typed client.
+
+Run the following in PowerShell. Set `$framework` to the Hesperia checkout and
+choose a new or empty application directory. The setup uses Bun 1.4.2 and
+TypeScript 7.0.2. `--no-install` leaves dependency installation until the local
+archives are configured.
 
 ```powershell
-$workspace = 'C:/Users/werbe/Projects/hesperia'
-$application = 'C:/Users/werbe/Projects/hesperia-todos'
-$packages = 'C:/Users/werbe/Projects/hesperia-local-packages'
+$framework = 'C:/work/hesperia'
+$application = 'C:/work/hesperia-todos'
+$packages = Join-Path $env:TEMP ("hesperia-packages-" + [guid]::NewGuid())
 
 New-Item -ItemType Directory -Force -Path $packages | Out-Null
 
-bun install --cwd "$workspace/aeolia"
-bun run --cwd "$workspace/aeolia" build
-bun install --cwd "$workspace/hesperia"
-bun run --cwd "$workspace/hesperia" build
+bun install --cwd $framework
+bun run --cwd $framework build
 
-Push-Location "$workspace/aeolia"
-bun pm pack --destination $packages --ignore-scripts
-Pop-Location
-Push-Location "$workspace/hesperia"
-bun pm pack --destination $packages --ignore-scripts
-Pop-Location
+function Pack-Local($directory) {
+  $before = @(Get-ChildItem -LiteralPath $packages -Filter '*.tgz' | ForEach-Object FullName)
+  Push-Location $directory
+  try {
+    bun pm pack --destination $packages --ignore-scripts | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Packing failed: $directory" }
+  } finally { Pop-Location }
+  $created = @(Get-ChildItem -LiteralPath $packages -Filter '*.tgz' |
+    Where-Object { $_.FullName -notin $before })
+  if ($created.Count -ne 1) { throw "Expected one tarball from $directory" }
+  return $created[0].FullName.Replace('\', '/')
+}
 
-bun "$workspace/hesperia/dist/tooling/cli.js" init $application
+$runtime = Pack-Local "$framework/packages/hesperia"
+$compiler = Pack-Local "$framework/packages/compiler"
+$hosting = Pack-Local "$framework/packages/hosting"
+$tooling = Pack-Local "$framework/packages/tooling"
+$languageServer = Pack-Local "$framework/packages/language-server"
+bun "$framework/packages/create-hesperia/dist/cli.js" $application --host none --no-install
 ```
 
 Stop if a command fails. Before installing the generated application, replace its placeholder dependencies with the packed local versions:
@@ -37,10 +54,17 @@ Stop if a command fails. Before installing the generated application, replace it
 ```powershell
 $manifestPath = "$application/package.json"
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-$manifest.dependencies.hesperia = "$packages/hesperia-0.0.0.tgz"
-$manifest.dependencies.aeolia = "$packages/aeolia-0.0.0.tgz"
+$manifest.dependencies.hesperia = $runtime
+$manifest.dependencies.aeolia = '1.0.0-alpha.1'
+$manifest.devDependencies.'@hesperia/tooling' = $tooling
+$manifest.devDependencies.'@hesperia/language-server' = $languageServer
 $manifest | Add-Member -MemberType NoteProperty -Name overrides -Force -Value @{
-  aeolia = "$packages/aeolia-0.0.0.tgz"
+  aeolia = '1.0.0-alpha.1'
+  hesperia = $runtime
+  '@hesperia/compiler' = $compiler
+  '@hesperia/hosting' = $hosting
+  '@hesperia/tooling' = $tooling
+  '@hesperia/language-server' = $languageServer
 }
 $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifestPath
 
@@ -49,13 +73,19 @@ bun install
 bun run dev
 ```
 
-The override makes Hesperia's Aeolia peer resolve to the same unpublished local package. Packing copies the built packages into the application installation; later framework edits require rebuilding, repacking, and refreshing the application's installed packages. This is the current local testing setup, not the planned final installation experience.
+The overrides supply the local runtime, compiler, hosting, tooling, and
+language-server packages throughout the dependency graph, with one exact
+published Aeolia version. The frontend starter does not need the Elysia adapter,
+Elysia, or Eden. Tooling still depends on `@hesperia/hosting` for development and
+production serving. Other pinned dependencies are installed normally.
 
-Open the URL printed by the server. Edit the generated files using the examples below. Development changes currently cause a full browser reload.
+Packing copies the built artifacts into the application installation; later framework edits require rebuilding, repacking, and refreshing the application's installed packages. These commands use the current local workflow; they do not establish published-package installation.
+
+Open the URL printed by the server and edit the generated files using the examples below. CSS-only revisions update styles in place when the executable output is unchanged. Changes to executable output request a full document reload through the application's departure checks. A failed rebuild keeps the last successful revision visible.
 
 ## Application scripts
 
-The starter writes these scripts in the application's `package.json`:
+The frontend-only starter writes these scripts in the application's `package.json`:
 
 ```json
 {
@@ -73,10 +103,15 @@ This is the scripts section, not a replacement for the whole manifest.
 | Command                   | Purpose                                                                                |
 | ------------------------- | -------------------------------------------------------------------------------------- |
 | `bun run dev`             | Check, build, and serve the application; watch changes and reload. Default port: 5173. |
-| `bun run check`           | Check authored TypeScript/TSX and refresh generated route declarations.                |
+| `bun run check`           | Run the Hesperia compiler, Oxlint, and Oxfmt; refresh generated route declarations.    |
+| `bun run check --fix`     | Write formatting and safe lint fixes, then check again.                                |
 | `bun run build`           | Produce browser assets under `.hesperia/build`.                                        |
-| `bun run preview`         | Serve the existing build. Run `build` first. Default port: 4173.                       |
+| `bun run preview`         | Serve the existing production build. Run `build` first. Default port: 4173.            |
 | `bun run dev --port 3000` | Use a chosen port. `preview` accepts the same option; `0` selects a free port.         |
+
+The installed `hesperia init` command serves an existing production build from the application root. It accepts no arguments and does not create an application. `preview` is an alias for that production server with an optional `--port` argument. The default Elysia starter has its own preview/start scripts for the generated server.
+
+`check` does not rewrite authored files. `check --fix` may change authored files and supported configuration files; it applies safe fixes, not lint suggestions or dangerous fixes. Compiler errors and remaining lint or format errors still fail the command. See [project checks and fixes](project-configuration.md#project-checks-and-fixes) for its file scope.
 
 Keep `.hesperia/`, `node_modules/`, and `hesperia.d.ts` out of version control. The starter supplies these ignore entries.
 
@@ -87,7 +122,8 @@ Paths below are relative to your application root.
 ```text
 app.tsx                         HTML, head, body, and the route outlet
 app.config.ts                   Optional application startup settings
-hesperia.config.json            Optional compiler/build settings
+hesperia.config.json            Optional data-only compiler/build settings
+hesperia.config.ts              TypeScript alternative with plugins (use one config file)
 hesperia.d.ts                   Generated route types; do not edit
 src/
   routes/
@@ -322,9 +358,9 @@ export default function OldTodos() {
 }
 ```
 
-The declaration also recognizes `load` and `headers`, but these are server-oriented metadata and are not executed or applied as browser loaders or HTTP response headers in this milestone. A client guard cannot secure a backend; the backend must enforce its own access rules.
+The declaration also recognizes `load` and `headers`, but Hesperia does not execute `load` as a browser loader or apply `headers` as HTTP response headers. A client guard cannot secure a backend; the backend must enforce its own access rules.
 
-To prevent leaving a component with unsaved work, register `client.navigation.beforeLeave(...)` in that component. See [navigation behavior](routing.md) for its callback and ordering rules.
+To prevent leaving a component with unsaved work, import `beforeLeave` from `hesperia/navigation` and register it inside that component. See [navigation behavior](routing.md) for its callback and ordering rules.
 
 ## Application settings: `app.config.ts`
 
@@ -343,11 +379,11 @@ This optional root module default-exports the startup configuration object. Curr
 
 Cached pages keep their component instance and DOM. Their reactive updates pause and their effects clean up while inactive. Restoration resumes reactivity and runs effects again. See [the page cache guide](routing-cache.md) for tasks and history-entry ownership.
 
-Import your adapted data API directly from an ordinary module, such as `src/api.ts`; it is not an `app.config.ts` property. The current manual adapter is `withAeolia(graph, contract)` from `hesperia/aeolia`. See [the data guide](data.md) when connecting a backend.
+Import your adapted data API directly from an ordinary module, such as `src/api.ts`; it is not an `app.config.ts` property. The current manual adapter is `withAeolia(graph, contract)` from `hesperia/aeolia`. See [the data guide](data.md) when connecting a backend. For Elysia HTTP routes and Eden's typed client, see [the Elysia guide](elysia.md).
 
-## Compiler/build settings: `hesperia.config.json`
+## Compiler/build settings
 
-This optional file lives at the application root. It is plain JSON, so omit comments and trailing commas.
+Use `hesperia.config.json` or `hesperia.config.ts` at the application root. The JSON form is data only, so omit comments and trailing commas. The TypeScript form also registers plugins. Having both files is an error. See [project configuration and plugins](project-configuration.md) for typed configuration, custom imports, and fixed public values.
 
 If you create the file before choosing settings, put `{}` in it. A blank file is invalid JSON. The editor reports that error on the config file while retaining code navigation with the last valid settings or defaults; command-line checking and builds require the file to be repaired.
 
@@ -356,18 +392,23 @@ An absent file uses these defaults:
 ```json
 {
   "allowUnsafeHTML": false,
+  "allowUnsafeEmbed": false,
+  "mountURL": "/",
   "resolutionOverrides": {
     "browser": {}
   }
 }
 ```
 
-| Setting                       | Purpose                                                                                                                                                                                                         |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `allowUnsafeHTML`             | Boolean; defaults to `false`. Enables compilation of the explicit unsafe raw-HTML operation. It does not sanitize HTML or suppress runtime enforcement and development warnings. Ordinary JSX does not need it. |
-| `resolutionOverrides.browser` | An object mapping exact import names to replacement modules for browser checking and builds. Defaults to an empty map. If `resolutionOverrides` is supplied, its `browser` object is required.                  |
+| Setting                       | Purpose                                                                                                                                                                                                                                |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `allowUnsafeHTML`             | Boolean; defaults to `false`. Enables compilation of the explicit unsafe raw-HTML operation. It does not sanitize HTML or suppress runtime enforcement and development warnings. Ordinary JSX does not need it.                        |
+| `allowUnsafeEmbed`            | Boolean; defaults to `false`. Allows an Embed rooted in this compiled project to request sandbox tokens beyond `allow-scripts`; the Embed must list each requested token. Direct mounts without compiled project policy remain strict. |
+| `mountURL`                    | Path-only application prefix; defaults to `/`. It prefixes route navigation and the generated `/_hesperia/` asset namespace; for example, `/dashboard` uses `/dashboard/_hesperia/`. It cannot include a query or fragment.            |
+| `resolutionOverrides.browser` | An object mapping exact import names to replacement modules for browser checking and builds. Defaults to an empty map. If `resolutionOverrides` is supplied, its `browser` object is required.                                         |
+| `public`                      | Explicit fixed browser values, imported from `hesperia/config/public`. The check/build command generates their declarations.                                                                                                           |
 
-These are the supported top-level settings; unknown top-level keys are errors. Routing is discovered under `src/routes`; there is no route-root setting here. Startup settings such as `pageCacheSize` belong in `app.config.ts`.
+JSON also accepts `public` for fixed browser values; TypeScript additionally accepts `plugins`. Unknown top-level keys are errors. Routing is discovered under `src/routes`; there is no route-root setting here. Startup settings such as `pageCacheSize` belong in `app.config.ts`.
 
 For example, if a dependency needs a browser replacement:
 
@@ -402,7 +443,7 @@ Keep the starter's TypeScript setup:
     "allowImportingTsExtensions": true,
     "skipLibCheck": true
   },
-  "include": ["app.tsx", "app.config.ts", "src", "hesperia.d.ts"]
+  "include": ["app.tsx", "app.config.ts", "hesperia.config.ts", "src", "hesperia.d.ts"]
 }
 ```
 
@@ -414,11 +455,12 @@ Hesperia's checker associates each page with its filesystem route. Raw `tsc` doe
 
 Installing the Hesperia application package does not install the editor extension. Without the extension, VS Code's ordinary TypeScript checker can report `JSX element implicitly has type 'any' because no interface 'JSX.IntrinsicElements' exists.` Hesperia supplies its native-element checking declarations through its own checker; the generated route declaration file alone does not supply them to the ordinary editor checker.
 
-For this milestone, build the development extension and open your application with it loaded. In PowerShell, adjust the application path to your actual project:
+Build the development extension and open your application with it loaded. In PowerShell, set the paths to your checkout and application:
 
 ```powershell
-$framework = 'C:/Users/werbe/Projects/hesperia/hesperia'
-$application = 'C:/Users/werbe/Projects/hesperia-todos'
+$workspace = 'C:/work/hesperia-workspace'
+$framework = Join-Path $workspace 'hesperia'
+$application = 'C:/work/hesperia-todos'
 
 bun run --cwd $framework build
 bun install --cwd "$framework/editors/vscode"

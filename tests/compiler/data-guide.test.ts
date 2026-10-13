@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { compileProjectModules } from "../../src/compiler/project-compilation.ts";
+import { compileProjectModules } from "../../packages/compiler/src/project-compilation.ts";
 
 test("data guide examples pass authored checking and executable emission", async () => {
   const guide = await Bun.file(resolve(import.meta.dir, "../../docs/data.md")).text();
@@ -8,22 +8,36 @@ test("data guide examples pass authored checking and executable emission", async
   const apiExamples = [...guide.matchAll(/```ts\r?\n([\s\S]*?)```/gu)].filter((match) =>
     match[1]?.includes("withAeolia"),
   );
-  expect(componentExamples).toHaveLength(2);
+
   expect(apiExamples).toHaveLength(1);
-  const source = componentExamples.find((match) => match[1]?.includes("AsyncBoundary"))![1]!;
+
+  const findComponentExample = (marker: string): string => {
+    const example = componentExamples.find((match) => match[1]?.includes(marker));
+
+    expect(example).toBeDefined();
+
+    return example![1]!;
+  };
+
+  const source = findComponentExample("AsyncBoundary");
+  const taskSource = findComponentExample("function TaskButtons");
   const api = apiExamples[0]![1]!;
   const filename = "data-guide.tsx";
-  const compiled = compileProjectModules([
+  const compiled = await compileProjectModules([
     { filename, source },
+    { filename: "task-guide.tsx", source: taskSource },
     { filename: "api.ts", source: api },
   ]);
+
   expect(compiled.checking.diagnostics).toStrictEqual([]);
+
   expect(compiled.modules.get(filename)?.code).toContain("runAsyncBody");
+
+  expect(compiled.modules.get("task-guide.tsx")?.code).toBeDefined();
+
   expect(compiled.modules.get("api.ts")?.code).toContain("withAeolia");
 
-  const projectionExample = componentExamples.find((match) =>
-    match[1]?.includes("function Activity"),
-  )![1]!;
+  const projectionExample = findComponentExample("function Activity");
   const streamApi = `import { createGraph, createStream, defineContract } from "aeolia";
 import { withAeolia } from "hesperia/aeolia";
 const events = createStream({
@@ -32,18 +46,20 @@ const events = createStream({
 });
 const contract = defineContract({ namespace: "guide", operations: { activity: { events } } });
 export const api = withAeolia(createGraph({ contract }), contract);`;
-  const projected = compileProjectModules([
+  const projected = await compileProjectModules([
     { filename: "stream-api.ts", source: streamApi },
     {
       filename: "activity-guide.tsx",
       source: `import { api } from "./stream-api.ts";\n${projectionExample}`,
     },
   ]);
+
   expect(projected.checking.diagnostics).toStrictEqual([]);
+
   expect(projected.modules.get("activity-guide.tsx")?.code).toContain("project");
 });
 
-test("public stream projection types preserve initialized values and stop chaining", () => {
+test("public stream projection types preserve initialized values and stop chaining", async () => {
   const api = `import { createGraph, createStream, defineContract } from "aeolia";
 import { withAeolia } from "hesperia/aeolia";
 const events = createStream({
@@ -55,7 +71,7 @@ const contract = defineContract({ namespace: "projection", operations: { events 
 const graph = createGraph({ contract });
 export const api = withAeolia(graph, contract);
 `;
-  const valid = compileProjectModules([
+  const valid = await compileProjectModules([
     { filename: "docs/projection-api.ts", source: api },
     {
       filename: "docs/projection-types.tsx",
@@ -68,9 +84,10 @@ export function App() {
 }`,
     },
   ]);
+
   expect(valid.checking.diagnostics).toStrictEqual([]);
 
-  const invalid = compileProjectModules([
+  const invalid = await compileProjectModules([
     { filename: "docs/projection-api.ts", source: api },
     {
       filename: "docs/projection-types.tsx",
@@ -84,7 +101,9 @@ export function App() {
 }`,
     },
   ]);
+
   expect(invalid.checking.diagnostics.some((item) => item.message.includes("project"))).toBe(true);
+
   expect(invalid.checking.diagnostics.some((item) => item.message.includes("toUpperCase"))).toBe(
     true,
   );

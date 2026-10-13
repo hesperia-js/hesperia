@@ -9,6 +9,7 @@ export function bodyExecutions() {
 
 export const Tree = function Branch(props: Component.Props<{ depth: number; label: string }>) {
   bodies.push("tree");
+
   return (
     <section data-depth={props.depth()}>
       <span class="tree-label">{props.label()}</span>
@@ -23,6 +24,7 @@ export const Tree = function Branch(props: Component.Props<{ depth: number; labe
 
 const Field = function (props: Component.Props<{ label: string }>) {
   bodies.push("field");
+
   return <input id="function-field" value={props.label()} />;
 };
 
@@ -40,11 +42,15 @@ const DeferredField = async function (
   // The compiler registers JSX awaits with this component's lifetime.
   // oxlint-disable-next-line unicorn/no-unnecessary-await
   const marker = await (<ReadyMarker />);
+
   bodies.push("deferred");
+
   const input = <input id="deferred-function-field" value={props.label()} />;
+
   effect(() => {
     input.setAttribute("data-effect", "ready");
   });
+
   return (
     <section>
       {marker}

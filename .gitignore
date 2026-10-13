@@ -19,6 +19,7 @@ playwright-report/
 test-results/
 .hesperia/
 hesperia.d.ts
+!packages/create-hesperia/templates/frontend/hesperia.d.ts
 
 # env
 .env

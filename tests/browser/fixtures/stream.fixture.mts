@@ -12,14 +12,19 @@ const application = mount(
     },
   },
 );
+
 Object.assign(globalThis, { streamFixture: { streamStats } });
+
 addEventListener(
   "pagehide",
   () => {
     application.dispose();
+
     disposeGraph();
   },
   { once: true },
 );
+
 await application.settled();
+
 document.documentElement.dataset.ready = "true";

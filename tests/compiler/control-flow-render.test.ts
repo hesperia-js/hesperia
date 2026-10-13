@@ -5,13 +5,13 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Window } from "happy-dom";
 import { mount, type Component } from "hesperia";
-import { compile } from "../../src/compiler/index.ts";
+import { compile } from "../../packages/compiler/src/index.ts";
 
 test.each(["row", "{ id, ...row }"])(
   "keyed rows retain current values through spreads and try callbacks: %s",
   async (parameter) => {
     const key = parameter === "row" ? "row.id" : "id";
-    const result = compile(
+    const result = await compile(
       `
     import { state } from "hesperia/client";
     export const controls = { replace: () => {}, events: [] as string[] };
@@ -27,12 +27,19 @@ test.each(["row", "{ id, ...row }"])(
   `,
       { filename: "control-flow-render.tsx" },
     );
+
     expect(result.diagnostics).toStrictEqual([]);
+
     const directory = resolve(import.meta.dir, "../../.hesperia");
+
     await mkdir(directory, { recursive: true });
+
     const filename = resolve(directory, `control-flow-render-${randomUUID()}.mjs`);
+
     await writeFile(filename, result.code);
+
     const window = new Window();
+
     try {
       const generated = (await import(pathToFileURL(filename).href)) as {
         App: Component<Record<string, never>>;
@@ -47,23 +54,35 @@ test.each(["row", "{ id, ...row }"])(
           onError: (error) => faults.push(error),
         },
       );
+
       try {
         await app.settled();
+
         const button = window.document.querySelector("button")!;
+
         expect(button.textContent).toBe("first");
+
         button.click();
+
         generated.controls.replace();
+
         await app.settled();
+
         expect(window.document.querySelector("button")).toBe(button);
+
         expect(button.textContent).toBe("second value");
+
         button.click();
+
         expect(generated.controls.events).toStrictEqual(["first", "one", "second value", "one"]);
+
         expect(faults).toStrictEqual([]);
       } finally {
         app.dispose();
       }
     } finally {
       await window.happyDOM.close();
+
       await unlink(filename);
     }
   },

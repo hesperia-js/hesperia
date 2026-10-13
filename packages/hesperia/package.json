@@ -1,0 +1,78 @@
+{
+  "name": "hesperia",
+  "version": "1.0.0-alpha.1",
+  "description": "Ergonomic Frontend Framework for building reactive web applications",
+  "homepage": "https://github.com/hesperia-js/hesperia",
+  "bugs": "https://github.com/hesperia-js/hesperia/issues",
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hesperia-js/hesperia.git",
+    "directory": "packages/hesperia"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.js",
+      "default": "./dist/runtime/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js",
+      "default": "./dist/client.js"
+    },
+    "./events": {
+      "types": "./dist/events.d.ts",
+      "import": "./dist/events.js",
+      "default": "./dist/events.js"
+    },
+    "./embed": {
+      "types": "./dist/embed.d.ts",
+      "import": "./dist/embed.js",
+      "default": "./dist/embed.js"
+    },
+    "./env": {
+      "types": "./dist/env.d.ts",
+      "import": "./dist/env.js",
+      "default": "./dist/env.js"
+    },
+    "./config/public": {
+      "types": "./dist/config/public.d.ts",
+      "import": "./dist/config/public.js",
+      "default": "./dist/config/public.js"
+    },
+    "./routing": {
+      "types": "./dist/routing/index.d.ts",
+      "import": "./dist/routing/index.js",
+      "default": "./dist/routing/index.js"
+    },
+    "./navigation": {
+      "types": "./dist/navigation.d.ts",
+      "import": "./dist/navigation.js",
+      "default": "./dist/navigation.js"
+    },
+    "./aeolia": {
+      "types": "./dist/aeolia/index.d.ts",
+      "import": "./dist/aeolia/index.js",
+      "default": "./dist/aeolia/index.js"
+    }
+  },
+  "scripts": {
+    "build": "bunx tsc -p tsconfig.build.json"
+  },
+  "peerDependencies": {
+    "aeolia": "1.0.0-alpha.1"
+  }
+}

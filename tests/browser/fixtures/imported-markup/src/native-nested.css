@@ -1,0 +1,9 @@
+.markup-panel {
+  border-right: 5px solid rgb(6, 7, 8);
+}
+.markup-encoding-probe {
+  display: block;
+  width: 1px;
+  height: 1px;
+  background-image: url("./assets/café.png?charset=inherited");
+}

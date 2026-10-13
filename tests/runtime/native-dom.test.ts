@@ -1,8 +1,14 @@
 import { afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { createClient, type State } from "../../src/client.ts";
-import { component, defineComponent, dynamic, element, mount } from "../../src/runtime/index.ts";
-import type { WritableBinding } from "../../src/runtime/binding.ts";
+import { createClient, type State } from "../../packages/hesperia/src/client.ts";
+import {
+  component,
+  defineComponent,
+  dynamic,
+  element,
+  mount,
+} from "../../packages/hesperia/src/runtime/index.ts";
+import type { WritableBinding } from "../../packages/hesperia/src/runtime/binding.ts";
 
 const windows: Window[] = [];
 
@@ -12,7 +18,9 @@ afterEach(() => {
 
 function container(): Element {
   const window = new Window();
+
   windows.push(window);
+
   return window.document.body as unknown as Element;
 }
 
@@ -35,16 +43,25 @@ test("native event callbacks receive the element and are released with its owner
   });
 
   const app = mount(target, App, {}, { onError: (error) => errors.push(error) });
+
   button.click();
+
   expect(receiverWasButton).toBe(true);
+
   expect(calls).toBe(1);
+
   expect(errors).toStrictEqual([failure]);
 
   app.dispose();
+
   button.textContent = "still native";
+
   button.click();
+
   expect(button.textContent).toBe("still native");
+
   expect(calls).toBe(1);
+
   expect(errors).toStrictEqual([failure]);
 });
 
@@ -68,16 +85,25 @@ test("dynamic native properties reset and ordinary attributes are removed", () =
   });
 
   const app = mount(target, App, {});
+
   expect(input.value).toBe("initial");
+
   expect(input.checked).toBe(true);
+
   expect(input.getAttribute("title")).toBe("label");
 
   value.set(undefined);
+
   checked.set(undefined);
+
   title.set(undefined);
+
   expect(input.value).toBe("");
+
   expect(input.checked).toBe(false);
+
   expect(input.hasAttribute("title")).toBe(false);
+
   app.dispose();
 });
 
@@ -92,28 +118,41 @@ test("unsafe bindings publish absence after external removal", async () => {
     const client = createClient(owner);
     const binding = client.unsafeBind<HTMLDivElement>();
     read = binding;
+
     client.effect(() => {
       runs++;
+
       seen.push(binding());
     });
+
     node = element(owner, "div", { bind: binding });
     return node;
   });
 
   const app = mount(target, App, {}, { onError: (error) => errors.push(error) });
+
   await app.settled();
+
   expect(runs).toBe(1);
+
   expect(seen).toStrictEqual([node]);
 
   node.remove();
+
   await windows.at(-1)!.happyDOM.whenAsyncComplete();
+
   await app.settled();
 
   expect(runs).toBe(2);
+
   expect(seen).toStrictEqual([node, undefined]);
+
   expect(read()).toBeUndefined();
+
   expect(errors).toHaveLength(1);
+
   expect((errors[0] as Error).message).toContain("removed from its rendered tree");
+
   app.dispose();
 });
 
@@ -121,6 +160,7 @@ test("component bindings reject a duplicate live attachment", () => {
   const Child = defineComponent<{ bind: { read(): string } }>(
     (owner, props) => {
       createClient(owner).effect(() => props.bind.set({ read: () => "published" }));
+
       return element(owner, "span");
     },
     { props: { bind: { kind: "binding", optional: false } } },
@@ -142,7 +182,9 @@ test("a component publication endpoint rejects writes after its owner is destroy
   const Child = defineComponent<{ bind: { read(): string } }>(
     (owner, props) => {
       endpoint = props.bind;
+
       createClient(owner).effect(() => props.bind.set({ read: () => "published" }));
+
       return element(owner, "span");
     },
     { props: { bind: { kind: "binding", optional: false } } },
@@ -153,7 +195,9 @@ test("a component publication endpoint rejects writes after its owner is destroy
   });
 
   const app = mount(target, App, {});
+
   await app.settled();
+
   app.dispose();
 
   expect(() => endpoint.set({ read: () => "late" })).toThrow("no longer active");

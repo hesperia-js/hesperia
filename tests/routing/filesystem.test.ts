@@ -1,14 +1,14 @@
 import { afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { createFilesystemRouter } from "../../src/routing/filesystem.ts";
-import { createRouteHost } from "../../src/routing/route-host.ts";
+import { createFilesystemRouter } from "../../packages/hesperia/src/routing/filesystem.ts";
+import { createRouteHost } from "../../packages/hesperia/src/routing/route-host.ts";
 import type {
   RouteTable,
   RouteTableModule,
   RouteTableNode,
-} from "../../src/tooling/route-table.ts";
-import { defineComponent, type Component } from "../../src/runtime/components.ts";
-import { createRuntimeRoot, element, text } from "../../src/runtime/dom.ts";
+} from "../../packages/hesperia/src/routing/route-table.ts";
+import { defineComponent, type Component } from "../../packages/hesperia/src/runtime/components.ts";
+import { createRuntimeRoot, element, text } from "../../packages/hesperia/src/runtime/dom.ts";
 import { installHistoryCloneAdapter } from "./history-platform.ts";
 
 const windows: Window[] = [];
@@ -33,12 +33,17 @@ function node(
 
 test("filesystem boundaries follow declaration ancestry and skip a failed layout's descendants", async () => {
   const window = new Window({ url: "https://example.test/" });
+
   windows.push(window);
+
   installHistoryCloneAdapter(window as unknown as globalThis.Window);
+
   const runtime = createRuntimeRoot(window.document.body as unknown as Element, {
     development: false,
   });
+
   runtime.owner.commit();
+
   const events: string[] = [];
   const errorProps = { props: { error: { kind: "value" as const, optional: false } } };
   const outerError = defineComponent<{ error: unknown }>(
@@ -48,14 +53,17 @@ test("filesystem boundaries follow declaration ancestry and skip a failed layout
   );
   const innerError = defineComponent<{ error: unknown }>(() => {
     events.push("inner-error");
+
     throw new Error("error view failed");
   }, errorProps);
   const failingLayout = defineComponent(() => {
     events.push("layout");
+
     throw new Error("layout failed");
   });
   const page = defineComponent(() => {
     events.push("page");
+
     return "page";
   });
   const root = node("root", "", [], {
@@ -83,28 +91,40 @@ test("filesystem boundaries follow declaration ancestry and skip a failed layout
   );
 
   await router.navigate("/child", { history: "replace" });
+
   await runtime.context.scheduler.settled();
 
   expect(window.document.querySelector("#outer-error")?.textContent).toBe(
     "Error: error view failed",
   );
+
   expect(events.filter((event) => event === "layout")).toHaveLength(2);
+
   expect(events.filter((event) => event === "inner-error")).toHaveLength(2);
+
   expect(events).not.toContain("page");
+
   router.dispose();
+
   host.dispose();
 });
 
 test("filesystem pages get an empty async boundary when no loading module exists", async () => {
   const window = new Window({ url: "https://example.test/" });
+
   windows.push(window);
+
   installHistoryCloneAdapter(window as unknown as globalThis.Window);
+
   const runtime = createRuntimeRoot(window.document.body as unknown as Element, {
     development: false,
   });
+
   runtime.owner.commit();
+
   const page = defineComponent(async (owner) => {
     await Promise.resolve();
+
     return element(owner, "main", { id: "async-page" }, [text(owner, () => "ready")]);
   });
   const leaf = node("root", "/", [], { page: routeModule("+page.tsx", page) });
@@ -119,9 +139,12 @@ test("filesystem pages get an empty async boundary when no loading module exists
   );
 
   await router.navigate("/", { history: "replace" });
+
   await runtime.context.scheduler.settled();
 
   expect(window.document.querySelector("#async-page")?.textContent).toBe("ready");
+
   router.dispose();
+
   host.dispose();
 });

@@ -1,0 +1,5 @@
+@import "tailwindcss";
+
+.postcss-proof {
+  color: hesperia-postcss-marker;
+}

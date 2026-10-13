@@ -5,14 +5,18 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Window } from "happy-dom";
 import { mount, type Component } from "hesperia";
-import { compile } from "../../src/compiler/index.ts";
-import { analyzeRouteModule } from "../../src/compiler/route-analysis.ts";
+import { compile } from "../../packages/compiler/src/index.ts";
+import { analyzeRouteModule } from "../../packages/compiler/src/route-analysis.ts";
 
 async function importGenerated<T extends object>(code: string): Promise<T> {
   const directory = resolve(import.meta.dir, "../../.hesperia");
+
   await mkdir(directory, { recursive: true });
+
   const filename = join(directory, `control-flow-${randomUUID()}.mjs`);
+
   await writeFile(filename, code);
+
   try {
     return await import(pathToFileURL(filename).href);
   } finally {
@@ -29,19 +33,29 @@ test("if and else branches preserve native component returns", async () => {
     "  else return <em>no</em>;",
     "}",
   ].join("\n");
-  const result = compile(source, { filename: "if-component.tsx" });
+  const result = await compile(source, { filename: "if-component.tsx" });
+
   expect(result.diagnostics).toEqual([]);
+
   const generated = await importGenerated<{ default: Component<{ show: boolean }> }>(result.code);
   const window = new Window();
+
   try {
     const target = window.document.body as unknown as Element;
     const yes = mount(target, generated.default, { show: true });
+
     await yes.settled();
+
     expect(target.innerHTML).toContain("<strong>yes</strong>");
+
     yes.dispose();
+
     const no = mount(target, generated.default, { show: false });
+
     await no.settled();
+
     expect(target.innerHTML).toContain("<em>no</em>");
+
     no.dispose();
   } finally {
     window.close();
@@ -63,22 +77,30 @@ test("throw statements retain branch order in helpers and effect callbacks", asy
     "  return <button on:click={() => trigger.set(true)}>run</button>;",
     "}",
   ].join("\n");
-  const result = compile(source, { filename: "throw-flow.tsx" });
+  const result = await compile(source, { filename: "throw-flow.tsx" });
+
   expect(result.diagnostics).toEqual([]);
+
   const generated = await importGenerated<{
     default: Component;
     fail: (value: boolean) => string;
   }>(result.code);
+
   expect(generated.fail(false)).toBe("ok");
+
   let thrown: unknown;
+
   try {
     generated.fail(true);
   } catch (error) {
     thrown = error;
   }
+
   expect((thrown as { message: string }).message).toBe("helper failure");
+
   const errors: unknown[] = [];
   const window = new Window();
+
   try {
     const target = window.document.body as unknown as Element;
     const application = mount(
@@ -87,19 +109,25 @@ test("throw statements retain branch order in helpers and effect callbacks", asy
       {},
       { onError: (error) => errors.push(error) },
     );
+
     await application.settled();
+
     (target.firstElementChild as HTMLButtonElement).click();
+
     await application.settled();
+
     expect(errors).toHaveLength(1);
+
     expect((errors[0] as Error).message).toBe("effect failure");
+
     application.dispose();
   } finally {
     window.close();
   }
 });
 
-test("branch captures remain alpha-stable and rejected binding or route reads stay visible", () => {
-  const validFirst = compile(
+test("branch captures remain alpha-stable and rejected binding or route reads stay visible", async () => {
+  const validFirst = await compile(
     [
       'const captured = "yes";',
       "export function choose() {",
@@ -109,7 +137,7 @@ test("branch captures remain alpha-stable and rejected binding or route reads st
     ].join("\n"),
     { filename: "branch-capture.ts" },
   );
-  const validSecond = compile(
+  const validSecond = await compile(
     [
       'const renamed = "yes";',
       "export function choose() {",
@@ -119,8 +147,11 @@ test("branch captures remain alpha-stable and rejected binding or route reads st
     ].join("\n"),
     { filename: "branch-capture-renamed.ts" },
   );
+
   expect(validFirst.diagnostics).toEqual([]);
+
   expect(validSecond.diagnostics).toEqual([]);
+
   expect(validFirst.semanticHash).toBe(validSecond.semanticHash);
 
   const first = [
@@ -132,9 +163,11 @@ test("branch captures remain alpha-stable and rejected binding or route reads st
     "}",
   ].join("\n");
   const second = first.replaceAll("inputBinding", "fieldBinding");
-  const firstResult = compile(first, { filename: "branch-binding.tsx" });
-  const secondResult = compile(second, { filename: "branch-binding-renamed.tsx" });
+  const firstResult = await compile(first, { filename: "branch-binding.tsx" });
+  const secondResult = await compile(second, { filename: "branch-binding-renamed.tsx" });
+
   expect(firstResult.diagnostics.some((item) => item.code === "HES-BIND-BODY")).toBe(true);
+
   expect(secondResult.diagnostics.some((item) => item.code === "HES-BIND-BODY")).toBe(true);
 
   const route = analyzeRouteModule(
@@ -149,12 +182,14 @@ test("branch captures remain alpha-stable and rejected binding or route reads st
     ].join("\n"),
     { filename: "src/routes/+route.ts" },
   );
+
   expect(route.artifact).toBeUndefined();
+
   expect(route.diagnostics.some((item) => item.code === "HES-ROUTE-CAPABILITY")).toBe(true);
 }, 30000);
 
 test("function-scoped var facts survive branch validation and component classification", async () => {
-  const binding = compile(
+  const binding = await compile(
     [
       'import { client } from "hesperia";',
       "export default function App() {",
@@ -165,10 +200,12 @@ test("function-scoped var facts survive branch validation and component classifi
     ].join("\n"),
     { filename: "branch-var-binding.tsx" },
   );
+
   expect(binding.code).toBe("");
+
   expect(binding.diagnostics.some((item) => item.code === "HES-BIND-BODY")).toBe(true);
 
-  const rendered = compile(
+  const rendered = await compile(
     [
       "export default function App() {",
       "  if (true) { var node = <span>hello</span>; }",
@@ -177,14 +214,20 @@ test("function-scoped var facts survive branch validation and component classifi
     ].join("\n"),
     { filename: "branch-var-rendered.tsx" },
   );
+
   expect(rendered.diagnostics).toEqual([]);
+
   const generated = await importGenerated<{ default: Component }>(rendered.code);
   const window = new Window();
+
   try {
     const target = window.document.body as unknown as Element;
     const application = mount(target, generated.default, {});
+
     await application.settled();
+
     expect(target.innerHTML).toContain("<span>hello</span>");
+
     application.dispose();
   } finally {
     window.close();
@@ -208,10 +251,11 @@ test("lexical branch and nested-function locals do not leak into outer analysis"
     "  return <div>{binding()}</div>;",
     "}",
   ].join("\n");
-  const result = compile(source, { filename: "control-flow-shadowing.tsx" });
+  const result = await compile(source, { filename: "control-flow-shadowing.tsx" });
+
   expect(result.diagnostics.map((item) => item.code)).toStrictEqual(["HES-BIND-BODY"]);
 
-  const ordinary = compile(
+  const ordinary = await compile(
     [
       "export const helper = () => {",
       '  const node = "plain";',
@@ -222,7 +266,10 @@ test("lexical branch and nested-function locals do not leak into outer analysis"
     ].join("\n"),
     { filename: "control-flow-ordinary.tsx" },
   );
+
   expect(ordinary.diagnostics).toEqual([]);
+
   const generated = await importGenerated<{ helper: () => string }>(ordinary.code);
+
   expect(generated.helper()).toBe("plain");
 }, 30000);

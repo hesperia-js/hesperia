@@ -1,0 +1,41 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  background: #101827;
+  color: #f4f7fb;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+header,
+main {
+  width: min(42rem, calc(100% - 2rem));
+  margin-inline: auto;
+}
+
+header {
+  padding-block: 1.25rem;
+}
+
+header a {
+  color: inherit;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+main {
+  padding-block: 3rem;
+}
+
+button {
+  border: 0;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: #87d3c2;
+  color: #10201d;
+  font: inherit;
+  cursor: pointer;
+}

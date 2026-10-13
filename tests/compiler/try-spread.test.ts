@@ -3,13 +3,17 @@ import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { compile } from "../../src/compiler/index.ts";
+import { compile } from "../../packages/compiler/src/index.ts";
 
 async function importGenerated<T extends object>(code: string): Promise<T> {
   const directory = resolve(import.meta.dir, "../../.hesperia");
+
   await mkdir(directory, { recursive: true });
+
   const filename = join(directory, `try-spread-${randomUUID()}.mjs`);
+
   await writeFile(filename, code);
+
   try {
     return await import(pathToFileURL(filename).href);
   } finally {
@@ -18,7 +22,7 @@ async function importGenerated<T extends object>(code: string): Promise<T> {
 }
 
 test("native try/catch preserves catch lexical shadowing and var hoisting", async () => {
-  const result = compile(
+  const result = await compile(
     `export function evaluate() {
       var error = "outer";
       let caught;
@@ -43,21 +47,27 @@ test("native try/catch preserves catch lexical shadowing and var hoisting", asyn
     }`,
     { filename: "try-shadowing.ts" },
   );
+
   expect(result.diagnostics).toStrictEqual([]);
+
   const generated = await importGenerated<{
     evaluate: () => [[string, string], string];
     optional: () => number;
     bare: () => string;
     loopHoist: () => string;
   }>(result.code);
+
   expect(generated.evaluate()).toStrictEqual([["changed", "changed"], "outer"]);
+
   expect(generated.optional()).toBe(4);
+
   expect(generated.bare()).toBe("handled");
+
   expect(generated.loopHoist()).toBe("outer");
 });
 
 test("finally runs for return, throw, and loop break and preserves native abrupt completion", async () => {
-  const result = compile(
+  const result = await compile(
     `export function evaluate() {
       const events: string[] = [];
       function returned() {
@@ -78,10 +88,13 @@ test("finally runs for return, throw, and loop break and preserves native abrupt
     }`,
     { filename: "try-finally.ts" },
   );
+
   expect(result.diagnostics).toStrictEqual([]);
+
   const generated = await importGenerated<{ evaluate: () => [string, string, number, string] }>(
     result.code,
   );
+
   expect(generated.evaluate()).toStrictEqual([
     "try",
     "try",
@@ -91,7 +104,7 @@ test("finally runs for return, throw, and loop break and preserves native abrupt
 });
 
 test("array spread evaluates iterables in place and preserves sparse holes", async () => {
-  const result = compile(
+  const result = await compile(
     `export function evaluate() {
       const events: string[] = [];
       const values = {
@@ -105,28 +118,38 @@ test("array spread evaluates iterables in place and preserves sparse holes", asy
     }`,
     { filename: "array-spread.ts" },
   );
+
   expect(result.diagnostics).toStrictEqual([]);
+
   const generated = await importGenerated<{
     evaluate: () => [number, number, number, number, number | undefined, number, boolean, string];
   }>(result.code);
+
   expect(generated.evaluate()).toStrictEqual([5, 1, 2, 3, undefined, 4, false, "iterator"]);
 });
 
 test("regexp and bigint literals retain native values and semantic distinctions", async () => {
-  const first = compile("export const pattern = /a+/gi; export const amount = 123n;", {
+  const first = await compile("export const pattern = /a+/gi; export const amount = 123n;", {
     filename: "literal-forms.ts",
   });
-  const second = compile("export const pattern = /a+/g; export const amount = 124n;", {
+  const second = await compile("export const pattern = /a+/g; export const amount = 124n;", {
     filename: "literal-forms.ts",
   });
+
   expect(first.diagnostics).toStrictEqual([]);
+
   expect(second.diagnostics).toStrictEqual([]);
+
   expect(first.semanticHash).not.toBe(second.semanticHash);
+
   const generated = await importGenerated<{
     pattern: RegExp;
     amount: bigint;
   }>(first.code);
+
   expect(generated.pattern).toEqual(/a+/gi);
+
   expect(generated.pattern.flags).toBe("gi");
+
   expect(generated.amount).toBe(123n);
 });

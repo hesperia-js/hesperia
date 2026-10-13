@@ -3,18 +3,21 @@ import { computed, createGraph, createStream, defineContract, subscribe } from "
 import type { Readable, StreamStore } from "aeolia";
 import { testBackend } from "aeolia/testing";
 import { Window } from "happy-dom";
-import { createFeed } from "../../src/data/feed.ts";
-import { Owner, type RuntimeContext } from "../../src/runtime/owner.ts";
-import { Scheduler } from "../../src/runtime/scheduler.ts";
+import { createFeed } from "../../packages/hesperia/src/data/feed.ts";
+import { Owner, type RuntimeContext } from "../../packages/hesperia/src/runtime/owner.ts";
+import { Scheduler } from "../../packages/hesperia/src/runtime/scheduler.ts";
 
 const windows: Window[] = [];
 const owners: Owner[] = [];
 
 afterEach(() => {
   for (const owner of owners.splice(0)) owner.dispose();
+
   for (const window of windows.splice(0)) window.close();
+
   try {
     jest.clearAllTimers();
+
     jest.useRealTimers();
   } catch {
     // This test did not enable fake timers.
@@ -23,7 +26,9 @@ afterEach(() => {
 
 async function flush(): Promise<void> {
   await Promise.resolve();
+
   await Promise.resolve();
+
   await Promise.resolve();
 }
 
@@ -31,13 +36,18 @@ function waitFor<T>(source: Readable<T>, predicate: (value: T) => boolean): Prom
   return new Promise((resolve) => {
     let done = false;
     let stop: (() => void) | undefined;
+
     const observer = (value: T): void => {
       if (done || !predicate(value)) return;
+
       done = true;
+
       if (stop === undefined) queueMicrotask(() => stop?.());
       else stop();
+
       resolve(value);
     };
+
     stop = subscribe(source, observer);
   });
 }
@@ -49,7 +59,9 @@ function makeOwner(
   },
 ): Owner {
   const window = new Window();
+
   windows.push(window);
+
   const context = {
     document: window.document,
     container: window.document.body,
@@ -59,8 +71,11 @@ function makeOwner(
     scheduler: undefined,
   } as unknown as RuntimeContext;
   const result = new Owner(context, null, "feed-test");
+
   owners.push(result);
+
   if (commit) result.commit();
+
   return result;
 }
 
@@ -82,12 +97,19 @@ describe("owner-bound shared feeds", () => {
     const graph = streamGraph("dormant", backend);
     const current = makeOwner();
     const feed = createFeed(current, () => graph.api.stream(undefined) as StreamStore<number>);
+
     expect(backend.calls).toHaveLength(0);
+
     expect(feed.status()).toBe("empty");
+
     expect(feed.pending()).toBe(false);
+
     expect(() => feed.source).toThrow("not active");
+
     current.dispose();
+
     expect(backend.calls).toHaveLength(0);
+
     graph.dispose();
   });
 
@@ -100,31 +122,46 @@ describe("owner-bound shared feeds", () => {
     const pending = computed(() => feed.pending(), { label: "feed-test:activation-pending" });
     const status = computed(() => feed.status(), { label: "feed-test:activation-status" });
     const error = computed(() => feed.error(), { label: "feed-test:activation-error" });
+
     expect(value.get()).toBeUndefined();
+
     expect(pending.get()).toBe(false);
+
     expect(status.get()).toBe("empty");
+
     expect(error.get()).toBeUndefined();
+
     const opening = waitFor(status, (value) => value === "opening");
     const openingPending = waitFor(pending, (value) => value);
 
     current.commit();
+
     expect(await opening).toBe("opening");
+
     expect(await openingPending).toBe(true);
 
     const live = waitFor(status, (value) => value === "live");
     const liveValue = waitFor(value, (value) => value === 1);
     const settledPending = waitFor(pending, (value) => !value);
+
     backend.emit("activation-readers", 1);
+
     expect(await live).toBe("live");
+
     expect(await liveValue).toBe(1);
+
     expect(await settledPending).toBe(false);
 
     const failure = new Error("activation reader stream failed");
     const failedStatus = waitFor(status, (value) => value === "failed");
     const failedError = waitFor(error, (value) => value === failure);
+
     backend.end("activation-readers", failure);
+
     expect(await failedStatus).toBe("failed");
+
     expect(await failedError).toBe(failure);
+
     graph.dispose();
   });
 
@@ -136,8 +173,11 @@ describe("owner-bound shared feeds", () => {
     });
     const status = computed(() => feed.status(), { label: "feed-test:activation-failure-status" });
     const error = computed(() => feed.error(), { label: "feed-test:activation-failure-error" });
+
     status.get();
+
     error.get();
+
     let observedDuringFailure: unknown = Symbol("not-observed");
     const stopStatus = subscribe(status, (value) => {
       if (value === "failed") observedDuringFailure = feed.error();
@@ -146,9 +186,13 @@ describe("owner-bound shared feeds", () => {
     const failedError = waitFor(error, (value) => value === reason);
 
     expect(() => current.commit()).toThrow(reason);
+
     expect(await failedStatus).toBe("failed");
+
     expect(await failedError).toBe(reason);
+
     expect(observedDuringFailure).toBe(reason);
+
     stopStatus();
   });
 
@@ -161,18 +205,23 @@ describe("owner-bound shared feeds", () => {
       throw undefined;
     });
     const status = computed(() => feed.status(), { label: "feed-test:undefined-failure-status" });
+
     status.get();
 
     current.commit();
 
     expect(reported).toBeUndefined();
+
     expect(status.get()).toBe("failed");
+
     expect(feed.error()).toBeUndefined();
   });
 
   test("two committed consumers share one source and each projection sees equal emissions", async () => {
     jest.useFakeTimers();
+
     jest.setSystemTime(0);
+
     const backend = testBackend();
     const graph = streamGraph("shared", backend);
     const firstOwner = makeOwner();
@@ -183,28 +232,47 @@ describe("owner-bound shared feeds", () => {
       () => graph.api.stream(undefined) as StreamStore<number>,
       { kind: "accumulate", max: 4 },
     );
+
     expect(backend.calls).toHaveLength(0);
+
     firstOwner.commit();
+
     secondOwner.commit();
+
     expect(backend.calls).toHaveLength(1);
 
     backend.emit("shared", 1);
+
     backend.emit("shared", 1);
+
     await flush();
+
     expect(first.value()).toBe(1);
+
     expect(history.value()).toStrictEqual([1, 1]);
+
     expect(first.status()).toBe("live");
+
     expect(history.status()).toBe("live");
 
     firstOwner.dispose();
+
     backend.emit("shared", 2);
+
     await flush();
+
     expect(history.value()).toStrictEqual([1, 1, 2]);
+
     expect(backend.calls[0]!.aborted).toBe(false);
+
     secondOwner.dispose();
+
     jest.advanceTimersByTime(6);
+
     await flush();
+
     expect(backend.calls[0]!.aborted).toBe(true);
+
     graph.dispose();
   });
 
@@ -221,27 +289,42 @@ describe("owner-bound shared feeds", () => {
     });
 
     expect(latest.status()).toBe("empty");
+
     expect(history.status()).toBe("empty");
+
     expect(history.value()).toStrictEqual([]);
+
     expect(total.value()).toBe(0);
+
     current.commit();
+
     expect(backend.calls).toHaveLength(1);
+
     expect(history.value()).toStrictEqual([]);
+
     expect(total.value()).toBe(0);
 
     const completed = waitFor(
       computed(() => total.value()),
       (value) => value === 4,
     );
+
     backend.emit("public-project", 2);
+
     backend.emit("public-project", 2);
+
     await completed;
 
     expect(latest.value()).toBe(2);
+
     expect(history.value()).toStrictEqual([2, 2]);
+
     expect(total.value()).toBe(4);
+
     expect((history as { project?: unknown }).project).toBeUndefined();
+
     current.dispose();
+
     graph.dispose();
   });
 
@@ -265,33 +348,51 @@ describe("owner-bound shared feeds", () => {
     const undefinedError = computed(() => undefinedFailure.error(), {
       label: "feed-test:undefined-projection-error",
     });
+
     undefinedStatus.get();
+
     undefinedError.get();
+
     let errorAtFailedStatus: unknown = Symbol("not-observed");
     const stopUndefinedStatus = subscribe(undefinedStatus, (status) => {
       if (status === "failed") errorAtFailedStatus = undefinedError.get();
     });
+
     current.commit();
 
     const completed = waitFor(
       computed(() => window.value()),
       (value) => value.length === 2 && value[1] === 3,
     );
+
     backend.emit("public-overflow", 1);
+
     backend.emit("public-overflow", 2);
+
     backend.emit("public-overflow", 3);
+
     await completed;
 
     expect(failed.status()).toBe("failed");
+
     expect(failed.value()).toStrictEqual([1, 2]);
+
     expect(failed.error()).toBeInstanceOf(Error);
+
     expect(window.status()).toBe("live");
+
     expect(window.value()).toStrictEqual([2, 3]);
+
     expect(undefinedFailure.status()).toBe("failed");
+
     expect(undefinedFailure.error()).toBeUndefined();
+
     expect(errorAtFailedStatus).toBeUndefined();
+
     stopUndefinedStatus();
+
     current.dispose();
+
     graph.dispose();
   });
 
@@ -308,8 +409,11 @@ describe("owner-bound shared feeds", () => {
     current.commit();
 
     expect(invalid.status()).toBe("failed");
+
     expect(invalid.error()).toBe(reported);
+
     expect(reported).toMatchObject({ name: "Fault", kind: "contract" });
+
     graph.dispose();
   });
 
@@ -320,40 +424,59 @@ describe("owner-bound shared feeds", () => {
     current.context.scheduler = new Scheduler(current);
     const latest = createFeed(current, () => graph.api.stream(undefined) as StreamStore<number>);
     const history = latest.project({ kind: "accumulate", max: 4 });
+
     current.commit();
+
     expect(backend.calls).toHaveLength(1);
 
     backend.emit("suspended", 1);
+
     await flush();
+
     expect(history.value()).toStrictEqual([1]);
 
     current.suspend();
+
     backend.emit("suspended", 2);
+
     await flush();
+
     expect(history.value()).toStrictEqual([1]);
 
     current.resume();
+
     backend.emit("suspended", 3);
+
     await flush();
+
     expect(history.value()).toStrictEqual([1, 3]);
+
     graph.dispose();
   });
 
   test("a late projection reopens a collected factory source while its owner stays mounted", async () => {
     jest.useFakeTimers();
+
     jest.setSystemTime(0);
+
     const backend = testBackend();
     const graph = streamGraph("late-project", backend);
     const current = makeOwner();
     const latest = createFeed(current, () => graph.api.stream(undefined) as StreamStore<number>);
     const latestStatus = computed(() => latest.status(), { label: "feed-test:late-status" });
+
     latestStatus.get();
 
     current.commit();
+
     expect(backend.calls).toHaveLength(1);
+
     jest.advanceTimersByTime(6);
+
     await waitFor(latestStatus, (status) => status === "empty");
+
     expect(backend.calls[0]!.aborted).toBe(true);
+
     expect(current.state).toBe("mounted");
 
     const late = latest.project({
@@ -362,18 +485,27 @@ describe("owner-bound shared feeds", () => {
       step: (sum, item) => sum + item,
     });
     const lateValue = computed(() => late.value(), { label: "feed-test:late-reducer" });
+
     lateValue.get();
+
     const secondValue = waitFor(lateValue, (value) => value === 2);
+
     backend.emit("late-project", 2);
+
     await secondValue;
+
     expect(late.status()).toBe("live");
+
     expect(backend.calls).toHaveLength(2);
+
     graph.dispose();
   });
 
   test("a direct source ends with its collected session while a factory source reopens it", async () => {
     jest.useFakeTimers();
+
     jest.setSystemTime(0);
+
     const backend = testBackend();
     const graph = streamGraph("direct-collected", backend);
     const current = makeOwner();
@@ -382,21 +514,33 @@ describe("owner-bound shared feeds", () => {
     const history = createFeed(current, source, { kind: "accumulate", max: 4 });
 
     current.commit();
+
     backend.emit("direct-collected", 1);
+
     await flush();
+
     expect(history.value()).toStrictEqual([1]);
 
     current.suspend();
+
     jest.advanceTimersByTime(6);
+
     await flush();
+
     expect(backend.calls[0]!.aborted).toBe(true);
 
     current.resume();
+
     backend.emit("direct-collected", 2);
+
     await flush();
+
     expect(history.value()).toStrictEqual([1]);
+
     expect(backend.calls).toHaveLength(1);
+
     expect(history.status()).toBe("empty");
+
     graph.dispose();
 
     const factoryBackend = testBackend();
@@ -410,20 +554,31 @@ describe("owner-bound shared feeds", () => {
     );
 
     factoryOwner.commit();
+
     factoryBackend.emit("factory-collected", 1);
+
     await flush();
+
     expect(factoryHistory.value()).toStrictEqual([1]);
 
     factoryOwner.suspend();
+
     jest.advanceTimersByTime(6);
+
     await flush();
+
     expect(factoryBackend.calls[0]!.aborted).toBe(true);
 
     factoryOwner.resume();
+
     expect(factoryBackend.calls).toHaveLength(2);
+
     factoryBackend.emit("factory-collected", 2);
+
     await flush();
+
     expect(factoryHistory.value()).toStrictEqual([1, 2]);
+
     factoryGraph.dispose();
   });
 
@@ -447,48 +602,74 @@ describe("owner-bound shared feeds", () => {
     const pending = computed(() => history.pending(), { label: "feed-test:resume-pending" });
     const status = computed(() => history.status(), { label: "feed-test:resume-status" });
     const error = computed(() => history.error(), { label: "feed-test:resume-error" });
+
     value.get();
+
     pending.get();
+
     status.get();
+
     error.get();
+
     const firstOpening = waitFor(status, (value) => value === "opening");
     const firstPending = waitFor(pending, (value) => value);
+
     current.commit();
+
     await firstOpening;
     await firstPending;
     const firstLive = waitFor(status, (value) => value === "live");
     const firstValue = waitFor(value, (value) => value?.[0] === 1);
     const firstSettled = waitFor(pending, (value) => !value);
+
     firstBackend.emit("resume-first", 1);
+
     expect(await firstLive).toBe("live");
+
     expect(await firstValue).toStrictEqual([1]);
+
     expect(await firstSettled).toBe(false);
 
     current.suspend();
+
     useSecond = true;
     const secondOpening = waitFor(status, (value) => value === "opening");
     const secondPending = waitFor(pending, (value) => value);
+
     current.resume();
+
     expect(await secondOpening).toBe("opening");
+
     expect(await secondPending).toBe(true);
+
     expect(value.get()).toStrictEqual([1]);
+
     expect(error.get()).toBeUndefined();
 
     const secondLive = waitFor(status, (value) => value === "live");
     const secondValue = waitFor(value, (value) => value?.[1] === 2);
     const secondSettled = waitFor(pending, (value) => !value);
+
     secondBackend.emit("resume-second", 2);
+
     expect(await secondLive).toBe("live");
+
     expect(await secondValue).toStrictEqual([1, 2]);
+
     expect(await secondSettled).toBe(false);
 
     const failure = new Error("resume reader stream failed");
     const failedStatus = waitFor(status, (value) => value === "failed");
     const failedError = waitFor(error, (value) => value === failure);
+
     secondBackend.end("resume-second", failure);
+
     expect(await failedStatus).toBe("failed");
+
     expect(await failedError).toBe(failure);
+
     firstGraph.dispose();
+
     secondGraph.dispose();
   });
 
@@ -496,9 +677,13 @@ describe("owner-bound shared feeds", () => {
     const backend = testBackend();
     const graph = streamGraph("removed", backend);
     const current = makeOwner();
+
     createFeed(current, () => graph.api.stream(undefined) as StreamStore<number>);
+
     current.dispose(new Error("removed before activation"));
+
     expect(backend.calls).toHaveLength(0);
+
     graph.dispose();
   });
 
@@ -509,7 +694,9 @@ describe("owner-bound shared feeds", () => {
     const feed = createFeed(current, () => graph.api.stream(undefined) as StreamStore<number>);
 
     current.commit();
+
     expect(backend.calls).toHaveLength(1);
+
     const failure = new Error("stream failed");
     let stop!: () => void;
     const failed = new Promise<void>((resolve) => {
@@ -517,17 +704,25 @@ describe("owner-bound shared feeds", () => {
         if (status === "failed") resolve();
       });
     });
+
     backend.end("failed", failure);
+
     await failed;
+
     stop();
 
     expect(feed.status()).toBe("failed");
+
     expect(feed.pending()).toBe(false);
+
     expect(feed.value()).toBeUndefined();
+
     expect(feed.error()).toBe(failure);
 
     current.dispose();
+
     expect(() => feed.value()).toThrow("destroyed");
+
     graph.dispose();
   });
 });

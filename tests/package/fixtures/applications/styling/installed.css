@@ -1,0 +1,9 @@
+@import "tailwindcss";
+#postcss-proof {
+  color: hesperia-postcss-marker;
+}
+#css-update-proof {
+  background-color: rgb(201, 14, 25);
+  width: 1rem;
+  height: 1rem;
+}

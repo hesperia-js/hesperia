@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Window } from "happy-dom";
 import { mount, type Component } from "hesperia";
-import { checkProjectModules, compile } from "../../src/compiler/index.ts";
+import { checkProjectModules, compile } from "../../packages/compiler/src/index.ts";
 
 test("compiled optional callbacks remain accessors through presence changes without recreating the child", async () => {
   const source = `
@@ -26,20 +26,30 @@ test("compiled optional callbacks remain accessors through presence changes with
       </main>;
     }
   `;
+
   expect(
-    checkProjectModules([{ filename: "props-contract.tsx", source }]).diagnostics,
+    (await checkProjectModules([{ filename: "props-contract.tsx", source }])).diagnostics,
   ).toStrictEqual([]);
-  const compiled = compile(source, { filename: "props-contract.tsx" });
+
+  const compiled = await compile(source, { filename: "props-contract.tsx" });
+
   expect(compiled.diagnostics).toStrictEqual([]);
+
   const directory = resolve(import.meta.dir, "../../.hesperia");
+
   await mkdir(directory, { recursive: true });
+
   const filename = resolve(directory, `props-contract-${randomUUID()}.mjs`);
+
   await writeFile(filename, compiled.code);
+
   const window = new Window();
   let app: ReturnType<typeof mount> | undefined;
+
   try {
     const generated = (await import(pathToFileURL(filename).href)) as {
       App: Component<object>;
+
       childBodies(): number;
     };
     const errors: unknown[] = [];
@@ -49,20 +59,33 @@ test("compiled optional callbacks remain accessors through presence changes with
       {},
       { onError: (error) => errors.push(error) },
     );
+
     await app.settled();
+
     expect(errors).toStrictEqual([]);
+
     const span = window.document.querySelector("span")!;
+
     expect(span.textContent).toBe("first");
+
     window.document.querySelectorAll("button")[0]!.click();
+
     expect(span.textContent).toBe("absent");
+
     window.document.querySelectorAll("button")[1]!.click();
+
     expect(span.textContent).toBe("second");
+
     expect(window.document.querySelector("span")).toBe(span);
+
     expect(generated.childBodies()).toBe(1);
+
     expect(errors).toStrictEqual([]);
   } finally {
     app?.dispose();
+
     await window.happyDOM.close();
+
     await unlink(filename);
   }
 });

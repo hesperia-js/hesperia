@@ -57,5 +57,4 @@ Use `hesperia check` and the Hesperia editor extension for page checking. They c
 Generated filesystem startup uses its route table to supply page inputs.
 The generated `hesperia.d.ts` file provides the route-specific declarations
 used during checking; it is not a runtime route-table input. Use the [routing
-guide](routing.md) for navigation behavior and the [implementation
-ledger](implementation-milestone.md) for verification status.
+guide](routing.md) for navigation behavior.
