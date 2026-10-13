@@ -67,7 +67,7 @@ async function runInteractiveCreator(
 
         const visibleOutput = normalizeTerminalOutput(output);
 
-        if (!answered && visibleOutput.includes("Host [1]: ")) {
+        if (!answered && visibleOutput.includes("Host [1]:")) {
           answered = true;
 
           terminal.write(answer);

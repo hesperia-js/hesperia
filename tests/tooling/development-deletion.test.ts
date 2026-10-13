@@ -10,9 +10,15 @@ const applicationFixture = join(import.meta.dir, "fixtures/applications/developm
 
 const browserDriver = join(import.meta.dir, "fixtures/drivers/development-deletion-browser.mjs");
 
-test.each(["chromium", "firefox", "webkit"] as const)(
-  "%s development dependency deletion reloads affected active and cached pages while preserving an unrelated page",
-  async (engineName) => {
+test.each(
+  (["chromium", "firefox", "webkit"] as const).flatMap((engineName) =>
+    (["default", "fallback"] as const).map(
+      (navigationMode) => [engineName, navigationMode] as const,
+    ),
+  ),
+)(
+  "%s (%s navigation) development dependency deletion reloads affected active and cached pages while preserving an unrelated page",
+  async (engineName, navigationMode) => {
     const root = await mkdtemp(join(tmpdir(), "hesperia-dev-deletion-"));
 
     let server: Awaited<ReturnType<typeof devProject>> | undefined;
@@ -63,6 +69,7 @@ export default function Page() { const count = client.state(0); const veto = cli
           new URL("a", server.url).href,
           css,
           removed,
+          navigationMode,
         ],
         {
           stdout: "pipe",

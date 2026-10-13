@@ -430,6 +430,11 @@ function validateChildReceipt(
     throw new Error(`Installed CLI child capture failed: ${value.captureErrors.join("; ")}`);
   }
 
+  const entryPaths = new Set([
+    canonicalPath(configuration.entryPath),
+    canonicalPath(configuration.entryRealPath),
+  ]);
+
   if (
     !isRecord(value) ||
     value.format !==
@@ -450,7 +455,7 @@ function validateChildReceipt(
     value.naturalExitCode !== status ||
     value.entryLoadCount !== 1 ||
     typeof value.substitutedEntryPath !== "string" ||
-    canonicalPath(value.substitutedEntryPath) !== canonicalPath(configuration.entryPath) ||
+    !entryPaths.has(canonicalPath(value.substitutedEntryPath)) ||
     typeof value.substitutedEntryRealPath !== "string" ||
     canonicalPath(value.substitutedEntryRealPath) !== canonicalPath(configuration.entryRealPath) ||
     value.entrySha256 !== configuration.entrySha256 ||
@@ -472,7 +477,7 @@ function validateChildReceipt(
   const actualArgvMatches = (actual: readonly string[]) =>
     actual.length === expectedArgv.length &&
     canonicalPath(actual[0]!) === canonicalPath(expectedArgv[0]!) &&
-    canonicalPath(actual[1]!) === canonicalPath(expectedArgv[1]!) &&
+    entryPaths.has(canonicalPath(actual[1]!)) &&
     actual.slice(2).every((item, index) => item === expectedArgv[index + 2]);
 
   if (!actualArgvMatches(value.processArgv) || !actualArgvMatches(value.bunArgv)) {
@@ -480,10 +485,6 @@ function validateChildReceipt(
   }
 
   const declaredImports = new Set(configuration.relativeImports);
-  const entryPaths = new Set([
-    canonicalPath(configuration.entryPath),
-    canonicalPath(configuration.entryRealPath),
-  ]);
   const observedImports = new Set<string>();
 
   for (const request of value.onResolveRequests) {
@@ -628,7 +629,7 @@ export async function runInstalledCli(input: InstalledCliAdapterInput): Promise<
     throw new Error("Installed CLI owner did not use its packed tooling entry");
   }
 
-  const entryRealPath = realpathSync(entryPath);
+  const entryRealPath = realpathSync.native(entryPath);
   const normalEntryPath = resolve(repoPath, cliDist.replaceAll("/", sep));
   const installedEntryBytes = readFileSync(entryPath);
   const normalEntryBytes = readFileSync(normalEntryPath);
@@ -665,7 +666,7 @@ export async function runInstalledCli(input: InstalledCliAdapterInput): Promise<
     receiptPath,
     parentPid: process.pid,
     expectedExecPath: resolve(input.execPath),
-    expectedCwd,
+    expectedCwd: realpathSync.native(expectedCwd),
     expectedArgs: input.args,
   };
   const spawnArgs = [input.execPath, "--preload", configuration.childPreloadPath, ...input.args];
@@ -714,7 +715,7 @@ export async function runConfiguredPluginBuildCli(
     throw new Error("Configured plugin owner did not use the current tooling CLI entry");
   }
 
-  const entryRealPath = realpathSync(entryPath);
+  const entryRealPath = realpathSync.native(entryPath);
   const entryBytes = readFileSync(entryPath);
   const entrySha256 = sha256(entryBytes);
   const invocationId = `configured-plugin-build-${ordinal}-${randomUUID()}`;
@@ -744,7 +745,7 @@ export async function runConfiguredPluginBuildCli(
     receiptPath,
     parentPid: process.pid,
     expectedExecPath: resolve(input.execPath),
-    expectedCwd,
+    expectedCwd: realpathSync.native(expectedCwd),
     expectedArgs: [entryPath, ...input.args],
   };
   const spawnArgs = [
@@ -1196,7 +1197,7 @@ function installChildCapture(): void {
               const originalSha256 = sha256(installedBytes);
               state.substitutedEntryPath = args.path;
               state.entrySha256 = originalSha256;
-              const realPath = realpathSync(args.path);
+              const realPath = realpathSync.native(args.path);
 
               if (!entryPaths.has(canonicalPath(realPath))) {
                 throw new Error("Installed CLI loader resolved an unexpected entry path");

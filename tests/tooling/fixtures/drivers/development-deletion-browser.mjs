@@ -6,7 +6,7 @@ import { writeFile, rm } from "node:fs/promises";
 /** @typedef {import("playwright").Browser} Browser */
 /** @typedef {import("playwright").Page} Page */
 
-const [playwrightModuleUrl, engineName, applicationUrl, cssPath, removedPath] =
+const [playwrightModuleUrl, engineName, applicationUrl, cssPath, removedPath, navigationMode] =
   process.argv.slice(2);
 
 const playwright = /** @type {typeof import("playwright")} */ (await import(playwrightModuleUrl));
@@ -17,174 +17,172 @@ const browserName = /** @type {BrowserName} */ (engineName);
 const browser = await playwright[browserName].launch();
 
 try {
-  for (const fallback of [false, true]) {
-    /** @type {Page} */
-    const page = await browser.newPage();
+  /** @type {Page} */
+  const page = await browser.newPage();
 
-    /** @type {(string | undefined)[]} */
-    const errors = [];
+  /** @type {(string | undefined)[]} */
+  const errors = [];
 
-    page.on("pageerror", (error) => errors.push(error.stack));
+  page.on("pageerror", (error) => errors.push(error.stack));
 
-    if (fallback)
-      await page.addInitScript(() =>
-        Object.defineProperty(window, "navigation", { configurable: true, value: undefined }),
-      );
+  if (navigationMode === "fallback")
+    await page.addInitScript(() =>
+      Object.defineProperty(window, "navigation", { configurable: true, value: undefined }),
+    );
 
-    await page.addInitScript(() => {
-      globalThis.documentIdentity = Math.random();
+  await page.addInitScript(() => {
+    globalThis.documentIdentity = Math.random();
 
-      globalThis.apiOutcome = "";
+    globalThis.apiOutcome = "";
 
-      window.addEventListener("fixture-api-result", (event) => {
-        globalThis.apiOutcome = /** @type {CustomEvent<string>} */ (event).detail;
-      });
-
-      globalThis.departures = 0;
-
-      window.addEventListener("fixture-departure", () => {
-        globalThis.departures++;
-      });
-
-      globalThis.removals = 0;
-
-      globalThis.styleRevisions = 0;
-
-      window.addEventListener("hesperia:style-revision", () => {
-        globalThis.styleRevisions++;
-      });
-
-      window.addEventListener("hesperia:dev-source-removal", () => {
-        globalThis.removals++;
-      });
+    window.addEventListener("fixture-api-result", (event) => {
+      globalThis.apiOutcome = /** @type {CustomEvent<string>} */ (event).detail;
     });
 
-    await page.goto(applicationUrl);
+    globalThis.departures = 0;
 
-    await page.locator("#count").click();
+    window.addEventListener("fixture-departure", () => {
+      globalThis.departures++;
+    });
 
-    const oldStylesheet = await page.locator('link[rel="stylesheet"]').evaluateAll(
-      /** @param {HTMLLinkElement[]} links */
-      (links) => links.find((link) => link.href.includes("/_hesperia/assets/"))?.href,
-    );
+    globalThis.removals = 0;
 
-    assert.ok(oldStylesheet);
+    globalThis.styleRevisions = 0;
 
-    await page.locator("#to-other").click();
+    window.addEventListener("hesperia:style-revision", () => {
+      globalThis.styleRevisions++;
+    });
 
-    await page.waitForSelector("#b");
+    window.addEventListener("hesperia:dev-source-removal", () => {
+      globalThis.removals++;
+    });
+  });
 
-    await page.locator("#count").click();
+  await page.goto(applicationUrl);
 
-    const identity = await page.evaluate(() => globalThis.documentIdentity);
+  await page.locator("#count").click();
 
-    const revision = await page.evaluate(() => globalThis.styleRevisions);
+  const oldStylesheet = await page.locator('link[rel="stylesheet"]').evaluateAll(
+    /** @param {HTMLLinkElement[]} links */
+    (links) => links.find((link) => link.href.includes("/_hesperia/assets/"))?.href,
+  );
 
-    await writeFile(cssPath, ".a { color: rgb(50, 60, 70); }");
+  assert.ok(oldStylesheet);
 
-    await page.waitForFunction((previous) => globalThis.styleRevisions > previous, revision);
+  await page.locator("#to-other").click();
 
-    await rm(removedPath);
+  await page.waitForSelector("#b");
 
-    await page.waitForFunction(() => globalThis.removals > 0, null, { timeout: 15000 });
+  await page.locator("#count").click();
 
-    assert.equal(await page.evaluate(() => globalThis.documentIdentity), identity);
+  const identity = await page.evaluate(() => globalThis.documentIdentity);
 
-    assert.equal(await page.locator("#count").textContent(), "1");
+  const revision = await page.evaluate(() => globalThis.styleRevisions);
 
-    assert.equal((await page.request.get(oldStylesheet)).status(), 404);
+  await writeFile(cssPath, ".a { color: rgb(50, 60, 70); }");
 
-    await page.locator("#veto").click();
+  await page.waitForFunction((previous) => globalThis.styleRevisions > previous, revision);
 
-    await page.evaluate(() => window.dispatchEvent(new Event("fixture-api-navigate")));
+  await rm(removedPath);
 
-    await page.waitForFunction(() => globalThis.apiOutcome !== "");
+  await page.waitForFunction(() => globalThis.removals > 0, null, { timeout: 15000 });
 
-    assert.equal(await page.evaluate(() => globalThis.apiOutcome), "AbortError");
+  assert.equal(await page.evaluate(() => globalThis.documentIdentity), identity);
 
-    assert.equal(await page.evaluate(() => globalThis.documentIdentity), identity);
+  assert.equal(await page.locator("#count").textContent(), "1");
 
-    assert.equal(new URL(page.url()).pathname, "/b");
+  assert.equal((await page.request.get(oldStylesheet)).status(), 404);
 
-    assert.equal(await page.locator("#count").textContent(), "1");
+  await page.locator("#veto").click();
 
-    await page.locator("#veto").click();
+  await page.evaluate(() => window.dispatchEvent(new Event("fixture-api-navigate")));
 
-    await page.goBack();
+  await page.waitForFunction(() => globalThis.apiOutcome !== "");
 
-    await page.waitForSelector("#a");
+  assert.equal(await page.evaluate(() => globalThis.apiOutcome), "AbortError");
 
-    await page.waitForFunction((previous) => globalThis.documentIdentity !== previous, identity);
+  assert.equal(await page.evaluate(() => globalThis.documentIdentity), identity);
 
-    assert.equal(await page.locator("#count").textContent(), "0");
+  assert.equal(new URL(page.url()).pathname, "/b");
 
-    assert.equal(new URL(page.url()).pathname, "/a");
+  assert.equal(await page.locator("#count").textContent(), "1");
 
-    console.log("route ready", fallback);
+  await page.locator("#veto").click();
 
-    await writeFile(removedPath, ".a { color: rgb(80, 90, 100); }");
+  await page.goBack();
 
-    await writeFile(cssPath, '@import "./removed.css";');
+  await page.waitForSelector("#a");
 
-    await page.waitForFunction(
-      () =>
-        document.querySelector("#a") &&
-        getComputedStyle(/** @type {HTMLElement} */ (document.querySelector("#a"))).color ===
-          "rgb(80, 90, 100)",
-    );
+  await page.waitForFunction((previous) => globalThis.documentIdentity !== previous, identity);
 
-    const activeIdentity = await page.evaluate(() => globalThis.documentIdentity);
+  assert.equal(await page.locator("#count").textContent(), "0");
 
-    await page.locator("#count").click();
+  assert.equal(new URL(page.url()).pathname, "/a");
 
-    await page.locator("#veto").click();
+  console.log("route ready", navigationMode);
 
-    const activeDepartures = await page.evaluate(() => globalThis.departures);
+  await writeFile(removedPath, ".a { color: rgb(80, 90, 100); }");
 
-    await writeFile(cssPath, ".a { color: rgb(110, 120, 130); }");
+  await writeFile(cssPath, '@import "./removed.css";');
 
-    await rm(removedPath);
+  await page.waitForFunction(
+    () =>
+      document.querySelector("#a") &&
+      getComputedStyle(/** @type {HTMLElement} */ (document.querySelector("#a"))).color ===
+        "rgb(80, 90, 100)",
+  );
 
-    await page.waitForFunction((previous) => globalThis.departures > previous, activeDepartures);
+  const activeIdentity = await page.evaluate(() => globalThis.documentIdentity);
 
-    assert.equal(await page.evaluate(() => globalThis.documentIdentity), activeIdentity);
+  await page.locator("#count").click();
 
-    assert.equal(await page.locator("#count").textContent(), "1");
+  await page.locator("#veto").click();
 
-    await page.locator("#veto").click();
+  const activeDepartures = await page.evaluate(() => globalThis.departures);
 
-    await page.locator("#reload").click();
+  await writeFile(cssPath, ".a { color: rgb(110, 120, 130); }");
 
-    await page.waitForFunction(
-      (previous) => globalThis.documentIdentity !== previous,
-      activeIdentity,
-    );
+  await rm(removedPath);
 
-    await page.waitForSelector("#a");
+  await page.waitForFunction((previous) => globalThis.departures > previous, activeDepartures);
 
-    assert.equal(await page.locator("#count").textContent(), "0");
+  assert.equal(await page.evaluate(() => globalThis.documentIdentity), activeIdentity);
 
-    assert.equal(new URL(page.url()).pathname, "/a");
+  assert.equal(await page.locator("#count").textContent(), "1");
 
-    console.log("route ready", fallback);
+  await page.locator("#veto").click();
 
-    assert.deepEqual(errors, []);
+  await page.locator("#reload").click();
 
-    console.log("veto and reload verified", fallback);
+  await page.waitForFunction(
+    (previous) => globalThis.documentIdentity !== previous,
+    activeIdentity,
+  );
 
-    await writeFile(removedPath, ".a { color: rgb(20, 30, 40); }");
+  await page.waitForSelector("#a");
 
-    await writeFile(cssPath, '@import "./removed.css";');
+  assert.equal(await page.locator("#count").textContent(), "0");
 
-    await page.waitForFunction(
-      () =>
-        document.querySelector("#a") &&
-        getComputedStyle(/** @type {HTMLElement} */ (document.querySelector("#a"))).color ===
-          "rgb(20, 30, 40)",
-    );
+  assert.equal(new URL(page.url()).pathname, "/a");
 
-    await page.close();
-  }
+  console.log("route ready", navigationMode);
+
+  assert.deepEqual(errors, []);
+
+  console.log("veto and reload verified", navigationMode);
+
+  await writeFile(removedPath, ".a { color: rgb(20, 30, 40); }");
+
+  await writeFile(cssPath, '@import "./removed.css";');
+
+  await page.waitForFunction(
+    () =>
+      document.querySelector("#a") &&
+      getComputedStyle(/** @type {HTMLElement} */ (document.querySelector("#a"))).color ===
+        "rgb(20, 30, 40)",
+  );
+
+  await page.close();
 
   console.log("Active and cached deletion behavior verified");
 } finally {
