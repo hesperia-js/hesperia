@@ -12,6 +12,7 @@
 node_modules/
 
 # build artifacts
+artifacts/
 dist/
 coverage/
 playwright-report/

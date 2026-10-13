@@ -89,6 +89,12 @@ If a convention appears harmful, explain the concrete problem and propose a
 change. Do not introduce a competing convention silently. Follow the contributor
 guides referenced above.
 
+Give statements breathing room. Use a blank line before and after loops,
+conditionals, `try/catch` blocks, `function` and method declarations, type
+definitions, `class` declarations, and standalone function or method calls when another statement
+is adjacent.
+Statements that do not need a blank line after them are `return`, `throw`, and `break`. Variable declarations and assignments do not need a blank line before them when they are the first statement in a block.
+
 ### 12. Report failures and limits plainly
 
 Do not claim completion while required work remains unverified. Report failed,

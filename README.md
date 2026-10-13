@@ -23,9 +23,8 @@ Hesperia's compiler must process this source. The current implementation targets
 browser rendering; server rendering, hydration, and static generation follow
 after the browser execution model is verified.
 
-The [implementation ledger](docs/implementation-milestone.md) distinguishes the
-agreed contracts from completed verification. This package is not yet ready for
-application adoption. To work on it, follow the [contributor guide](CONTRIBUTING.md)
+This package is not yet ready for application adoption. To work on it, follow
+the [contributor guide](CONTRIBUTING.md)
 and [test guide](tests/README.md).
 
 The [native element guide](docs/native-elements.md) explains element handles,

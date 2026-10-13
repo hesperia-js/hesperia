@@ -1,0 +1,98 @@
+name: Release
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+permissions:
+  contents: read
+concurrency:
+  group: hesperia-npm-release
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'release/')
+    uses: ./.github/workflows/verify.yml
+    with:
+      ref: ${{ github.event.pull_request.merge_commit_sha }}
+      full: true
+  publish:
+    name: Tag and publish verified archives
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: npm
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          install: "false"
+      - name: Set up trusted publishing client
+        if: vars.NPM_TRUSTED_PUBLISHING == 'true'
+        run: npm install --global npm@11.19.0 --ignore-scripts
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-candidate
+          path: .hesperia/release-candidate
+      - name: Preflight every candidate and publication retry
+        id: release
+        env:
+          HESPERIA_RELEASE_CANDIDATE_DIR: .hesperia/release-candidate
+          HESPERIA_RELEASE_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          bun scripts/ci/verify-release-candidate.ts --candidate-dir "$HESPERIA_RELEASE_CANDIDATE_DIR"
+          bun scripts/ci/check-release.ts
+      - name: Tag the verified merge commit
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          ANY_PUBLISHED: ${{ steps.release.outputs.any-published }}
+          COMMIT: ${{ github.event.pull_request.merge_commit_sha }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const ref = `tags/v${process.env.VERSION}`;
+            let existing;
+            try {
+              existing = (await github.rest.git.getRef({ owner, repo, ref })).data.object;
+            } catch (error) {
+              if (error.status !== 404 || process.env.ANY_PUBLISHED === 'true') throw error;
+              await github.rest.git.createRef({ owner, repo, ref: `refs/${ref}`, sha: process.env.COMMIT });
+              return;
+            }
+            while (existing.type === 'tag') {
+              existing = (await github.rest.git.getTag({ owner, repo, tag_sha: existing.sha })).data.object;
+            }
+            if (existing.type !== 'commit' || existing.sha !== process.env.COMMIT) {
+              throw new Error('Existing release tag points to a different commit');
+            }
+      - name: Publish the tested archives in dependency order
+        if: steps.release.outputs.published == 'false' && vars.NPM_TRUSTED_PUBLISHING == 'true'
+        env:
+          HESPERIA_RELEASE_CANDIDATE_DIR: .hesperia/release-candidate
+        run: bun scripts/ci/publish-release-candidate.ts
+      - name: Record manual publication instructions
+        if: steps.release.outputs.published == 'false' && vars.NPM_TRUSTED_PUBLISHING != 'true'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          COMMIT: ${{ github.event.pull_request.merge_commit_sha }}
+        with:
+          script: |
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            const artifacts = `https://github.com/${repository}/actions/runs/${context.runId}#artifacts`;
+            const instructions = `https://github.com/${repository}/blob/${process.env.COMMIT}/docs/ci.md#npm-release-setup`;
+            await core.summary
+              .addHeading('Manual npm publication required')
+              .addRaw(`Version ${process.env.VERSION} passed full verification and v${process.env.VERSION} identifies ${process.env.COMMIT}. Automatic publication is disabled.\n\n`)
+              .addLink('Download the original release-candidate artifact', artifacts)
+              .addRaw('\n\n')
+              .addLink('Follow the manual publication instructions', instructions)
+              .addRaw('\n\nPublish the original verified archives in manifest order. The artifact is retained for 14 days. Configure all ten npm trusted publishers before setting the repository variable NPM_TRUSTED_PUBLISHING to true for later releases.\n')
+              .write();

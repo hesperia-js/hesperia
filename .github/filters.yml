@@ -1,0 +1,46 @@
+all:
+  - "**"
+policy:
+  - "docs/ci{,-selection}.md"
+  - "tests/README.md"
+full:
+  - "**"
+  - "!docs/**"
+  - "!{README.md,CONTRIBUTING.md,AGENTS.md,CLAUDE.md,AI_POLICY.md,CODE-OF-CONDUCT.md,LICENSE,COPYING,LICENSE-COMMERCIAL.md}"
+  - "!packages/{compiler,hesperia,tooling,language-server,hosting,create-hesperia,elysia,postcss,tailwind,stylex}/src/**"
+  - "!editors/vscode/src/**"
+  - "!tests/{compiler,runtime,data,tooling,routing,editor,hosting,ci,package}/**/*.test.ts"
+  - "!tests/browser/**/*.spec.ts"
+  - "!editors/vscode/tests/**/*.test.ts"
+  - "!golden/**"
+source:
+  - "packages/{compiler,hesperia,tooling,language-server,hosting,create-hesperia,elysia,postcss,tailwind,stylex}/src/**"
+  - "editors/vscode/src/**"
+compiler:
+  - "tests/compiler/**/*.test.ts"
+runtime:
+  - "tests/runtime/**/*.test.ts"
+data:
+  - "tests/data/**/*.test.ts"
+tooling:
+  - "tests/tooling/**/*.test.ts"
+routing:
+  - "tests/routing/**/*.test.ts"
+editor:
+  - "tests/editor/**/*.test.ts"
+hosting:
+  - "tests/hosting/**/*.test.ts"
+ci:
+  - "tests/ci/**/*.test.ts"
+browser:
+  - "tests/browser/**/*.spec.ts"
+package:
+  - "tests/package/**/*.test.ts"
+  - "{README.md,CONTRIBUTING.md,LICENSE,COPYING,LICENSE-COMMERCIAL.md}"
+vscode:
+  - "editors/vscode/tests/**/*.test.ts"
+golden:
+  - "packages/**"
+  - "tests/**"
+  - "editors/vscode/**"
+  - "golden/**"

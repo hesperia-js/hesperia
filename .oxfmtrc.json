@@ -1,4 +1,23 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "ignorePatterns": ["**/node_modules/**", "**/dist/**", "**/build/**", "hesperia.d.ts"]
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/build/**",
+    "hesperia.d.ts",
+    "tests/browser/fixtures/imported-markup/src/native.css",
+    "tests/browser/fixtures/imported-markup/src/native-nested.css"
+  ],
+  "bracketSpacing": true,
+  "tabWidth": 2,
+  "printWidth": 100,
+  "useTabs": false,
+  "arrowParens": "always",
+  "trailingComma": "all",
+  "semi": true,
+  "singleQuote": false,
+  "objectWrap": "preserve",
+  "quoteProps": "as-needed",
+  "insertFinalNewline": true,
+  "endOfLine": "lf"
 }

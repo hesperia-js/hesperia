@@ -1,12 +1,46 @@
 # Contributing
 
+## Issues and pull requests
+
+Use [GitHub Issues](https://github.com/hesperia-js/hesperia/issues) to track
+bugs and proposed changes. Search existing issues before opening one. For a bug
+report, include the Hesperia revision or package version, the relevant runtime
+and browser, a minimal reproduction, and the expected and actual behavior.
+Discuss changes to public behavior before implementing them.
+
+Keep branches short-lived and use these names in this repository:
+
+| Branch              | Purpose               | Example                  |
+| ------------------- | --------------------- | ------------------------ |
+| `feature/<name>`    | New features          | `feature/native-routing` |
+| `fix/<name>`        | Fixes and hotfixes    | `fix/route-matching`     |
+| `release/<VERSION>` | Release stabilization | `release/1.0.0`          |
+
+Fork branch names are exempt, though following the same convention is welcome.
+`main` remains the integration branch.
+
+CI enforces these source-branch names for same-repository pull requests. A release
+branch version must match the shared root and publishable-package versions, without
+a `v` prefix. See [CI and npm releases](docs/ci.md) for required checks, supported
+versions, and publishing steps.
+
+Open feature and fix pull requests against `main`. During release stabilization,
+open release-fix pull requests from `fix/<name>` against the relevant
+`release/<VERSION>` branch.
+
+Use the [pull request template](.github/pull_request_template.md) to explain the
+change, link its issue when one exists, and report verification results. Use
+`Closes #123` only when the pull request resolves that issue. Follow the
+[AI contribution policy](AI_POLICY.md) and this [Code of Conduct](CODE-OF-CONDUCT.md).
+Record the [contributor agreement acceptance](#recording-cla-acceptance) before
+merge.
+
 ## Getting started
 
 Use Bun to install dependencies and run the development tools:
 
 ```sh
 bun install
-bun install --cwd editors/vscode
 bun run build
 bun run typecheck
 bun run test
@@ -16,32 +50,48 @@ bun run fmt:check
 
 Build before typechecking: consumer checks resolve the package's emitted
 declarations in `dist/`. `bun run check` performs that build first, then runs
-typechecking, lint, formatting checks, the deterministic suites, and browser tests.
+typechecking, lint, formatting checks, and the deterministic, browser, package,
+golden, and editor test suites.
 
 Use `bun run fmt -- <paths>` to format the files you change. Keep unrelated
 work intact, including files in the neighboring Aeolia repository.
 
+The workspace installs the exact published `aeolia@1.0.0-alpha.1` dependency;
+building Hesperia does not require an Aeolia source checkout. CI always builds,
+typechecks, lints, and checks formatting. Ordinary pull requests can select test
+suites; release pull requests and full runs retain all platform and coverage gates.
+
 ## Where code belongs
 
-The compiler in `src/compiler/` owns source analysis, checking views, canonical
-representation, and code generation. The browser runtime in `src/runtime/` owns
-component lifetimes, DOM objects, bindings, structural changes, and effect order.
-`src/client.ts` connects authored operations to their component owner.
-`src/routing/` owns route matching and browser navigation. `src/editor/` adapts
-the compiler's checking views to editor requests; the VS Code client lives in
-`editors/vscode/`.
+The compiler in `packages/compiler/src/` owns source analysis, checking views,
+canonical representation, code generation, and filesystem route scanning.
+The runtime package in `packages/hesperia/src/` owns component lifetimes, DOM
+objects, bindings, structural changes, effects, and browser routing. Its
+`client.ts` connects authored operations to their component owner; its `data/`
+directory adapts Aeolia to that lifetime. Aeolia remains independent and owns
+the reactive engine and shared stores. Hesperia uses Aeolia's public interfaces.
 
-Data adaptation belongs in `src/data/`; Aeolia owns the underlying reactive
-engine and shared stores. Hesperia must use Aeolia's public interfaces. Project
-commands, browser bundling, and local servers belong in `src/tooling/` and must
-stay outside browser application bundles.
+Project configuration, commands, browser bundling, and local servers belong in
+`packages/tooling/src/` and stay outside browser application bundles. The
+language server in `packages/language-server/src/` adapts compiler information
+to editor requests and shares tooling's project service. The VS Code client
+remains in `editors/vscode/`. Package export maps expose the supported entry
+points; source-directory imports are for repository tests, not applications.
 
-Before changing behavior, consult `docs/implementation-milestone.md` and its
-source references. Preserve accepted decisions across compiler, runtime, types,
-and tests. A test written around a different behavior does not approve that change.
+The root Bun workspace owns dependency installation and the ordered package
+build. Each package emits its own `dist/`; build before checking consumers.
+Keep optional integrations and their dependencies in their own packages.
 
-Before planning package moves, optional integrations, or next-milestone
-dependencies, read [the next milestone constraints](docs/next-milestone.md).
+Before adding a dependency, review its maintenance, evidence of substantial
+adoption, and transitive dependency count and risk. Treat download counts as one
+signal, not a guarantee of quality or maintenance; use judgment rather than a
+numeric cutoff.
+
+Before changing behavior, read the relevant guide in `docs/`, public API
+declarations, and owning tests. Keep the documented contract consistent across
+compiler, runtime, types, and tests. Ask the maintainer about conflicting or
+unspecified behavior; a test written around a different behavior does not approve
+that change.
 
 ## Tests
 
@@ -58,10 +108,13 @@ Use fake time for freshness and collection, not synchronous signal propagation.
 Prefer observable completion over sleeps or guessed microtask counts. Keep
 manual profiling outside the deterministic suite.
 
-Aim for complete meaningful coverage, with a 90% minimum unless a lower result
-has an explicit, reviewed justification. Bun currently reports line and function
-coverage; branch coverage is not measured. Percentages do not replace behavioral
-assertions.
+Aim for complete meaningful line and function coverage. CI accepts the union of
+the Windows and Linux captures when it exceeds 85% line coverage and reaches at
+least 90% function coverage. The standalone coverage checker remains a 90% line
+and function diagnostic. Bun's native report provides line and function
+coverage. The canonical LCOV report also records branches for diagnostics, but
+the combined gate does not enforce a branch threshold. Percentages do not
+replace behavioral assertions.
 
 See [test ownership and commands](tests/README.md). Run focused tests while
 working, then the complete suite. Consumer-type fixtures and package-artifact
@@ -76,6 +129,12 @@ equality, failure, and cleanup. Keep examples small and type-correct.
 Keep the README introductory. Put user-facing behavioral detail in `docs/`
 and contributor guidance here. Prefer concrete prose and useful variable names.
 Comments should explain a non-obvious constraint, not repeat the next line.
+
+Repository documentation explains current behavior, setup, usage, APIs, and
+maintenance. It must be usable from a standalone checkout: include the applicable
+rules or link to other repository guides or public references. Keep design
+proposals, decision history, research, milestone plans, and handoffs outside this
+repository, and do not reference private workspace files from repository docs.
 
 Before handing over a change, run formatting, lint, typecheck, and the full test
 suite. After public API or TSDoc changes, inspect the emitted declarations too.

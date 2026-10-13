@@ -1,0 +1,449 @@
+name: Verify
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+      base:
+        type: string
+        default: ""
+      head:
+        type: string
+        default: ""
+      full:
+        type: boolean
+        default: false
+      release-pr:
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  checks:
+    name: "Build, types, lint and format"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      compiler: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.compiler == 'true' }}
+      runtime: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.runtime == 'true' }}
+      data: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.data == 'true' }}
+      tooling: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.tooling == 'true' }}
+      routing: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.routing == 'true' }}
+      editor: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.editor == 'true' }}
+      hosting: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.hosting == 'true' }}
+      ci: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.ci == 'true' }}
+      full: ${{ steps.scope.outputs.full }}
+      behavior: ${{ steps.scope.outputs.full == 'true' || steps.paths.outputs.source == 'true' || steps.paths.outputs.compiler == 'true' || steps.paths.outputs.runtime == 'true' || steps.paths.outputs.data == 'true' || steps.paths.outputs.tooling == 'true' || steps.paths.outputs.routing == 'true' || steps.paths.outputs.editor == 'true' || steps.paths.outputs.hosting == 'true' || steps.paths.outputs.ci == 'true' }}
+      browser: ${{ steps.scope.outputs.browser }}
+      package: ${{ steps.scope.outputs.package }}
+      vscode: ${{ steps.scope.outputs.vscode }}
+      golden: ${{ steps.scope.outputs.golden }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: "Check repository branch name"
+        if: "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository"
+        env:
+          HESPERIA_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          bun -e '
+            import assert from "node:assert/strict";
+            import { releaseVersion } from "./scripts/ci/check-release.ts";
+            const branch = process.env.HESPERIA_HEAD_BRANCH;
+            assert.ok(/^(feature|fix)\/.+$/.test(branch) || branch.startsWith("release/"),
+              "Use feature/<name>, fix/<name>, or release/<VERSION> for repository branches");
+            if (branch.startsWith("release/")) {
+              const { version } = releaseVersion(branch.slice("release/".length));
+              assert.equal(version, (await Bun.file("package.json").json()).version,
+                "The release branch version must match package.json");
+            }
+          '
+      - name: "Find changed paths"
+        id: paths
+        if: ${{ !inputs.full && inputs.base != '' && inputs.head != '' }}
+        continue-on-error: true
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
+        with:
+          token: ""
+          base: ${{ inputs.base }}
+          ref: ${{ inputs.head }}
+          filters: .github/filters.yml
+          predicate-quantifier: some-with-excludes
+      - name: "Resolve verification scope"
+        id: scope
+        shell: bash
+        env:
+          FULL: ${{ inputs.full || steps.paths.outcome != 'success' || steps.paths.outputs.all_count == '' || steps.paths.outputs.all_count == '0' || steps.paths.outputs.full != 'false' || steps.paths.outputs.policy == 'true' }}
+          BROWSER: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.browser == 'true' }}
+          PACKAGE: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.package == 'true' }}
+          VSCODE: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.vscode == 'true' }}
+          GOLDEN: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.golden == 'true' }}
+        run: |
+          for scope in FULL BROWSER PACKAGE VSCODE GOLDEN; do
+            value="${!scope}"
+            if [ "$FULL" = true ]; then value=true; fi
+            printf '%s=%s\n' "${scope,,}" "$value" >> "$GITHUB_OUTPUT"
+          done
+      - name: "Build workspace packages"
+        run: "bun run build"
+      - name: "Check types"
+        run: "bun run typecheck"
+      - name: Lint
+        run: "bun run lint"
+      - name: "Check formatting"
+        run: "bun run fmt:check"
+      - name: "Check release version"
+        if: inputs.release-pr
+        run: "bun scripts/ci/check-release.ts"
+        env:
+          HESPERIA_RELEASE_BASE: ${{ inputs.base }}
+          HESPERIA_RELEASE_BRANCH: ${{ github.event.pull_request.head.ref }}
+      - name: "Prepare the package candidate"
+        if: "steps.scope.outputs.package == 'true'"
+        run: "bun scripts/ci/prepare-release-candidate.ts --candidate-dir .hesperia/release-candidate"
+      - name: "Save the package candidate"
+        if: "steps.scope.outputs.package == 'true'"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-candidate
+          path: .hesperia/release-candidate/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+  source-quality:
+    name: "Behavior and coverage (${{ matrix.platform }})"
+    needs: checks
+    if: "needs.checks.outputs.behavior == 'true'"
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - ubuntu-24.04
+          - windows-2025
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: "Build workspace packages"
+        run: "bun run build"
+      - name: "Install browser engines and system dependencies"
+        if: "runner.os == 'Linux'"
+        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
+      - name: "Install browser engines"
+        if: "runner.os == 'Windows'"
+        run: "node node_modules/playwright/cli.js install chromium firefox webkit"
+      - name: "Set up the real editor"
+        id: editor
+        if: "needs.checks.outputs.full == 'true'"
+        uses: ./.github/actions/setup-editor
+      - name: "Test compiler"
+        if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.compiler == 'true'"
+        run: "bun test --timeout=45000 tests/compiler"
+      - name: "Test runtime"
+        if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.runtime == 'true'"
+        run: "bun test --timeout=45000 tests/runtime"
+      - name: "Test data"
+        if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.data == 'true'"
+        run: "bun test --timeout=45000 tests/data"
+      - name: "Test tooling"
+        if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'"
+        run: "bun test --timeout=45000 tests/tooling"
+      - name: "Test routing"
+        if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.routing == 'true'"
+        run: "bun test --timeout=45000 tests/routing"
+      - name: "Test editor"
+        if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.editor == 'true'"
+        run: "bun test --timeout=45000 tests/editor"
+      - name: "Test hosting"
+        if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.hosting == 'true'"
+        run: "bun test --timeout=45000 tests/hosting"
+      - name: "Test ci"
+        if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.ci == 'true'"
+        run: "bun test --timeout=45000 tests/ci"
+      - name: "Set the coverage editor path"
+        if: "needs.checks.outputs.full == 'true'"
+        shell: bash
+        env:
+          CODE_PATH: ${{ steps.editor.outputs.code-path }}
+          CODE_VERSION: ${{ steps.editor.outputs.code-version }}
+        run: |
+          printf 'VSCODE_CODE_PATH=%s\nVSCODE_CODE_VERSION=%s\n' "$CODE_PATH" "$CODE_VERSION" >> "$GITHUB_ENV"
+      - name: "Run final Windows coverage aggregate"
+        if: "needs.checks.outputs.full == 'true' && runner.os == 'Windows'"
+        shell: pwsh
+        run: 'bun run test:coverage:final "$env:VSCODE_CODE_PATH" "$env:VSCODE_CODE_VERSION"'
+      - name: "Run Linux editor observer stdlib tests"
+        if: "needs.checks.outputs.full == 'true' && runner.os == 'Linux'"
+        shell: bash
+        run: "python3 -B editors/vscode/tests/test_linux_observer.py -v"
+      - name: "Run final Linux coverage aggregate"
+        if: "needs.checks.outputs.full == 'true' && runner.os == 'Linux'"
+        env:
+          DONT_PROMPT_WSL_INSTALL: 1
+        shell: bash
+        run: 'bun run test:coverage:final "$VSCODE_CODE_PATH" "$VSCODE_CODE_VERSION"'
+      - name: "Retain final and original coverage evidence"
+        if: "always() && needs.checks.outputs.full == 'true'"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "hesperia-coverage-${{ matrix.platform }}"
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            .hesperia/coverage/
+            .hesperia/ec/
+          retention-days: 14
+  combined-coverage:
+    name: "Combined Windows and Linux coverage"
+    needs:
+      - checks
+      - source-quality
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: "Download Windows coverage evidence"
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: hesperia-coverage-windows-2025
+          path: .coverage-artifacts/windows
+      - name: "Download Linux coverage evidence"
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: hesperia-coverage-ubuntu-24.04
+          path: .coverage-artifacts/linux
+      - name: "Check combined Windows and Linux coverage"
+        run: "bun run scripts/ci/run-combined-coverage.ts --windows-root .coverage-artifacts/windows --linux-root .coverage-artifacts/linux --output .hesperia/coverage/combined"
+      - name: "Retain combined coverage report"
+        if: "always()"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: hesperia-coverage-combined
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: .hesperia/coverage/combined/
+    if: "needs.checks.outputs.full == 'true'"
+  browser:
+    name: "Browser suite (${{ matrix.platform }})"
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - ubuntu-24.04
+          - windows-2025
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: "Build Hesperia packages"
+        run: "bun run build"
+      - name: "Install all browser engines"
+        if: "runner.os == 'Linux'"
+        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
+      - name: "Install all browser engines"
+        if: "runner.os == 'Windows'"
+        run: "node node_modules/playwright/cli.js install chromium firefox webkit"
+      - name: "Run browser suite in Chromium, Firefox, and WebKit"
+        run: "bun run test:browser"
+    needs: checks
+    if: "needs.checks.outputs.browser == 'true'"
+  package:
+    name: "Installed package candidate (${{ matrix.platform }})"
+    needs: checks
+    if: "needs.checks.outputs.package == 'true'"
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - ubuntu-24.04
+          - windows-2025
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: "Build workspace packages"
+        run: "bun run build"
+      - name: "Install browser engines and system dependencies"
+        if: "runner.os == 'Linux'"
+        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
+      - name: "Install browser engines"
+        if: "runner.os == 'Windows'"
+        run: "node node_modules/playwright/cli.js install chromium firefox webkit"
+      - name: "Download the tested package candidate"
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: release-candidate
+          path: .hesperia/release-candidate
+      - name: "Validate the package candidate"
+        run: "bun scripts/ci/verify-release-candidate.ts --candidate-dir .hesperia/release-candidate"
+      - name: "Run installed and linked package behavior"
+        run: "bun test --timeout=60000 tests/package"
+        env:
+          HESPERIA_RELEASE_CANDIDATE_DIR: ${{ format('{0}/.hesperia/release-candidate', github.workspace) }}
+  golden-plan:
+    name: "Select implemented golden suites"
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      full_suite: ${{ steps.plan.outputs.full_suite }}
+      catalog_valid: ${{ steps.plan.outputs.catalog_valid }}
+      selection_summary: ${{ steps.plan.outputs.selection_summary }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: "Plan the selected suites and matrix"
+        id: plan
+        env:
+          GOLDEN_BASE_SHA: ${{ inputs.base || inputs.ref }}
+          GOLDEN_HEAD_SHA: ${{ inputs.ref }}
+          GOLDEN_FULL_SUITE: ${{ needs.checks.outputs.full }}
+        run: |
+          args=(
+            --base "$GOLDEN_BASE_SHA"
+            --head "$GOLDEN_HEAD_SHA"
+            --catalog-path golden/catalog.json
+            --graph-path golden/dependency-graph.json
+          )
+          if [ "$GOLDEN_FULL_SUITE" = "true" ]; then
+            args+=(--release-candidate)
+          fi
+          bun run scripts/ci/plan-golden.ts "${args[@]}"
+        shell: bash
+    needs: checks
+    if: "needs.checks.outputs.golden == 'true'"
+  golden:
+    name: "Golden suites (${{ matrix.platform }}, ${{ matrix.project }})"
+    needs:
+      - checks
+      - golden-plan
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.golden-plan.outputs.matrix) }}
+    env:
+      GOLDEN_PROJECT: ${{ matrix.project }}
+      GOLDEN_SUITES_JSON: ${{ toJSON(matrix.suites) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: "Build packages"
+        run: "bun run build"
+      - name: "Install all browser engines"
+        if: "runner.os == 'Linux'"
+        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
+      - name: "Install all browser engines"
+        if: "runner.os == 'Windows'"
+        run: "node node_modules/playwright/cli.js install chromium firefox webkit"
+      - name: "Run every selected suite in the matrix browser"
+        run: |
+          mapfile -t suites < <(node -e 'for (const suite of JSON.parse(process.env.GOLDEN_SUITES_JSON)) console.log(suite)')
+          if [ "${#suites[@]}" -eq 0 ]; then
+            echo "The golden plan returned no runnable suites" >&2
+            exit 1
+          fi
+          node ../node_modules/@playwright/test/cli.js test --project="$GOLDEN_PROJECT" "${suites[@]}"
+        shell: bash
+        working-directory: golden
+      - name: "Reject a catalog that names unimplemented suites"
+        if: "needs.golden-plan.outputs.catalog_valid != 'true'"
+        run: |
+          echo "The complete discovered golden suite ran, but the catalog needs repair." >&2
+          exit 1
+        shell: bash
+    if: "needs.checks.outputs.golden == 'true' && needs.golden-plan.result == 'success'"
+  vscode:
+    name: "Real Windows VS Code host"
+    needs: checks
+    if: "needs.checks.outputs.vscode == 'true'"
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: "Set up the real editor"
+        id: editor
+        uses: ./.github/actions/setup-editor
+      - name: "Build workspace packages"
+        run: "bun run build"
+      - name: "Check editor types"
+        run: "bun run --cwd editors/vscode typecheck"
+      - name: "Build the editor extension"
+        run: "bun run --cwd editors/vscode build"
+      - name: "Build the editor test host"
+        run: "bun run --cwd editors/vscode build:test"
+      - name: "Run the real editor host gate"
+        shell: pwsh
+        env:
+          VSCODE_CODE_PATH: ${{ steps.editor.outputs.code-path }}
+        run: |
+          & powershell -NoProfile -ExecutionPolicy Bypass -File editors/vscode/test.ps1 -CodePath $env:VSCODE_CODE_PATH
+  result:
+    name: "Verification result"
+    if: "always()"
+    needs:
+      - checks
+      - source-quality
+      - combined-coverage
+      - browser
+      - package
+      - golden-plan
+      - golden
+      - vscode
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: "Set up Bun"
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.2
+      - name: "Require every selected verification job"
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          bun -e '
+            import assert from "node:assert/strict";
+            const jobs = JSON.parse(process.env.RESULTS);
+            const scope = jobs.checks.outputs;
+            const selected = { "source-quality": "behavior", browser: "browser", package: "package", vscode: "vscode", "golden-plan": "golden", golden: "golden" };
+            for (const [name, job] of Object.entries(jobs)) {
+              const excluded = scope.full === "false" &&
+                (name === "combined-coverage" || scope[selected[name]] === "false");
+              assert.ok(job.result === "success" || (excluded && job.result === "skipped"),
+                name + " must succeed when selected; received " + job.result);
+            }
+          '

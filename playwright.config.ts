@@ -1,5 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const browserPort = process.env.HESPERIA_BROWSER_PORT ?? "4178";
+const browserURL = `http://127.0.0.1:${browserPort}`;
+
 export default defineConfig({
   testDir: "./tests/browser",
   testMatch: "**/*.spec.ts",
@@ -9,7 +12,7 @@ export default defineConfig({
   retries: 0,
   reporter: "list",
   use: {
-    baseURL: "http://127.0.0.1:4178",
+    baseURL: browserURL,
     trace: "retain-on-failure",
   },
   projects: [
@@ -19,7 +22,7 @@ export default defineConfig({
   ],
   webServer: {
     command: "bun tests/browser/fixture-server.ts",
-    url: "http://127.0.0.1:4178/health",
+    url: `${browserURL}/health`,
     reuseExistingServer: false,
     timeout: 30_000,
   },
