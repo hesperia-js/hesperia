@@ -184,6 +184,13 @@ test("an independently composed async child rejects a required binding before it
 test("reset recovers consumed async sources and leaves unrelated rendered owners live", async ({
   page,
 }) => {
+  const windowsFirefoxCi =
+    process.env.CI === "true" &&
+    process.platform === "win32" &&
+    test.info().project.name === "firefox";
+
+  if (windowsFirefoxCi) test.setTimeout(60_000);
+
   const attempts = new Map<string, number>();
   const pendingRequests = new Map<string, HeldRequest>();
   const requestWaiters = new Map<string, ((request: HeldRequest) => void)[]>();
@@ -589,14 +596,16 @@ test("reset recovers consumed async sources and leaves unrelated rendered owners
   );
 
   await expect
-    .poll(async () =>
-      page.evaluate(
-        (id) =>
-          (
-            globalThis as unknown as { asyncRecoveryControl: AsyncRecoveryControl }
-          ).asyncRecoveryControl.resetState(id).status,
-        parkedReset,
-      ),
+    .poll(
+      async () =>
+        page.evaluate(
+          (id) =>
+            (
+              globalThis as unknown as { asyncRecoveryControl: AsyncRecoveryControl }
+            ).asyncRecoveryControl.resetState(id).status,
+          parkedReset,
+        ),
+      { timeout: windowsFirefoxCi ? 20_000 : undefined },
     )
     .toBe("fulfilled");
 

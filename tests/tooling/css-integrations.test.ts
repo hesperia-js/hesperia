@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -396,11 +396,26 @@ test("Tailwind handles imported and generated CSS, maps its input branch, and re
     expect(output).toContain(".px-7");
   }
 
-  expect(pipeline.watch).toContainEqual({ kind: "file", file: source });
+  const resolvedWatchedFiles = await Promise.all(
+    pipeline.watch
+      .filter((item) => item.kind === "file")
+      .map(async (item) => realpath(item.file).catch(() => undefined)),
+  );
 
-  expect(
-    pipeline.watch.find((item) => item.kind === "directory" && item.dir === join(root, "shared")),
-  ).toMatchObject({ kind: "directory", dir: join(root, "shared"), glob: expect.any(String) });
+  expect(resolvedWatchedFiles).toContain(await realpath(source));
+
+  const resolvedWatchedDirectories = await Promise.all(
+    pipeline.watch
+      .filter((item) => item.kind === "directory")
+      .map(async (item) => ({
+        item,
+        dir: await realpath(item.dir).catch(() => undefined),
+      })),
+  );
+  const sharedDirectory = await realpath(join(root, "shared"));
+  const sharedWatch = resolvedWatchedDirectories.find((item) => item.dir === sharedDirectory);
+
+  expect(sharedWatch?.item).toMatchObject({ kind: "directory", glob: expect.any(String) });
 
   expect(inputs.some((input) => input.kind === "import" && !("owner" in input))).toBe(true);
 

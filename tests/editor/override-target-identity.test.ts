@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EditorProject } from "../../packages/language-server/src/project.ts";
@@ -71,8 +71,8 @@ test("an override uses the project-selected package types despite a nested packa
 
       expect(definitions).toHaveLength(1);
 
-      expect(definitions[0]!.filename.replaceAll("\\", "/").toLowerCase()).toBe(
-        join(root, "node_modules/replacement/api.d.ts").replaceAll("\\", "/").toLowerCase(),
+      expect(await realpath(definitions[0]!.filename)).toBe(
+        await realpath(join(root, "node_modules/replacement/api.d.ts")),
       );
     } finally {
       await project.dispose();

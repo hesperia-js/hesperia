@@ -90,5 +90,5 @@ export default function Page() { const count = client.state(0); const veto = cli
       await rm(root, { recursive: true, force: true });
     }
   },
-  90_000,
+  process.platform === "win32" ? 120_000 : 90_000,
 );

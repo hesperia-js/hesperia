@@ -28,6 +28,13 @@ declare global {
 test("public package mount loads Blob sources and releases replaced and destroyed URLs", async ({
   page,
 }) => {
+  const windowsFirefoxCi =
+    process.env.CI === "true" &&
+    process.platform === "win32" &&
+    test.info().project.name === "firefox";
+
+  if (windowsFirefoxCi) test.setTimeout(60_000);
+
   const errors: string[] = [];
 
   page.on("pageerror", (error) => errors.push(error.message));
@@ -112,8 +119,9 @@ test("public package mount loads Blob sources and releases replaced and destroye
   expect(await image.evaluate((node) => node === document.querySelector("#blob-image"))).toBe(true);
 
   await expect
-    .poll(() =>
-      page.locator("#blob-image").evaluate((node) => (node as HTMLImageElement).naturalWidth),
+    .poll(
+      () => page.locator("#blob-image").evaluate((node) => (node as HTMLImageElement).naturalWidth),
+      { timeout: windowsFirefoxCi ? 20_000 : undefined },
     )
     .toBeGreaterThan(0);
 

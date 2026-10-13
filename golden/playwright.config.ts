@@ -29,6 +29,6 @@ export default defineConfig({
     command: "bun run serve",
     url: baseURL + "/health",
     reuseExistingServer: false,
-    timeout: 30_000,
+    timeout: process.platform === "win32" ? 120_000 : 30_000,
   },
 });

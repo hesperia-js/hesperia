@@ -1,17 +1,24 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CheckingInputSnapshot } from "../../packages/compiler/src/checking-inputs.ts";
 import { checkProjectModules, openCheckingProject } from "../../packages/compiler/src/checking.ts";
 import { ModuleResolver } from "../../packages/compiler/src/module-resolution.ts";
+import { normalizeFilename } from "../../packages/compiler/src/utils.ts";
 
 test("captures a declaration on first existence check and keeps its bytes immutable", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-checking-inputs-"));
-  const declaration = join(root, "node_modules/replacement/types/api.d.ts");
+  const physicalRoot = join(root, "physical");
+  const aliasRoot = join(root, "alias");
+  const declaration = join(physicalRoot, "node_modules/replacement/types/api.d.ts");
+  const aliasedDeclaration = join(aliasRoot, "node_modules/replacement/types/api.d.ts");
 
   try {
-    await mkdir(join(root, "node_modules/replacement/types"), { recursive: true });
+    await mkdir(physicalRoot);
+    await symlink(physicalRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+    await mkdir(join(physicalRoot, "node_modules/replacement/types"), { recursive: true });
 
     await writeFile(declaration, "export declare const label: string;", { encoding: "utf8" });
 
@@ -31,13 +38,37 @@ test("captures a declaration on first existence check and keeps its bytes immuta
 
     expect(snapshot.readFile(declaration)).toBe(captured.source);
 
+    expect(snapshot.readFile(aliasedDeclaration)).toBe(captured.source);
+
     expect(snapshot.captured[0]!.digest).toBe(captured.digest);
 
     await rm(declaration);
 
     expect(snapshot.fileExists(declaration)).toBe(true);
 
+    expect(snapshot.fileExists(aliasedDeclaration)).toBe(true);
+
     expect(snapshot.readFile(declaration)).toBe(captured.source);
+
+    expect(snapshot.readFile(aliasedDeclaration)).toBe(captured.source);
+
+    const virtual = new CheckingInputSnapshot(
+      new Map([
+        [normalizeFilename(aliasedDeclaration), "virtual alias source"],
+        [normalizeFilename(declaration), "virtual physical source"],
+      ]),
+    );
+
+    expect(virtual.readFile(declaration)).toBe("virtual physical source");
+
+    expect(virtual.readFile(aliasedDeclaration)).toBe("virtual alias source");
+
+    const lateFiles = new Map<string, string>();
+    const lateVirtual = new CheckingInputSnapshot(lateFiles);
+
+    lateFiles.set(normalizeFilename(aliasedDeclaration), "virtual alias source added later");
+
+    expect(lateVirtual.readFile(declaration)).toBe("virtual alias source added later");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -45,20 +76,30 @@ test("captures a declaration on first existence check and keeps its bytes immuta
 
 test("remembers a missing declaration instead of falling back after it appears", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-checking-inputs-"));
-  const declaration = join(root, "node_modules/replacement/types/api.d.ts");
+  const physicalRoot = join(root, "physical");
+  const aliasRoot = join(root, "alias");
+  const declaration = join(physicalRoot, "node_modules/replacement/types/api.d.ts");
+  const aliasedDeclaration = join(aliasRoot, "node_modules/replacement/types/api.d.ts");
 
   try {
+    await mkdir(physicalRoot);
+    await symlink(physicalRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+
     const snapshot = new CheckingInputSnapshot(new Map());
 
     expect(snapshot.fileExists(declaration)).toBe(false);
 
-    await mkdir(join(root, "node_modules/replacement/types"), { recursive: true });
+    await mkdir(join(physicalRoot, "node_modules/replacement/types"), { recursive: true });
 
     await writeFile(declaration, "export declare const label: string;", { encoding: "utf8" });
 
     expect(snapshot.fileExists(declaration)).toBe(false);
 
+    expect(snapshot.fileExists(aliasedDeclaration)).toBe(false);
+
     expect(snapshot.readFile(declaration)).toBeNull();
+
+    expect(snapshot.readFile(aliasedDeclaration)).toBeNull();
 
     expect(snapshot.captured).toStrictEqual([]);
   } finally {
@@ -143,11 +184,10 @@ test("repeated checking retains the captured public type target in dependency re
     const options = { root, resolution, resolutionOverrides, browserTarget: true };
     const initial = await checkProjectModules([entry], options);
 
+    const declarationIdentity = normalizeFilename(realpathSync(declaration));
     const dependency = (result: typeof initial) =>
       result.checkingInputs.find(
-        (input) =>
-          input.filename.replaceAll("\\", "/").toLowerCase() ===
-          declaration.replaceAll("\\", "/").toLowerCase(),
+        (input) => normalizeFilename(realpathSync(input.filename)) === declarationIdentity,
       );
 
     expect(initial.diagnostics).toStrictEqual([]);

@@ -44,13 +44,16 @@ export async function prepareReleaseCandidate(workspaceRoot: string, directory: 
 
       await mkdir(stagedPackage, { recursive: true });
 
-      await cp(resolve(target.packageRoot, "dist"), resolve(stagedPackage, "dist"), {
-        recursive: true,
-      });
-
       const manifest = JSON.parse(
         await readFile(resolve(target.packageRoot, "package.json"), "utf8"),
       ) as Record<string, unknown> & { files: string[] };
+
+      for (const file of manifest.files) {
+        await cp(resolve(target.packageRoot, file), resolve(stagedPackage, file), {
+          recursive: true,
+        });
+      }
+
       manifest.license = rootManifest.license;
       manifest.files = [...new Set([...manifest.files, ...releaseNotices])];
 

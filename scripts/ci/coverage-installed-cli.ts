@@ -132,6 +132,7 @@ interface ChildCaptureConfiguration {
   readonly entryPath: string;
   readonly entryRealPath: string;
   readonly entrySha256: string;
+  readonly relativeImports: readonly string[];
   readonly graphEntryPath: string;
   readonly graphEntrySha256: string;
   readonly runtimeHash: string;
@@ -235,6 +236,15 @@ function isWithin(parent: string, candidate: string): boolean {
 
 function sha256(bytes: Uint8Array | string): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function relativeCliImports(bytes: Buffer): readonly string[] {
+  const source = bytes.toString("utf8").replace(/^#![^\r\n]*/u, "");
+  const imports = new Bun.Transpiler({ loader: "js" }).scanImports(source);
+
+  return imports
+    .filter((item) => item.kind === "import-statement" && /^\.\.?\//u.test(item.path))
+    .map((item) => item.path);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -416,6 +426,10 @@ function validateChildReceipt(
   childPid: number,
   status: number,
 ): asserts value is ChildCaptureReceipt {
+  if (isRecord(value) && isStringArray(value.captureErrors) && value.captureErrors.length > 0) {
+    throw new Error(`Installed CLI child capture failed: ${value.captureErrors.join("; ")}`);
+  }
+
   if (
     !isRecord(value) ||
     value.format !==
@@ -465,7 +479,7 @@ function validateChildReceipt(
     throw new Error("Installed CLI child arguments differ from the installed owner request");
   }
 
-  const declaredImports = new Set(["./project.js", "./oxc-check.js", "./server.js"]);
+  const declaredImports = new Set(configuration.relativeImports);
   const entryPaths = new Set([
     canonicalPath(configuration.entryPath),
     canonicalPath(configuration.entryRealPath),
@@ -638,6 +652,7 @@ export async function runInstalledCli(input: InstalledCliAdapterInput): Promise<
     entryPath,
     entryRealPath,
     entrySha256,
+    relativeImports: relativeCliImports(installedEntryBytes),
     graphEntryPath: workerInputs.graphEntryPath,
     graphEntrySha256: workerInputs.graphEntrySha256,
     runtimeHash: workerInputs.runtimeHash,
@@ -716,6 +731,7 @@ export async function runConfiguredPluginBuildCli(
     entryPath,
     entryRealPath,
     entrySha256,
+    relativeImports: relativeCliImports(entryBytes),
     graphEntryPath: workerInputs.graphEntryPath,
     graphEntrySha256: workerInputs.graphEntrySha256,
     runtimeHash: workerInputs.runtimeHash,
@@ -1068,7 +1084,9 @@ function childConfiguration(): ChildCaptureConfiguration | undefined {
 
   try {
     const configuration = JSON.parse(raw) as ChildCaptureConfiguration;
-    return configuration.mode === mode ? configuration : undefined;
+    return configuration.mode === mode && isStringArray(configuration.relativeImports)
+      ? configuration
+      : undefined;
   } catch {
     return undefined;
   }
@@ -1139,7 +1157,7 @@ function installChildCapture(): void {
         canonicalPath(configuration.entryPath),
         canonicalPath(configuration.entryRealPath),
       ]);
-      const expectedImports = new Set(["./project.js", "./oxc-check.js", "./server.js"]);
+      const expectedImports = new Set(configuration.relativeImports);
       const entryFilter = new RegExp(
         `^(?:${escapeRegex(configuration.entryPath)}|${escapeRegex(configuration.entryRealPath)})$`,
         process.platform === "win32" ? "iu" : "u",
@@ -1217,7 +1235,7 @@ function installChildCapture(): void {
 
     if (!configuration) return;
 
-    const declaredImports = new Set(["./project.js", "./oxc-check.js", "./server.js"]);
+    const declaredImports = new Set(configuration.relativeImports);
     const observedImports = new Set(state.onResolveRequests.map((request) => request.specifier));
 
     if (state.entryLoadCount !== 1 || !state.substitutedEntryPath) {

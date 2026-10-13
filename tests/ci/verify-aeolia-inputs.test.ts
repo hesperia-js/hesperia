@@ -21,7 +21,7 @@ async function packageFile(directory: string, name: string, relative: string): P
 
 afterAll(async () => {
   const physical = await realpath(root);
-  const prefix = `${resolve(tmpdir())}${sep}`;
+  const prefix = `${await realpath(resolve(tmpdir()))}${sep}`;
 
   if (!physical.startsWith(prefix) || !physical.includes(`${sep}hesperia-golden-aeolia-`)) {
     throw new Error(`Refusing to remove unexpected test directory: ${physical}`);
