@@ -293,7 +293,7 @@ describe("owner-bound data primitives", () => {
 
   test("a settled query wait releases its store from the owner resource lifecycle", async () => {
     const current = owner();
-    const reference = await (async () => {
+    const { reference, unreachable } = await (async () => {
       const query = createQuery({
         name: "data.settled-lifecycle",
         key: () => "data/settled-lifecycle",
@@ -310,9 +310,13 @@ describe("owner-bound data primitives", () => {
 
       graph.dispose();
 
-      return new WeakRef(store);
+      return {
+        reference: new WeakRef(store),
+        unreachable: new WeakRef({}),
+      };
     })();
 
+    const heapUsedAfterGc: number[] = [];
     let collected = false;
 
     for (let attempt = 0; attempt < 10; attempt++) {
@@ -320,9 +324,25 @@ describe("owner-bound data primitives", () => {
 
       Bun.gc(true);
 
+      heapUsedAfterGc.push(process.memoryUsage().heapUsed);
+
       collected = reference.deref() === undefined;
 
       if (collected) break;
+    }
+
+    if (!collected) {
+      console.error(
+        "[query-lifecycle-gc]",
+        JSON.stringify({
+          attempts: heapUsedAfterGc.length,
+          unreachableCollected: unreachable.deref() === undefined,
+          heapUsedAfterGc,
+          ownerState: current.state,
+          bunVersion: Bun.version,
+          coverage: process.env.HESPERIA_COVERAGE_RUN_ID !== undefined,
+        }),
+      );
     }
 
     expect(collected).toBe(true);

@@ -28,6 +28,7 @@ const launcherPath = resolve(repoPath, "scripts/ci/coverage-owner-launcher.ts");
 const runnerPath = resolve(repoPath, "scripts/ci/run-coverage.ts");
 const cssOwnerPath = resolve(repoPath, "tests/tooling/css-integrations.test.ts");
 const projectWorkerOwnerPath = resolve(repoPath, "tests/tooling/project-worker.test.ts");
+const creatorOwnerPath = resolve(repoPath, "tests/tooling/create-hesperia.test.ts");
 const fixtureRoot = resolve(repoPath, "scripts/ci/fixtures");
 const bootstrapSources = [
   "scripts/ci/coverage-preload.ts",
@@ -125,6 +126,92 @@ function lcovCount(record: string, name: "LH" | "FNH"): number {
   const match = record.match(new RegExp(`^${name}:(\\d+)$`, "mu"));
   return match ? Number(match[1]) : 0;
 }
+
+test("coverage runner separates Creator child fragments from ordinary parent template hits", () => {
+  const result = runCoverageOwner(creatorOwnerPath);
+
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+
+  const summary = result.summary;
+
+  if (!summary?.runId || !summary.outputDirectory || !summary.lcovPath) {
+    throw new Error(`Creator coverage did not complete: ${result.stdout}\n${result.stderr}`);
+  }
+
+  expect(summary.status).toBe("completed");
+
+  expect(summary.mergedSources).toBe(inventoryCoverageSources(repoPath).length);
+
+  const namedArtifacts = readdirSync(summary.outputDirectory)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => ({
+      name,
+      artifact: JSON.parse(
+        readFileSync(join(summary.outputDirectory!, name), "utf8"),
+      ) as CoverageArtifact,
+    }));
+  const creatorFragments = namedArtifacts.filter(({ name }) =>
+    name.startsWith(`${summary.runId}-bun-tests-creator-cli-`),
+  );
+
+  expect(creatorFragments).toHaveLength(8);
+
+  const creatorImplementationPath = resolve(repoPath, "packages/create-hesperia/src/creator.ts");
+
+  expect(
+    creatorFragments.every(({ artifact }) =>
+      Object.values(artifact.coverage).every(
+        (file) => resolve(file.path) !== creatorImplementationPath,
+      ),
+    ),
+  ).toBe(true);
+
+  const childIdentities = creatorFragments.map(({ name }) =>
+    name.match(/-creator-cli-(\d+)-([a-f0-9-]{36})-hits-(\d+)-(\d+)-[a-f0-9-]{36}\.json$/u),
+  );
+
+  expect(childIdentities.every((identity) => identity !== null)).toBe(true);
+
+  expect(childIdentities.map((identity) => Number(identity![1])).sort()).toStrictEqual([
+    1, 2, 3, 4, 5, 6, 7, 8,
+  ]);
+
+  expect(new Set(childIdentities.map((identity) => identity![2])).size).toBe(8);
+
+  const parentFragments = namedArtifacts.filter(({ name }) =>
+    name.startsWith(`${summary.runId}-bun-tests-coverage-runner-hits-`),
+  );
+
+  expect(parentFragments).toHaveLength(1);
+
+  const parentCoverage = parentFragments[0]!.artifact.coverage;
+
+  for (const source of [
+    "packages/create-hesperia/src/templates/elysia.ts",
+    "packages/create-hesperia/src/templates/frontend.ts",
+    "packages/create-hesperia/src/creator.ts",
+  ]) {
+    const file = Object.values(parentCoverage).find(
+      (entry) => resolve(entry.path) === resolve(repoPath, source),
+    );
+
+    expect(file, `ordinary parent omitted ${source}`).toBeDefined();
+
+    expect(Object.values(file!.s).some((count) => count > 0)).toBe(true);
+  }
+
+  const lcov = readFileSync(summary.lcovPath, "utf8");
+  const creatorRecord = lcov
+    .replaceAll("\\", "/")
+    .split("end_of_record")
+    .find((record) =>
+      record.split(/\r?\n/u).includes("SF:packages/create-hesperia/src/creator.ts"),
+    );
+
+  expect(creatorRecord).toBeDefined();
+
+  expect(lcovCount(creatorRecord!, "LH")).toBeGreaterThan(0);
+}, 150_000);
 
 test("coverage runner captures each compiled project worker process under its own source identity", () => {
   const result = runCoverageOwner(projectWorkerOwnerPath);

@@ -633,13 +633,11 @@ function assertCreatorCliCapture(
     ]),
   );
 
-  const creatorPaths = creatorCliSources.map((source) =>
-    canonicalPath(resolve(repoPath, source.replaceAll("/", sep))),
-  );
+  const creatorEntryPath = canonicalPath(resolve(repoPath, creatorCliSources[0]));
   const creatorHits = hits.filter(
     (artifact) =>
       artifact.ownerId === ownerId &&
-      Object.keys(artifact.coverage).some((path) => creatorPaths.includes(canonicalPath(path))),
+      Object.keys(artifact.coverage).some((path) => canonicalPath(path) === creatorEntryPath),
   );
 
   if (creatorHits.length !== 8) {

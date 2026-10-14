@@ -4,11 +4,96 @@ import { suppliedReleaseArchive } from "./release-candidate.ts";
 import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { chromium, firefox, webkit } from "playwright";
+import { chromium, firefox, webkit, type Frame, type Page, type Request } from "playwright";
 
 const packageRoot = resolve(import.meta.dir, "../..");
 
 const applicationFixture = join(import.meta.dir, "fixtures/applications/embed");
+
+async function navigate(page: Page, url: string): Promise<void> {
+  const started = Date.now();
+  const timeline: string[] = [];
+  const pending = new Set<Request>();
+  const origin = new URL(url).origin;
+  const localURL = (value: string): string => {
+    if (!value) return "uncommitted";
+
+    const parsed = new URL(value);
+
+    return parsed.origin === origin
+      ? `${origin}${parsed.pathname}`
+      : parsed.protocol === "about:"
+        ? `about:${parsed.pathname}`
+        : parsed.protocol;
+  };
+  const record = (event: string): void => {
+    timeline.push(`${Date.now() - started}ms ${event}`);
+
+    if (timeline.length > 32) timeline.shift();
+  };
+  const requested = (request: Request): void => {
+    pending.add(request);
+
+    record(`request ${localURL(request.url())}`);
+  };
+  const settled = (request: Request): void => {
+    pending.delete(request);
+
+    record(`${request.failure() ? "failed" : "finished"} ${localURL(request.url())}`);
+  };
+  const navigated = (frame: Frame): void => record(`frame ${localURL(frame.url())}`);
+  const loaded = (): void => record(`load ${localURL(page.url())}`);
+
+  page.on("request", requested);
+
+  page.on("requestfinished", settled);
+
+  page.on("requestfailed", settled);
+
+  page.on("framenavigated", navigated);
+
+  page.on("load", loaded);
+
+  try {
+    await page.goto(url);
+  } catch (error) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const documentState = await Promise.race([
+      page
+        .evaluate(() => ({
+          readyState: document.readyState,
+          loads: document.getElementById("loads")?.textContent ?? null,
+        }))
+        .catch(() => "unavailable"),
+      new Promise<string>((resolve_) => {
+        timer = setTimeout(() => resolve_("observation timed out"), 1_000);
+      }),
+    ]);
+
+    clearTimeout(timer);
+
+    console.error("Installed Embed navigation failed", {
+      timeline,
+      pending: [...pending].map((request) => localURL(request.url())),
+      browserConnected: page.context().browser()?.isConnected(),
+      pageClosed: page.isClosed(),
+      frames: page.frames().map((frame) => localURL(frame.url())),
+      document: documentState,
+    });
+
+    throw error;
+  } finally {
+    page.off("request", requested);
+
+    page.off("requestfinished", settled);
+
+    page.off("requestfailed", settled);
+
+    page.off("framenavigated", navigated);
+
+    page.off("load", loaded);
+  }
+}
 
 test("packed public Embed preserves root policy, events, and wrapper binding in compiled applications", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "hesperia-installed-embed-"));
@@ -195,7 +280,7 @@ export function Invalid() {
 
           page.on("pageerror", (error) => errors.push(error.message));
 
-          await page.goto(url);
+          await navigate(page, url);
 
           await page.locator('iframe[name="primary"]').waitFor();
 
