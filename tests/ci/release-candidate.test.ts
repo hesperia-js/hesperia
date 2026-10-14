@@ -85,7 +85,7 @@ test("one real packed workspace candidate rewrites dependency pins and rejects m
 
   await mkdir(scratchRoot, { recursive: true });
 
-  const workspace = await mkdtemp(join(scratchRoot, "release-pack-proof-"));
+  const workspace = await mkdtemp(join(scratchRoot, "release pack proof "));
 
   try {
     const version = "1.0.0-alpha.1";

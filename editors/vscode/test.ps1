@@ -45,6 +45,7 @@ $nativeLanguageServerAckErrors = [System.Collections.Generic.List[string]]::new(
 $fixtureProcessScopeEvidence = $null
 $testFailureMessage = ''
 $verificationControl = ''
+$ownerKillCompleted = $false
 
 if ($coverageEnabled) {
   Add-Type -TypeDefinition @'
@@ -436,6 +437,42 @@ function Receive-OwnerStartCandidates {
   }
 }
 
+function Try-WriteNativeOwnerAdmission {
+  $destination = Join-Path $coverageOutput 'owner-native-admission.json'
+
+  if (Test-Path -LiteralPath $destination) { return }
+
+  if (-not $ownerAdmissionKeys.ContainsKey('extension-host') -or -not $ownerAdmissionKeys.ContainsKey('language-server')) { return }
+
+  $hostOwner = Read-AvailableOwnerReceipt 'extension-host'
+  $serverOwner = Read-AvailableOwnerReceipt 'language-server'
+  $hostRecord = Get-ProcessEventByPid ([int]$ownerAdmissionKeys['extension-host'])
+  $serverRecord = Get-ProcessEventByPid ([int]$ownerAdmissionKeys['language-server'])
+
+  if ($null -eq $hostOwner -or $null -eq $serverOwner -or $null -eq $hostRecord -or $null -eq $serverRecord) { return }
+
+  Test-OwnerNativeCandidate $hostOwner $hostRecord
+
+  Test-OwnerNativeCandidate $serverOwner $serverRecord
+
+  if (-not (Test-RetainedHandleGeneration $hostRecord) -or -not (Test-RetainedHandleGeneration $serverRecord)) {
+    throw 'Required native owners exited before their live admission acknowledgement.'
+  }
+
+  $admission = [pscustomobject]@{
+    format = 'hesperia-editor-native-owner-admission'
+    version = 1
+    runId = $ownerReceiptConfig.runId
+    populationFingerprint = $ownerReceiptConfig.populationFingerprint
+    extensionHostPid = $hostRecord.pid
+    languageServerPid = $serverRecord.pid
+    languageServerParentPid = $serverRecord.parentPid
+    admittedAt = [DateTime]::UtcNow.ToString('o')
+  }
+
+  [System.IO.File]::WriteAllText($destination, ($admission | ConvertTo-Json -Compress), [System.Text.UTF8Encoding]::new($false))
+}
+
 function Receive-ProcessStarts([switch]$IncludeUnrelated) {
   $script:observerReceiveCalls++
 
@@ -446,6 +483,8 @@ function Receive-ProcessStarts([switch]$IncludeUnrelated) {
   }
 
   Observe-RetainedProcessExits
+
+  if (-not $IncludeUnrelated) { Try-WriteNativeOwnerAdmission }
 
   if (-not $IncludeUnrelated -and $verificationControl) { Try-RunOwnerKillControl }
 
@@ -673,6 +712,8 @@ function Try-RunOwnerKillControl {
   }
 
   [System.IO.File]::WriteAllText((Join-Path $coverageOutput 'owner-kill-control.json'), ($control | ConvertTo-Json -Depth 6 -Compress), [System.Text.UTF8Encoding]::new($false))
+
+  $script:ownerKillCompleted = $true
 
   throw ('Private native owner kill control terminated ' + $role + ' PID ' + $target.pid)
 }
@@ -948,7 +989,11 @@ try {
     ('"' + $testRoot + '"')
   )
 
-  if ($coverageEnabled) { $observerStartedAt = [DateTime]::UtcNow.ToString('o') }
+  if ($coverageEnabled) {
+    $observerStartedAt = [DateTime]::UtcNow.ToString('o')
+    $deadline = [DateTime]::UtcNow.AddSeconds($testBudgetSeconds)
+    $env:HESPERIA_EDITOR_COVERAGE_ADMISSION_DEADLINE = ([DateTimeOffset]$deadline).ToUnixTimeMilliseconds().ToString([Globalization.CultureInfo]::InvariantCulture)
+  }
 
   $testProcess = Start-Process -FilePath $CodePath -ArgumentList $arguments -WindowStyle Hidden -PassThru
   $codeLaunchPid = $testProcess.Id
@@ -997,7 +1042,7 @@ try {
     }
   }
 
-  $deadline = [DateTime]::UtcNow.AddSeconds($testBudgetSeconds)
+  if (-not $coverageEnabled) { $deadline = [DateTime]::UtcNow.AddSeconds($testBudgetSeconds) }
 
   if ($coverageEnabled) {
     while (-not [HesperiaNativeProcess]::HasExited($launchRecord.nativeHandle) -and [DateTime]::UtcNow -lt $deadline) {
@@ -1065,7 +1110,7 @@ try {
     try {
       if ($passed) {
         Receive-ProcessStarts
-      } else {
+      } elseif (-not $ownerKillCompleted) {
         for ($sweep = 0; $sweep -lt 16; $sweep++) {
           $beforeCount = $processEvents.Count
 
@@ -1156,6 +1201,22 @@ try {
               if ($stillLive) { $forcedCleanup = $true }
             }
           }
+        }
+      }
+
+      if ($ownerKillCompleted) {
+        try {
+          for ($sweep = 0; $sweep -lt 16; $sweep++) {
+            $beforeCount = $processEvents.Count
+
+            Receive-ProcessStarts -IncludeUnrelated
+
+            if ($processEvents.Count -eq $beforeCount) { break }
+          }
+        } catch {
+          $observerCleanupErrors.Add($_.Exception.Message)
+
+          Write-Output ('Process observer cleanup: ' + $_.Exception.Message)
         }
       }
 

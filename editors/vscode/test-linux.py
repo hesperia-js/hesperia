@@ -3298,12 +3298,16 @@ def process_event(
                     for tid in parent_exit_tids
                 )
                 parent_first_sample_ns = utc_time_ns(parent_first_parent["observedAt"])
+                parent_births = trace["creations"].get(parent_tgid, [])
                 child_first_sample_ns = utc_time_ns(child_first_parent["observedAt"])
 
                 if (
                     child_first_parent["pid"] != generation.ppid
                     or utc_time_ns(parent_generation.attached_at) > parent_first_sample_ns
-                    or parent_first_sample_ns >= creator_edge["startNs"]
+                    or len(parent_births) != 1
+                    or parent_births[0]["thread"]
+                    or parent_births[0]["startNs"] >= utc_time_ns(parent_generation.attached_at)
+                    or parent_first_sample_ns >= parent_group_exit_ns
                     or creator_edge["completionNs"] >= parent_group_exit_ns
                     or parent_group_exit_ns >= child_first_sample_ns
                     or utc_time_ns(parent_generation.ready_at) < parent_group_exit_ns
@@ -3321,7 +3325,8 @@ def process_event(
                                 "operands": {
                                     "childFirstParentMismatch": {"left": child_first_parent["pid"], "right": generation.ppid, "failed": child_first_parent["pid"] != generation.ppid},
                                     "parentAttachedAfterFirstSample": {"left": parent_attached_ns, "right": parent_first_sample_ns, "failed": parent_attached_ns > parent_first_sample_ns},
-                                    "parentFirstSampleAtOrAfterCreation": {"left": parent_first_sample_ns, "right": creator_edge["startNs"], "failed": parent_first_sample_ns >= creator_edge["startNs"]},
+                                    "parentBirthNotBeforeAttachment": {"left": parent_births[0]["startNs"] if len(parent_births) == 1 else None, "right": parent_attached_ns, "failed": len(parent_births) != 1 or parent_births[0]["thread"] or parent_births[0]["startNs"] >= parent_attached_ns},
+                                    "parentFirstSampleAtOrAfterGroupExit": {"left": parent_first_sample_ns, "right": parent_group_exit_ns, "failed": parent_first_sample_ns >= parent_group_exit_ns},
                                     "creationCompletedAtOrAfterParentExit": {"left": creator_edge["completionNs"], "right": parent_group_exit_ns, "failed": creator_edge["completionNs"] >= parent_group_exit_ns},
                                     "parentExitAtOrAfterChildFirstSample": {"left": parent_group_exit_ns, "right": child_first_sample_ns, "failed": parent_group_exit_ns >= child_first_sample_ns},
                                     "parentReadyBeforeGroupExit": {"left": parent_ready_ns, "right": parent_group_exit_ns, "failed": parent_ready_ns < parent_group_exit_ns},

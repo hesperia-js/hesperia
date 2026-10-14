@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { $ } from "bun";
 import { releaseVersion, releaseWorkspace } from "./check-release.ts";
 import {
@@ -92,7 +92,11 @@ export async function verifyReleaseCandidate(workspaceRoot: string, directory: s
       }
     }
 
-    const files = new Set((await $`tar -tf ${archive}`.quiet().text()).trim().split(/\r?\n/));
+    const files = new Set(
+      (await $`tar -tf ${`./${basename(archive)}`}`.cwd(dirname(archive)).quiet().text())
+        .trim()
+        .split(/\r?\n/),
+    );
     const target = release.plan[index]!;
 
     for (const file of [...target.exportTargets, ...target.binTargets])

@@ -2513,6 +2513,7 @@ function validateLinuxTraceClosure(
           const terminalNs = linuxTraceTimestampNs(terminal);
           return terminalNs > latest ? terminalNs : latest;
         }, 0n);
+        const creatorBirth = creatorByPid.get(rawCreatorPid);
         const creatorText = validateLinuxTraceBundle(
           event.creator.trace,
           files,
@@ -2530,7 +2531,9 @@ function validateLinuxTraceClosure(
           creatorParentSampleNs === undefined ||
           childParentSampleNs === undefined ||
           creatorAttachNs > creatorParentSampleNs ||
-          creatorParentSampleNs >= observedCreator.startNs ||
+          !creatorBirth ||
+          creatorBirth.startNs >= creatorAttachNs ||
+          creatorParentSampleNs >= groupTerminalNs ||
           observedCreator.completionNs >= groupTerminalNs ||
           groupTerminalNs >= childParentSampleNs ||
           creatorReadyNs < groupTerminalNs
@@ -4363,6 +4366,78 @@ function validateOwnerSupportCoverage(options: {
   return coverage;
 }
 
+function validateWindowsOwnerAdmission(
+  context: CapturedRunContext,
+  outputDirectory: string,
+  host: NativeProcessRecord | Record<string, unknown>,
+  server: NativeProcessRecord | Record<string, unknown>,
+  transitionAt: unknown,
+  hostStartedAt: unknown,
+  serverStartedAt: unknown,
+): void {
+  const path = join(outputDirectory, "owner-native-admission.json");
+
+  if (!existsSync(path)) throw new Error("Missing native owner admission");
+
+  const admission = readJson(path);
+
+  if (!isRecord(admission)) throw new Error("Native owner admission is malformed");
+
+  requireExactKeys(
+    admission,
+    [
+      "format",
+      "version",
+      "runId",
+      "populationFingerprint",
+      "extensionHostPid",
+      "languageServerPid",
+      "languageServerParentPid",
+      "admittedAt",
+    ],
+    "Native owner admission",
+  );
+
+  const admittedAt = timestamp(admission.admittedAt);
+  const transitionTime = timestamp(transitionAt);
+  const hostStartTime = timestamp(hostStartedAt);
+  const serverStartTime = timestamp(serverStartedAt);
+  const hostAttachedAt = timestamp(host.attachedAt);
+  const serverAttachedAt = timestamp(server.attachedAt);
+  const hostExitedAt = timestamp(host.processExitTime);
+  const serverExitedAt = timestamp(server.processExitTime);
+
+  if (
+    admission.format !== "hesperia-editor-native-owner-admission" ||
+    admission.version !== 1 ||
+    admission.runId !== context.runId ||
+    admission.populationFingerprint !== context.population.fingerprint ||
+    admission.extensionHostPid !== host.pid ||
+    admission.languageServerPid !== server.pid ||
+    admission.languageServerParentPid !== host.pid ||
+    server.parentPid !== host.pid ||
+    admittedAt === undefined ||
+    transitionTime === undefined ||
+    hostStartTime === undefined ||
+    serverStartTime === undefined ||
+    hostAttachedAt === undefined ||
+    serverAttachedAt === undefined ||
+    hostExitedAt === undefined ||
+    serverExitedAt === undefined ||
+    admittedAt < hostStartTime ||
+    admittedAt < serverStartTime ||
+    admittedAt < hostAttachedAt ||
+    admittedAt < serverAttachedAt ||
+    admittedAt >= hostExitedAt ||
+    admittedAt >= serverExitedAt ||
+    admittedAt > transitionTime
+  ) {
+    throw new Error(
+      "Native owner admission does not match the independently retained live owner chain",
+    );
+  }
+}
+
 function validateCapturedOwnerEvidence(context: CapturedRunContext, outputDirectory: string) {
   const { runId, population, code } = context;
   const hostOwnerId = `vscode-extension-host-${runId}`;
@@ -4520,6 +4595,18 @@ function validateCapturedOwnerEvidence(context: CapturedRunContext, outputDirect
       context.extensionEntryPath,
     );
 
+    const lifecycleStart = readJson(join(outputDirectory, "extension-host-deactivate-start.json"));
+
+    validateWindowsOwnerAdmission(
+      context,
+      outputDirectory,
+      windowsNative.host,
+      windowsNative.server,
+      isRecord(lifecycleStart) ? lifecycleStart.deactivateStartedAt : undefined,
+      host.start.startedAt,
+      server.start.startedAt,
+    );
+
     native = { platform: "windows", ...windowsNative };
   }
 
@@ -4660,6 +4747,8 @@ async function validateCapturedRun(
     "extension-host-deactivate.json",
     "language-server-native-exit-ack.json",
   ]);
+
+  if (process.platform === "win32") fixedArtifacts.add("owner-native-admission.json");
 
   if (context.configuration.supportConfigPath) {
     fixedArtifacts.add("extension-host-support-coverage.json");
@@ -5427,6 +5516,34 @@ async function verifyArtifactRejections(
 
       writeFileSync(path, JSON.stringify(value));
     };
+
+    cases.push(
+      {
+        name: "omit-native-owner-admission",
+        mutate: (directory) => unlinkSync(join(directory, "owner-native-admission.json")),
+        rejection: (message) => message === "Missing native owner admission",
+      },
+      ...[
+        ["native-owner-admission-wrong-pid", "languageServerPid", windowsNative.host.pid],
+        ["native-owner-admission-after-exit", "admittedAt", windowsNative.server.exitObservedAt],
+      ].map(([name, field, value]) => ({
+        name: String(name),
+        mutate: (directory: string) => {
+          const path = join(directory, "owner-native-admission.json");
+          const admission = readJson(path);
+
+          if (!isRecord(admission))
+            throw new Error("Validated native owner admission is malformed");
+
+          admission[String(field)] = value;
+
+          writeFileSync(path, JSON.stringify(admission));
+        },
+        rejection: (message: string) =>
+          message ===
+          "Native owner admission does not match the independently retained live owner chain",
+      })),
+    );
 
     let impossibleAttachmentPid: number | undefined;
 
@@ -6701,6 +6818,16 @@ function verifyNativeKillRejection(
   ) {
     throw new Error("Private native kill evidence lost the actual Host/LS native owner chain");
   }
+
+  validateWindowsOwnerAdmission(
+    context,
+    outputDirectory,
+    hostRecord,
+    serverRecord,
+    control.terminatedAt,
+    host.startedAt,
+    server.startedAt,
+  );
 
   if (
     !launcher ||

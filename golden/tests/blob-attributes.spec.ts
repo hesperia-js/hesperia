@@ -39,7 +39,7 @@ test("public package mount loads Blob sources and releases replaced and destroye
 
   page.on("pageerror", (error) => errors.push(error.message));
 
-  await page.goto("/blob-attributes");
+  await page.goto("/blob-attributes", { waitUntil: "domcontentloaded" });
 
   await expect(page.locator("html")).toHaveAttribute("data-ready", "true");
 
@@ -164,7 +164,7 @@ test("a parent-document File uses the target document URL lease across replaceme
 
   page.on("pageerror", (error) => errors.push(error.message));
 
-  await page.goto("/blob-attributes");
+  await page.goto("/blob-attributes", { waitUntil: "domcontentloaded" });
 
   await expect(page.locator("html")).toHaveAttribute("data-ready", "true");
 
@@ -225,7 +225,7 @@ test("native srcset loads one of its emitted Blob and author candidates", async 
     try {
       const page = await context.newPage();
 
-      await page.goto("/blob-attributes");
+      await page.goto("/blob-attributes", { waitUntil: "domcontentloaded" });
 
       await expect(page.locator("html")).toHaveAttribute("data-ready", "true");
 

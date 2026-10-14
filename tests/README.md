@@ -258,9 +258,9 @@ per-platform reports and historical 90% floor results stay separate and are
 not reinterpreted as combined acceptance. Use emitted and saved summaries to
 locate records instead of guessing a run ID. The final editor family completes its positive artifact
 capture and 27 common artifact rejection controls. Linux also runs one positive
-raw-only creator replay and four Linux-specific rejection controls, for 31
-rejection controls on Linux; Windows adds three Windows-only artifact checks,
-for 30 total. The family then runs
+raw-only creator replay and five Linux-specific rejection controls, for 32
+rejection controls on Linux; Windows adds six Windows-only artifact checks,
+for 33 total. The family then runs
 two real native process-rejection controls: one for the extension host and one
 for the language server. Each native control launches a VS Code session, adding
 two sessions per platform's final editor capture. Their subcapture directories

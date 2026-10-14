@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readPinnedAeoliaVersion, writePackageManifest } from "./package-manifest.ts";
 import { suppliedReleaseArchive } from "./release-candidate.ts";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { chromium } from "playwright";
 
@@ -38,9 +38,10 @@ async function run(cwd: string, ...args: string[]): Promise<string> {
   return stdout;
 }
 
-async function runTar(...args: string[]): Promise<string> {
-  const process_ = Bun.spawn(["tar", ...args], {
-    cwd: packageRoot,
+async function runTar(operation: string, archive: string, ...args: string[]): Promise<string> {
+  const archivePath = resolve(packageRoot, archive);
+  const process_ = Bun.spawn(["tar", operation, `./${basename(archivePath)}`, ...args], {
+    cwd: dirname(archivePath),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -51,7 +52,8 @@ async function runTar(...args: string[]): Promise<string> {
     new Response(process_.stderr).text(),
   ]);
 
-  if (status !== 0) throw new Error(`tar ${args.join(" ")} failed (${status})\n${stderr}`);
+  if (status !== 0)
+    throw new Error(`tar ${[operation, archive, ...args].join(" ")} failed (${status})\n${stderr}`);
 
   return stdout;
 }

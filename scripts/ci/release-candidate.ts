@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 
 export interface ReleaseCandidate {
   schema: 1;
@@ -81,7 +81,10 @@ export async function packedManifest(archive: string): Promise<Record<string, un
 
 /** Read a packed file without extracting it into the checkout or consumer workspace. */
 export async function packedFile(archive: string, file: string): Promise<Uint8Array> {
-  const child = Bun.spawn(["tar", "-xOf", archive, `package/${file}`], {
+  const archivePath = resolve(archive);
+  // GNU tar interprets a Windows drive colon in the archive argument as a remote host.
+  const child = Bun.spawn(["tar", "-xOf", `./${basename(archivePath)}`, `package/${file}`], {
+    cwd: dirname(archivePath),
     stdout: "pipe",
     stderr: "pipe",
   });

@@ -795,7 +795,10 @@ sys.stdin.buffer.read(1)
     def test_spawned_raw_only_creator_child_uses_real_pidfd_and_strace_evidence(self) -> None:
         self.check_raw_only_creator_reparenting("posix-spawn")
 
-    def check_raw_only_creator_reparenting(self, creation: str) -> None:
+    def test_retained_creator_sampled_after_child_birth_proves_reparenting(self) -> None:
+        self.check_raw_only_creator_reparenting("posix-spawn", retain_creator=True)
+
+    def check_raw_only_creator_reparenting(self, creation: str, *, retain_creator: bool = False) -> None:
         import ctypes
 
         strace = shutil.which("strace")
@@ -814,6 +817,7 @@ sys.stdin.buffer.read(1)
         process: subprocess.Popen[bytes] | None = None
         root_pidfd: int | None = None
         child_pidfd: int | None = None
+        helper_pidfd: int | None = None
         cleanup_pidfds: list[int] = []
         parent_fds: list[int] = []
         root_pid: int | None = None
@@ -821,6 +825,7 @@ sys.stdin.buffer.read(1)
         child_pid: int | None = None
         root_gate_write: int | None = None
         child_gate_write: int | None = None
+        helper_gate_write: int | None = None
 
         try:
             with tempfile.TemporaryDirectory(prefix="hesperia-raw-only-creator-") as temporary:
@@ -841,9 +846,14 @@ sys.stdin.buffer.read(1)
 
                 parent_fds.extend((child_gate_read, child_gate_write))
 
+                helper_gate_read, helper_gate_write = os.pipe()
+
+                parent_fds.extend((helper_gate_read, helper_gate_write))
+
                 anchor_script = r'''import os, sys
-protocol_fd, root_gate_fd, child_gate_fd = map(int, sys.argv[1:4])
-creation = sys.argv[4]
+protocol_fd, root_gate_fd, child_gate_fd, helper_gate_fd = map(int, sys.argv[1:5])
+creation = sys.argv[5]
+retain_creator = sys.argv[6] == "1"
 os.write(protocol_fd, f"anchor {os.getpid()}\n".encode())
 helper_pid = os.fork()
 if helper_pid == 0:
@@ -857,6 +867,8 @@ if helper_pid == 0:
         os.read(child_gate_fd, 1)
         os._exit(0)
     os.write(protocol_fd, f"helper {os.getpid()}\n".encode())
+    if retain_creator:
+        os.read(helper_gate_fd, 1)
     os._exit(0)
 os.read(root_gate_fd, 1)
 os._exit(0)
@@ -894,17 +906,19 @@ os.waitpid(anchor, 0)
                         str(protocol_write),
                         str(root_gate_read),
                         str(child_gate_read),
+                        str(helper_gate_read),
                         creation,
+                        "1" if retain_creator else "0",
                     ],
                     cwd=directory,
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    pass_fds=(protocol_write, root_gate_read, child_gate_read),
+                    pass_fds=(protocol_write, root_gate_read, child_gate_read, helper_gate_read),
                     start_new_session=True,
                 )
 
-                for fd in (protocol_write, root_gate_read, child_gate_read):
+                for fd in (protocol_write, root_gate_read, child_gate_read, helper_gate_read):
                     os.close(fd)
 
                     parent_fds.remove(fd)
@@ -952,6 +966,17 @@ os.waitpid(anchor, 0)
                 cleanup_pidfds.append(os.pidfd_open(root_pid, 0))
 
                 cleanup_pidfds.append(os.pidfd_open(child_pid, 0))
+
+                helper_generation = None
+
+                if retain_creator:
+                    helper_generation = observer.open_generation(helper_pid, {})
+
+                    self.assertIsNotNone(helper_generation, "the live creator was not retained")
+
+                    helper_pidfd = helper_generation.pidfd
+
+                    os.write(helper_gate_write, b"x")
 
                 helper_trace = trace_directory / f"native-process-trace.{helper_pid}"
                 helper_terminal_ns: int | None = None
@@ -1006,6 +1031,11 @@ os.waitpid(anchor, 0)
 
                 generations = {root_pid: root_generation, child_pid: child_generation}
 
+                if helper_generation is not None:
+                    generations[helper_pid] = helper_generation
+
+                    self.assertTrue(helper_generation.check_exit())
+
                 os.write(child_gate_write, b"x")
 
                 os.write(root_gate_write, b"x")
@@ -1027,6 +1057,11 @@ os.waitpid(anchor, 0)
 
                 try:
                     os.waitpid(child_pid, 0)
+                except ChildProcessError:
+                    pass
+
+                try:
+                    os.waitpid(helper_pid, os.WNOHANG)
                 except ChildProcessError:
                     pass
 
@@ -1053,9 +1088,46 @@ os.waitpid(anchor, 0)
 
                     self.assertEqual(event["execEvents"][0]["resolvedPath"], os.path.realpath(sys.executable))
 
-                self.assertNotIn(helper_pid, generations)
+                if helper_generation is None:
+                    self.assertNotIn(helper_pid, generations)
+                else:
+                    birth = trace["creations"][child_pid][0]
+
+                    self.assertGreater(
+                        observer.utc_time_ns(helper_generation.parents[0]["observedAt"]), birth["startNs"]
+                    )
+
+                    original_attached_at = helper_generation.attached_at
+                    original_parent_sample = helper_generation.parents[0]["observedAt"]
+                    original_ready_at = helper_generation.ready_at
+                    helper_birth_ns = trace["creations"][helper_pid][0]["startNs"]
+
+                    for field, invalid_time in (
+                        ("attached_at", helper_birth_ns),
+                        ("parent_sample", helper_terminal_ns),
+                        ("ready_at", helper_terminal_ns - 1),
+                    ):
+                        with self.subTest(invalid_creator_time=field):
+                            helper_generation.attached_at = original_attached_at
+                            helper_generation.parents[0]["observedAt"] = original_parent_sample
+                            helper_generation.ready_at = original_ready_at
+
+                            if field == "parent_sample":
+                                helper_generation.parents[0]["observedAt"] = observer.utc_at_ns(invalid_time)
+                            else:
+                                setattr(helper_generation, field, observer.utc_at_ns(invalid_time))
+
+                            with self.assertRaisesRegex(observer.CaptureError, "Raw creator group does not prove reparenting"):
+                                observer.process_event(
+                                    child_generation, trace, {}, raw_files, generations,
+                                    os.path.realpath(sys.executable), root_pid,
+                                )
+
+                    helper_generation.attached_at = original_attached_at
+                    helper_generation.parents[0]["observedAt"] = original_parent_sample
+                    helper_generation.ready_at = original_ready_at
         finally:
-            for fd in (child_gate_write, root_gate_write):
+            for fd in (child_gate_write, root_gate_write, helper_gate_write):
                 if fd is not None and fd in parent_fds:
                     try:
                         os.write(fd, b"x")
@@ -1071,7 +1143,7 @@ os.waitpid(anchor, 0)
 
             try:
                 if process is not None and process.poll() is None:
-                    for pidfd in (*cleanup_pidfds, child_pidfd, root_pidfd):
+                    for pidfd in (*cleanup_pidfds, child_pidfd, root_pidfd, helper_pidfd):
                         if pidfd is not None and not observer.pidfd_ready(pidfd):
                             try:
                                 signal.pidfd_send_signal(pidfd, signal.SIGKILL)
@@ -1107,8 +1179,13 @@ os.waitpid(anchor, 0)
                             os.waitpid(child_pid, 0)
                     except ChildProcessError:
                         pass
+                if helper_pid is not None:
+                    try:
+                        os.waitpid(helper_pid, os.WNOHANG)
+                    except ChildProcessError:
+                        pass
             finally:
-                for pidfd in (*cleanup_pidfds, child_pidfd, root_pidfd):
+                for pidfd in (*cleanup_pidfds, child_pidfd, root_pidfd, helper_pidfd):
                     if pidfd is not None:
                         try:
                             os.close(pidfd)

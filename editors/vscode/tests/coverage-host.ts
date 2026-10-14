@@ -417,6 +417,60 @@ function validateLanguageServerCompletion(
   return native;
 }
 
+async function waitForNativeOwnerAdmission(
+  host: OwnerStartReceipt,
+  deadline: number,
+): Promise<void> {
+  while (Date.now() < deadline) {
+    const admission = readJsonIfReady(
+      resolve(config.outputDirectory, "owner-native-admission.json"),
+    );
+    const server = readJsonIfReady(resolve(config.outputDirectory, "language-server-start.json"));
+
+    if (isRecord(admission) && isRecord(server)) {
+      const admittedAt =
+        typeof admission.admittedAt === "string" ? Date.parse(admission.admittedAt) : NaN;
+
+      if (
+        Object.keys(admission).length !== 8 ||
+        admission.format !== "hesperia-editor-native-owner-admission" ||
+        admission.version !== 1 ||
+        admission.runId !== config.runId ||
+        admission.populationFingerprint !== config.populationFingerprint ||
+        admission.extensionHostPid !== host.pid ||
+        admission.languageServerPid !== server.pid ||
+        admission.languageServerParentPid !== host.pid ||
+        server.format !== "hesperia-editor-owner-start" ||
+        server.version !== 1 ||
+        server.runId !== config.runId ||
+        server.populationFingerprint !== config.populationFingerprint ||
+        server.ownerId !== "vscode-language-server-" + config.runId ||
+        server.role !== "language-server" ||
+        !Number.isSafeInteger(server.pid) ||
+        Number(server.pid) <= 0 ||
+        server.ppid !== host.pid ||
+        !isTimestamp(server.startedAt) ||
+        !isTimestamp(admission.admittedAt) ||
+        admittedAt < Date.parse(host.startedAt) ||
+        admittedAt < Date.parse(server.startedAt) ||
+        admittedAt > Date.now()
+      ) {
+        throw new Error(
+          "Native owner admission does not identify this live Host/language-server chain",
+        );
+      }
+
+      return;
+    }
+
+    await new Promise((accept) => setTimeout(accept, 25));
+  }
+
+  throw new Error(
+    "Native owner admission was not acknowledged before the existing lifecycle deadline",
+  );
+}
+
 async function waitForLanguageServerCompletion(
   host: OwnerStartReceipt,
 ): Promise<Record<string, unknown>> {
@@ -527,6 +581,24 @@ export async function run(): Promise<void> {
 
   await runLinuxRawCreatorFixture();
 
+  if (process.platform === "win32") {
+    const deadlineInput = process.env.HESPERIA_EDITOR_COVERAGE_ADMISSION_DEADLINE;
+    const deadline = Number(deadlineInput);
+
+    if (
+      !deadlineInput ||
+      !/^\d+$/u.test(deadlineInput) ||
+      !Number.isSafeInteger(deadline) ||
+      deadline <= Date.now()
+    ) {
+      throw new Error("Native owner admission has no valid current observer deadline");
+    }
+
+    await waitForNativeOwnerAdmission(start, deadline);
+  }
+
+  const assertionsCompletedAt = new Date().toISOString();
+
   if (config.verificationControl) {
     writeFileSync(
       resolve(config.outputDirectory, "owner-kill-ready.json"),
@@ -537,7 +609,7 @@ export async function run(): Promise<void> {
         populationFingerprint: config.populationFingerprint,
         mode: config.verificationControl,
         extensionHostPid: start.pid,
-        assertionsCompletedAt: new Date().toISOString(),
+        assertionsCompletedAt,
       }),
       { flag: "wx" },
     );
@@ -625,7 +697,7 @@ export async function run(): Promise<void> {
     moduleCachePath: activeEntry[0],
     moduleCacheLoaded: true,
     deactivateExport: "deactivate",
-    assertionsCompletedAt: new Date().toISOString(),
+    assertionsCompletedAt,
     deactivateStartedAt: new Date().toISOString(),
   };
 
