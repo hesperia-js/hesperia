@@ -2142,6 +2142,7 @@ function validateLinuxTraceClosure(
     const allowed = new Set([
       "CLONE_CHILD_CLEARTID",
       "CLONE_CHILD_SETTID",
+      "CLONE_CLEAR_SIGHAND",
       "CLONE_VM",
       "CLONE_VFORK",
       "SIGCHLD",

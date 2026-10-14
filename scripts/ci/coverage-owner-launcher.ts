@@ -158,6 +158,7 @@ function ownerProfiles(
         contextId: "final-coverage-driver",
         sources: [
           driver,
+          "scripts/ci/coverage-group-artifacts.ts",
           sourceChecker,
           sourceCoverageClassifier,
           sourceLauncher,
@@ -166,6 +167,7 @@ function ownerProfiles(
         ],
         requiredHitSources: [
           driver,
+          "scripts/ci/coverage-group-artifacts.ts",
           sourceChecker,
           sourceCoverageClassifier,
           sourceLauncher,

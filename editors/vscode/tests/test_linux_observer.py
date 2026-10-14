@@ -790,6 +790,12 @@ sys.stdin.buffer.read(1)
                         os.close(cleanup_pidfd)
 
     def test_raw_only_creator_reparenting_uses_real_pidfd_and_strace_evidence(self) -> None:
+        self.check_raw_only_creator_reparenting("fork")
+
+    def test_spawned_raw_only_creator_child_uses_real_pidfd_and_strace_evidence(self) -> None:
+        self.check_raw_only_creator_reparenting("posix-spawn")
+
+    def check_raw_only_creator_reparenting(self, creation: str) -> None:
         import ctypes
 
         strace = shutil.which("strace")
@@ -836,12 +842,17 @@ sys.stdin.buffer.read(1)
                 parent_fds.extend((child_gate_read, child_gate_write))
 
                 anchor_script = r'''import os, sys
-protocol_fd, root_gate_fd, child_gate_fd = map(int, sys.argv[1:])
+protocol_fd, root_gate_fd, child_gate_fd = map(int, sys.argv[1:4])
+creation = sys.argv[4]
 os.write(protocol_fd, f"anchor {os.getpid()}\n".encode())
 helper_pid = os.fork()
 if helper_pid == 0:
-    child_pid = os.fork()
-    if child_pid == 0:
+    if creation == "posix-spawn":
+        child_script = "import os,sys; protocol_fd,gate_fd=map(int,sys.argv[1:]); os.write(protocol_fd,f'child {os.getpid()}\\n'.encode()); os.read(gate_fd,1); os._exit(0)"
+        child_pid = os.posix_spawn(sys.executable, [sys.executable, "-c", child_script, str(protocol_fd), str(child_gate_fd)], os.environ)
+    else:
+        child_pid = os.fork()
+    if creation == "fork" and child_pid == 0:
         os.write(protocol_fd, f"child {os.getpid()}\n".encode())
         os.read(child_gate_fd, 1)
         os._exit(0)
@@ -883,6 +894,7 @@ os.waitpid(anchor, 0)
                         str(protocol_write),
                         str(root_gate_read),
                         str(child_gate_read),
+                        creation,
                     ],
                     cwd=directory,
                     stdin=subprocess.DEVNULL,
@@ -1034,7 +1046,12 @@ os.waitpid(anchor, 0)
 
                 self.assertEqual(event["creator"]["parentPid"], helper_pid)
 
-                self.assertEqual(event["execEvents"], [])
+                if creation == "fork":
+                    self.assertEqual(event["execEvents"], [])
+                else:
+                    self.assertEqual(len(event["execEvents"]), 1)
+
+                    self.assertEqual(event["execEvents"][0]["resolvedPath"], os.path.realpath(sys.executable))
 
                 self.assertNotIn(helper_pid, generations)
         finally:
@@ -1166,6 +1183,14 @@ class RawProcessCreationParsingTests(unittest.TestCase):
             "1791049502.153915 clone(child_stack=0x7d870af99ff0, flags=CLONE_VM|CLONE_VFORK|SIGCHLD) = 1499",
             "1791049502.153916 clone(child_stack=0x7d870af99ff0, flags=SIGCHLD) = 1500",
             "1791049502.153917 clone(child_stack=0x7d870af99ff0, flags=CLONE_PARENT|SIGCHLD) = 1501",
+            "1791945357.564154 clone3({flags=CLONE_VM|CLONE_VFORK|CLONE_CLEAR_SIGHAND, exit_signal=SIGCHLD, stack=0x7f71f84f9000, stack_size=0x9000}, 88) = 32166",
+            *(
+                f"1791945357.565000 clone3({{flags=CLONE_VM|CLONE_VFORK|CLONE_CLEAR_SIGHAND|{flag}, exit_signal=SIGCHLD}}, 88) = {pid}"
+                for pid, flag in enumerate(
+                    ("CLONE_SIGHAND", "CLONE_PARENT", "CLONE_NEWPID", "CLONE_THREAD", "0x80000000"),
+                    start=32167,
+                )
+            ),
         )
         with tempfile.TemporaryDirectory() as temporary:
             directory = pathlib.Path(temporary)
@@ -1192,6 +1217,16 @@ class RawProcessCreationParsingTests(unittest.TestCase):
         parent_changing_edge = trace["creations"][1501][0]
 
         self.assertFalse(observer.raw_process_creation_is_supported(parent_changing_edge))
+
+        clear_sighand_edge = trace["creations"][32166][0]
+
+        self.assertTrue(observer.raw_process_creation_is_supported(clear_sighand_edge))
+
+        self.assertFalse(clear_sighand_edge["imageInheritanceSafe"])
+
+        for pid in range(32167, 32172):
+            with self.subTest(pid=pid):
+                self.assertFalse(observer.raw_process_creation_is_supported(trace["creations"][pid][0]))
 
 
 class EditorResultCopyTests(unittest.TestCase):

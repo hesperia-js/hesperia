@@ -25,6 +25,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
+      revision: ${{ steps.revision.outputs.sha }}
       compiler: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.compiler == 'true' }}
       runtime: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.runtime == 'true' }}
       data: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.data == 'true' }}
@@ -45,6 +46,10 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false
+      - name: "Record the checked out revision"
+        id: revision
+        shell: bash
+        run: 'printf "sha=%s\n" "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"'
       - uses: ./.github/actions/setup
       - name: "Check repository branch name"
         if: "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository"
@@ -116,9 +121,9 @@ jobs:
           include-hidden-files: true
           retention-days: 14
   source-quality:
-    name: "Behavior and coverage (${{ matrix.platform }})"
+    name: "Selected behavior (${{ matrix.platform }})"
     needs: checks
-    if: "needs.checks.outputs.behavior == 'true'"
+    if: "needs.checks.outputs.behavior == 'true' && needs.checks.outputs.full == 'false'"
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 60
     strategy:
@@ -142,10 +147,6 @@ jobs:
       - name: "Install browser engines"
         if: "runner.os == 'Windows'"
         run: "node node_modules/playwright/cli.js install chromium firefox webkit"
-      - name: "Set up the real editor"
-        id: editor
-        if: "needs.checks.outputs.full == 'true'"
-        uses: ./.github/actions/setup-editor
       - name: "Test compiler"
         if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.compiler == 'true'"
         run: "bun test --timeout=45000 tests/compiler"
@@ -170,61 +171,165 @@ jobs:
       - name: "Test ci"
         if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.ci == 'true'"
         run: "bun test --timeout=45000 tests/ci"
-      - name: "Set the coverage editor path"
-        if: "needs.checks.outputs.full == 'true'"
-        shell: bash
-        env:
-          CODE_PATH: ${{ steps.editor.outputs.code-path }}
-          CODE_VERSION: ${{ steps.editor.outputs.code-version }}
-        run: |
-          printf 'VSCODE_CODE_PATH=%s\nVSCODE_CODE_VERSION=%s\n' "$CODE_PATH" "$CODE_VERSION" >> "$GITHUB_ENV"
-      - name: "Run final Windows coverage aggregate"
-        if: "needs.checks.outputs.full == 'true' && runner.os == 'Windows'"
-        shell: pwsh
-        run: 'bun run test:coverage:final "$env:VSCODE_CODE_PATH" "$env:VSCODE_CODE_VERSION"'
+  coverage-groups:
+    name: "Coverage (${{ matrix.platform }}, ${{ matrix.group }})"
+    needs: checks
+    if: "needs.checks.outputs.full == 'true'"
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - ubuntu-24.04
+          - windows-2025
+        group:
+          - bun-tests-ordinary
+          - project-worker-owner
+          - browser-css
+          - native-editor
+    env:
+      HESPERIA_CI_COVERAGE_REVISION: ${{ needs.checks.outputs.revision }}
+      DONT_PROMPT_WSL_INSTALL: 1
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ needs.checks.outputs.revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: "Build workspace packages"
+        run: "bun run build"
+      - name: "Install ordinary test browser engines and system dependencies"
+        if: "matrix.group == 'bun-tests-ordinary' && runner.os == 'Linux'"
+        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
+      - name: "Install ordinary test browser engines"
+        if: "matrix.group == 'bun-tests-ordinary' && runner.os == 'Windows'"
+        run: "node node_modules/playwright/cli.js install chromium firefox webkit"
+      - name: "Install CSS capture Chromium and system dependencies"
+        if: "matrix.group == 'browser-css' && runner.os == 'Linux'"
+        run: "node node_modules/playwright/cli.js install --with-deps chromium"
+      - name: "Install CSS capture Chromium"
+        if: "matrix.group == 'browser-css' && runner.os == 'Windows'"
+        run: "node node_modules/playwright/cli.js install chromium"
+      - name: "Set up the real editor"
+        id: editor
+        if: "matrix.group == 'native-editor'"
+        uses: ./.github/actions/setup-editor
       - name: "Run Linux editor observer stdlib tests"
-        if: "needs.checks.outputs.full == 'true' && runner.os == 'Linux'"
+        if: "matrix.group == 'native-editor' && runner.os == 'Linux'"
         shell: bash
         run: "python3 -B editors/vscode/tests/test_linux_observer.py -v"
-      - name: "Run final Linux coverage aggregate"
-        if: "needs.checks.outputs.full == 'true' && runner.os == 'Linux'"
+      - name: "Run the original coverage group"
         env:
-          DONT_PROMPT_WSL_INSTALL: 1
+          COVERAGE_GROUP: ${{ matrix.group }}
+          CODE_PATH: ${{ steps.editor.outputs.code-path }}
+          CODE_VERSION: ${{ steps.editor.outputs.code-version }}
         shell: bash
-        run: 'bun run test:coverage:final "$VSCODE_CODE_PATH" "$VSCODE_CODE_VERSION"'
-      - name: "Retain final and original coverage evidence"
-        if: "always() && needs.checks.outputs.full == 'true'"
+        run: |
+          args=(--group "$COVERAGE_GROUP")
+          if [ "$COVERAGE_GROUP" = native-editor ]; then
+            args+=("$CODE_PATH" "$CODE_VERSION")
+          fi
+          bun run scripts/ci/coverage-owner-launcher.ts scripts/ci/run-final-coverage.ts -- "${args[@]}"
+      - name: "Retain the original group evidence"
+        if: "always()"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: "hesperia-coverage-${{ matrix.platform }}"
+          name: "hesperia-coverage-group-${{ matrix.platform }}-${{ matrix.group }}-${{ github.run_attempt }}"
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: .hesperia/coverage/group-artifact/
+          retention-days: 14
+      - name: "Retain native controls and package capture receipts"
+        if: "always()"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "hesperia-coverage-diagnostics-${{ matrix.platform }}-${{ matrix.group }}-${{ github.run_attempt }}"
+          if-no-files-found: ignore
+          include-hidden-files: true
+          path: |
+            .hesperia/coverage/editor-controls/
+            .hesperia/coverage/worker-builds/*/captures/
+          retention-days: 14
+      - name: "Retain original evidence after failed group admission"
+        if: "failure()"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "hesperia-coverage-failed-group-${{ matrix.platform }}-${{ matrix.group }}-${{ github.run_attempt }}"
+          if-no-files-found: ignore
+          include-hidden-files: true
+          path: |
+            .hesperia/coverage/final-runs/
+            .hesperia/coverage/runs/
+            .hesperia/coverage/browser-css-runs/
+            .hesperia/ec/
+          retention-days: 14
+  coverage-platform:
+    name: "Coverage aggregate (${{ matrix.platform }})"
+    needs:
+      - checks
+      - coverage-groups
+    if: "always() && needs.checks.result == 'success' && needs.checks.outputs.full == 'true'"
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - ubuntu-24.04
+          - windows-2025
+    env:
+      HESPERIA_CI_COVERAGE_REVISION: ${{ needs.checks.outputs.revision }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ needs.checks.outputs.revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: "Download this platform's original groups"
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          pattern: "hesperia-coverage-group-${{ matrix.platform }}-*-${{ github.run_attempt }}"
+          path: .coverage-groups
+      - name: "Admit all four groups and capture aggregate support"
+        run: "bun run scripts/ci/coverage-owner-launcher.ts scripts/ci/run-final-coverage.ts -- --aggregate .coverage-groups"
+      - name: "Retain final and original coverage evidence"
+        if: "always()"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "hesperia-coverage-${{ matrix.platform }}-${{ github.run_attempt }}"
           if-no-files-found: warn
           include-hidden-files: true
           path: |
-            .hesperia/coverage/
+            .hesperia/coverage/final-runs/
+            .hesperia/coverage/runs/
+            .hesperia/coverage/browser-css-runs/
             .hesperia/ec/
           retention-days: 14
   combined-coverage:
     name: "Combined Windows and Linux coverage"
     needs:
       - checks
-      - source-quality
+      - coverage-platform
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.checks.outputs.revision }}
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
       - name: "Download Windows coverage evidence"
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
-          name: hesperia-coverage-windows-2025
+          name: "hesperia-coverage-windows-2025-${{ github.run_attempt }}"
           path: .coverage-artifacts/windows
       - name: "Download Linux coverage evidence"
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
-          name: hesperia-coverage-ubuntu-24.04
+          name: "hesperia-coverage-ubuntu-24.04-${{ github.run_attempt }}"
           path: .coverage-artifacts/linux
       - name: "Check combined Windows and Linux coverage"
         run: "bun run scripts/ci/run-combined-coverage.ts --windows-root .coverage-artifacts/windows --linux-root .coverage-artifacts/linux --output .hesperia/coverage/combined"
@@ -232,7 +337,7 @@ jobs:
         if: "always()"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: hesperia-coverage-combined
+          name: "hesperia-coverage-combined-${{ github.run_attempt }}"
           if-no-files-found: warn
           include-hidden-files: true
           path: .hesperia/coverage/combined/
@@ -434,6 +539,8 @@ jobs:
     needs:
       - checks
       - source-quality
+      - coverage-groups
+      - coverage-platform
       - combined-coverage
       - browser
       - package
@@ -457,8 +564,9 @@ jobs:
             const scope = jobs.checks.outputs;
             const selected = { "source-quality": "behavior", browser: "browser", package: "package", vscode: "vscode", "golden-plan": "golden", golden: "golden" };
             for (const [name, job] of Object.entries(jobs)) {
-              const excluded = scope.full === "false" &&
-                (name === "combined-coverage" || scope[selected[name]] === "false");
+              const excluded = (name === "source-quality" && scope.full === "true") ||
+                (scope.full === "false" &&
+                  (["coverage-groups", "coverage-platform", "combined-coverage"].includes(name) || scope[selected[name]] === "false"));
               assert.ok(job.result === "success" || (excluded && job.result === "skipped"),
                 name + " must succeed when selected; received " + job.result);
             }

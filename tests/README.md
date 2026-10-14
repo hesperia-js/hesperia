@@ -178,8 +178,11 @@ range. An explicit version or prefix adds a strict identity check. It invokes th
 and final coverage driver. Run it after `bun install --frozen-lockfile` and
 `bun run build`; the caller does not rebuild the workspace. A successful exit
 means all four coverage owners and native evidence completed and passed capture
-validation. It does not decide the combined coverage threshold. CI installs all
-three Playwright engines before this command.
+validation. It does not decide the combined coverage threshold. Local full
+capture requires all three Playwright engines. Full CI runs each owner as an
+independent job on each OS, then admits all four groups in that OS aggregate;
+see [coverage groups and artifact admission](../docs/ci.md) for the commands and
+workflow execution binding.
 
 On Windows, supply a compatible VS Code `Code.exe` path. CI resolves current
 stable above the extension's engine and API baseline and checks Microsoft's
@@ -225,8 +228,14 @@ On successful capture, `.hesperia/coverage/final-runs/<runId>/` contains the
 platform `lcov.info`, versioned `platform-coverage-capture.json` receipt, and
 `final-coverage-summary.json`, which lists the original family run IDs and
 output paths. Capture failures exit nonzero and leave a failed summary listing
-the families completed before failure. CI retains both `.hesperia/coverage/`
-and `.hesperia/ec/` in separate per-platform artifacts, including after failure.
+the families completed before failure. CI retains bounded producer bundles and
+final and original run directories in separate per-platform artifacts, including
+after failure. It excludes temporary build-control and launcher directories.
+The group manifest verifies every original file by SHA-256 and binds all
+four groups to the same checkout SHA, Actions run ID, and attempt. Admission
+preserves the original bytes, source maps, transform hashes, and UUIDs while
+mapping coverage paths to the aggregate checkout in memory. A failed or missing
+group cannot create an accepted platform receipt.
 The combined job downloads those artifacts separately; each downloaded root
 contains `coverage/` and `ec/`. It runs:
 

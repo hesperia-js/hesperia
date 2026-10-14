@@ -2983,6 +2983,7 @@ def raw_process_creation_is_supported(edge: dict[str, Any]) -> bool:
     return bool(flags) and flags <= {
         "CLONE_CHILD_CLEARTID",
         "CLONE_CHILD_SETTID",
+        "CLONE_CLEAR_SIGHAND",
         "CLONE_VM",
         "CLONE_VFORK",
         "SIGCHLD",

@@ -27,6 +27,43 @@ const scopeExpression = workflow.jobs.checks!.steps.find(
   (step) => step.name === "Resolve verification scope",
 )!.env!.FULL!;
 
+test("full coverage runs four independent groups per OS before platform and combined admission", () => {
+  const jobs = workflow.jobs as unknown as Record<
+    string,
+    {
+      needs?: string | string[];
+      strategy?: { "fail-fast": boolean; matrix: { platform: string[]; group?: string[] } };
+      steps: { uses?: string; with?: { ref?: string } }[];
+    }
+  >;
+  const groups = jobs["coverage-groups"]!;
+
+  expect(groups.strategy?.matrix.platform).toEqual(["ubuntu-24.04", "windows-2025"]);
+
+  expect(groups.strategy?.matrix.group).toEqual([
+    "bun-tests-ordinary",
+    "project-worker-owner",
+    "browser-css",
+    "native-editor",
+  ]);
+
+  expect(groups.strategy?.["fail-fast"]).toBe(false);
+
+  expect(jobs["coverage-platform"]!.needs).toContain("coverage-groups");
+
+  expect(jobs["coverage-platform"]!.strategy?.["fail-fast"]).toBe(false);
+
+  expect(jobs["combined-coverage"]!.needs).toContain("coverage-platform");
+
+  for (const name of ["coverage-groups", "coverage-platform", "combined-coverage"]) {
+    expect(
+      jobs[name]!.steps.find((step) => step.uses?.startsWith("actions/checkout@"))?.with?.ref,
+    ).toBe("${{ needs.checks.outputs.revision }}");
+
+    expect(jobs.result!.needs).toContain(name);
+  }
+});
+
 function requestsFull(outcome: string, outputs: Record<string, string>, full = false) {
   const expression = scopeExpression
     .slice("${{ ".length, -" }}".length)
@@ -115,7 +152,9 @@ function verification(full: boolean, integrations: boolean, behavior = true) {
       result: "success" as Result,
       outputs: { ...outputs, full: String(full), behavior: String(behavior) },
     },
-    "source-quality": { result: (behavior ? "success" : "skipped") as Result },
+    "source-quality": { result: (!full && behavior ? "success" : "skipped") as Result },
+    "coverage-groups": { result: (full ? "success" : "skipped") as Result },
+    "coverage-platform": { result: (full ? "success" : "skipped") as Result },
     "combined-coverage": { result: (full ? "success" : "skipped") as Result },
     ...Object.fromEntries(
       ["browser", "package", "vscode", "golden-plan", "golden"].map((name) => [
@@ -144,6 +183,7 @@ describe("verification result gate", () => {
   test("rejects failure, cancellation, and every unexpected skip on full verification", () => {
     for (const name of Object.keys(verification(true, true))) {
       for (const result of ["failure", "cancelled", "skipped"] as const) {
+        if (name === "source-quality" && result === "skipped") continue;
         const jobs = verification(true, true);
         jobs[name]!.result = result;
         const probe = aggregate(jobs);
@@ -157,7 +197,7 @@ describe("verification result gate", () => {
 
   test("rejects selected partial skips and failures even on excluded gates", () => {
     for (const name of Object.keys(verification(false, true)).filter(
-      (name) => name !== "combined-coverage",
+      (name) => !["coverage-groups", "coverage-platform", "combined-coverage"].includes(name),
     )) {
       const jobs = verification(false, true);
       jobs[name]!.result = "skipped";
@@ -166,6 +206,8 @@ describe("verification result gate", () => {
     }
 
     for (const name of [
+      "coverage-groups",
+      "coverage-platform",
       "combined-coverage",
       "browser",
       "package",

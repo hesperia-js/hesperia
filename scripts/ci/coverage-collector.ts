@@ -1167,6 +1167,43 @@ export function createCoverageArtifact(options: {
   return artifact;
 }
 
+export function relocateCoverageArtifact(
+  artifact: CoverageArtifact,
+  producerRepoPath: string,
+  repoPath: string,
+): CoverageArtifact {
+  const coverage: Record<string, CoverageFile> = {};
+
+  for (const [recordPath, record] of Object.entries(artifact.coverage)) {
+    if (recordPath !== record.path) {
+      throw new Error("Imported coverage record key does not match its original path");
+    }
+
+    const source = coverageSourceKey(record, producerRepoPath);
+    const path = resolve(repoPath, source.replaceAll("/", sep));
+
+    if (coverage[path]) {
+      throw new Error(`Imported coverage repeats authored source ${source}`);
+    }
+
+    coverage[path] = {
+      ...record,
+      path,
+      inputSourceMap: {
+        ...record.inputSourceMap!,
+        sources: [path],
+        sourceRoot: "",
+      },
+    };
+  }
+
+  const relocated = { ...artifact, coverage };
+
+  validateArtifactRecords(relocated, repoPath);
+
+  return relocated;
+}
+
 interface OwnerSeedRecord {
   readonly coverage: CoverageFile;
   readonly ownerFile: CoverageOwnerFile;

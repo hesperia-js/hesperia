@@ -40,13 +40,15 @@ See [GitHub's ruleset guide](https://docs.github.com/en/repositories/configuring
 Build, typechecking, lint, and formatting always run. The following gates run
 when selected; full verification selects every gate.
 
-| Gate                            | Platforms                            | Evidence                                                                                                                                                                                                                        |
-| ------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Source and deterministic checks | Windows Server 2025 and Ubuntu 24.04 | Builds, TypeScript, lint, formatting, ordinary Bun tests, the isolated compiled-worker owner, Chromium CSS capture, the real editor host, and complete source-population coverage evidence for the combined Windows/Linux gate. |
-| Browser suite                   | Windows Server 2025 and Ubuntu 24.04 | `tests/browser` in Chromium, Firefox, and WebKit.                                                                                                                                                                               |
-| Installed packages              | Windows Server 2025 and Ubuntu 24.04 | Packed and linked consumer tests, including their three-engine browser checks.                                                                                                                                                  |
-| Golden suite                    | Windows Server 2025 and Ubuntu 24.04 | Every implemented golden spec on full runs, in Chromium, Firefox, and WebKit. Other pull requests may use affected-case selection.                                                                                              |
-| Editor host                     | Windows Server 2025 and Ubuntu 24.04 | The built extension runs inside current stable VS Code satisfying its existing engine and API baseline, with isolated user-data and extension directories; Linux retains its native process observer under Xvfb.                |
+| Gate                                    | Platforms                            | Evidence                                                                                                                                                                                                         |
+| --------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source checks                           | Ubuntu 24.04                         | Builds, TypeScript, lint, formatting, and the shared package candidate.                                                                                                                                          |
+| Coverage groups and platform aggregates | Windows Server 2025 and Ubuntu 24.04 | Four independent coverage owners per OS, followed by one aggregate per OS and the combined Windows/Linux gate.                                                                                                   |
+| Selected deterministic tests            | Windows Server 2025 and Ubuntu 24.04 | Affected Bun test roots on partial runs. Full runs measure these tests in their coverage groups.                                                                                                                 |
+| Browser suite                           | Windows Server 2025 and Ubuntu 24.04 | `tests/browser` in Chromium, Firefox, and WebKit.                                                                                                                                                                |
+| Installed packages                      | Windows Server 2025 and Ubuntu 24.04 | Packed and linked consumer tests, including their three-engine browser checks.                                                                                                                                   |
+| Golden suite                            | Windows Server 2025 and Ubuntu 24.04 | Every implemented golden spec on full runs, in Chromium, Firefox, and WebKit. Other pull requests may use affected-case selection.                                                                               |
+| Editor host                             | Windows Server 2025 and Ubuntu 24.04 | The built extension runs inside current stable VS Code satisfying its existing engine and API baseline, with isolated user-data and extension directories; Linux retains its native process observer under Xvfb. |
 
 The workflow pins Bun 1.4.2, Node.js 22.23.2, and action releases by full
 commit SHA. Each job checks out Hesperia at the supplied revision and installs
@@ -83,7 +85,7 @@ documents the update metadata fields and checksum validation.
 On Windows, setup checks `resources/app/package.json`, the product commit, and
 `Code.exe`'s `ProductVersion` against the resolved metadata without starting the
 executable. The coverage step passes the verified path and actual version to
-the final aggregate; the standalone editor job runs `editors/vscode/test.ps1`.
+the native-editor coverage group; the standalone editor job runs `editors/vscode/test.ps1`.
 Both exercise a real editor process.
 
 The Linux coverage step installs Python 3, Xvfb, and `strace` on the ephemeral
@@ -111,9 +113,8 @@ Sources with no executable statements are reported separately.
 
 For a bounded local in-process report, run `bun run test:coverage` followed by
 `bun run scripts/ci/check-coverage.ts`. Those commands do not include browser
-or editor subprocesses. The per-platform source-quality job uses
-`bun run test:coverage:final [Code launcher] [expected-version-prefix]` instead
-of that pair. Run it after the frozen workspace install, `bun run build`, and
+or editor subprocesses. To capture all owners locally, use
+`bun run test:coverage:final [Code launcher] [expected-version-prefix]`. Run it after the frozen workspace install, `bun run build`, and
 the platform editor/browser setup above; the caller does not build the workspace.
 CI passes the verified VS Code path and actual resolved version described above.
 Without a version argument, local coverage validates the extension's engine
@@ -121,7 +122,7 @@ range. An explicit version or prefix requests an additional identity check.
 See the [test guide's final coverage instructions](../tests/README.md#complete-cross-owner-coverage)
 for direct Windows and Linux command examples.
 
-The final driver runs the ordinary Bun test roots with `tests/ci` included, the
+The local final driver runs the ordinary Bun test roots with `tests/ci` included, the
 compiled project-worker test as its own owner, the single Chromium CSS case, and
 the native editor. A separate owner records the final driver's own support-code
 hits. Each run keeps its original identity, report path, proof, and source maps.
@@ -133,8 +134,57 @@ threshold. Branch records are reported when measured and do not contribute to
 the combined line or function result. An absent branch record is unmeasured,
 and is not evidence that the branch passed.
 
-After both source-quality matrix jobs succeed, CI downloads their separate
-artifacts and runs:
+Full CI runs eight independent coverage jobs: `bun-tests-ordinary`,
+`project-worker-owner`, `browser-css`, and `native-editor` on each OS. The
+ordinary group keeps the complete ordinary test selection, including `tests/ci`
+and `tests/package/check-installed.test.ts`. The worker group keeps its isolated
+selection. Browser CSS installs Chromium; native editor installs the verified
+editor and native observer tools. The ordinary group retains all three browser
+engines. Each producer runs the existing owner through:
+
+```sh
+bun run scripts/ci/coverage-owner-launcher.ts scripts/ci/run-final-coverage.ts -- \
+  --group <coverage-family> [Code launcher] [expected-version-prefix]
+```
+
+Each successful group writes `.hesperia/coverage/group-artifact/` with a manifest
+and only its original run-directory files. The manifest records their SHA-256
+hashes, the original checkout path, family, OS, run ID, and child summary. It
+binds the capture to the immutable checkout SHA recorded by `checks`, plus
+`GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT`. All coverage jobs check out that exact
+SHA, including a merge commit when the workflow verifies one; the binding does
+not substitute the pull request's head SHA.
+
+Both matrices use `fail-fast: false`. A failed group retains its child logs and
+available original failure evidence. It never writes a completed group manifest.
+After all producers finish, each OS aggregate downloads separate group bundles
+and runs:
+
+```sh
+bun run scripts/ci/coverage-owner-launcher.ts scripts/ci/run-final-coverage.ts -- \
+  --aggregate .coverage-groups
+```
+
+Each bundle also preserves the producer wrapper's own seed and hit records in
+`coverage/final-runs/<familyRunId>/`. The wrapper first binds its distinct owner
+to the actual family context and snapshots executed support code. The aggregate
+validates the child summary and counts before admitting these separate wrapper
+records; it does not change the child summary or relabel captured evidence.
+
+The aggregate requires exactly four completed groups from its OS and execution.
+Missing, failed, stale, duplicate, foreign, or changed evidence fails admission.
+The aggregate preserves original evidence bytes and UUIDs, validates producer
+path containment, and relocates coverage paths only in memory. Existing source,
+transform, source-map, population, and canonical-map checks still apply. It
+measures its own support code before creating the platform receipt. The
+aggregate also runs after a producer failure to report invalid or missing inputs;
+the verification result requires every producer and aggregate to succeed.
+Artifact names and execution binding include the attempt: rerun the complete workflow when new
+coverage evidence is needed. Rerunning only failed jobs cannot combine retained
+successful groups from an earlier attempt.
+
+After both platform aggregates succeed, CI downloads their separate artifacts
+and runs:
 
 ```sh
 bun run scripts/ci/run-combined-coverage.ts \
@@ -161,9 +211,18 @@ per-platform summaries remain unchanged; older 90% floor failures are historical
 results and do not count as new capture receipts. The combined output directory
 contains `combined-coverage-summary.json`, `lcov.info`, `coverage-final.json`,
 and `html/index.html` when both receipts are valid. CI retains the hidden
-`.hesperia/coverage/` and `.hesperia/ec/` directories in separate
-`hesperia-coverage-<platform>` artifacts, including after failure. The combined
-job retains its report separately as `hesperia-coverage-combined`, including
+final and original run directories in separate
+`hesperia-coverage-<platform>-<attempt>` artifacts, including after failure. It uploads only
+`coverage/final-runs/`, `coverage/runs/`, `coverage/browser-css-runs/`, and `ec/`;
+temporary owner-launch and build-control trees are excluded. Producer bundles
+use separate `hesperia-coverage-group-<platform>-<family>-<attempt>` artifacts. Native
+rejection controls under `coverage/editor-controls/` and package capture receipts
+under `coverage/worker-builds/<runId>/captures/` remain in separate per-group
+`hesperia-coverage-diagnostics-<platform>-<family>-<attempt>` artifacts. If group admission
+fails, a separate failed-group artifact retains its original run and wrapper
+summary. These diagnostic records never contribute hits to the positive capture.
+The combined
+job retains its report separately as `hesperia-coverage-combined-<attempt>`, including
 when the numeric threshold fails. A threshold failure exits 1 after writing the
 combined report; incomplete or mismatched evidence exits 2 without one. A
 successful combined check exits 0. Use emitted and saved summaries to locate

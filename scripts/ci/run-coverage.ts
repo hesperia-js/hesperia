@@ -800,7 +800,6 @@ function validateWorkerManifest(
   if (invocations.length === 0) throw new Error("Project worker receipt has no invocations");
 
   const supportIds = new Set<string>();
-  const supportPids = new Set<number>();
   const expectedExecutablePath =
     Array.isArray(value.supportInvocations) && value.supportInvocations.length > 0
       ? expectedTypeScriptApiExecutablePath()
@@ -847,7 +846,6 @@ function validateWorkerManifest(
       typeof item.childPid !== "number" ||
       !Number.isSafeInteger(item.childPid) ||
       Number(item.childPid) <= 0 ||
-      supportPids.has(item.childPid) ||
       !validExecutable ||
       !validArgv ||
       (item.processWorkingDirectory !== null &&
@@ -872,8 +870,6 @@ function validateWorkerManifest(
     }
 
     supportIds.add(item.invocationId);
-
-    supportPids.add(item.childPid as number);
 
     return item as unknown as SupportInvocationReceipt;
   });

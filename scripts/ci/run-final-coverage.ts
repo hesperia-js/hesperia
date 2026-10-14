@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -22,6 +23,7 @@ import {
   coverageProvenancePath,
   inventoryCoverageSources,
   mergeCoverageRuns,
+  relocateCoverageArtifact,
   seedCoverageSources,
   writeCoverageFragment,
   writeLcovReport,
@@ -31,6 +33,12 @@ import {
   type CoverageRunArtifacts,
   type PlatformCoverageFamilyRun,
 } from "./coverage-collector.ts";
+import {
+  coverageExecution,
+  coverageFamilies,
+  readCoverageGroups,
+  writeCoverageGroup,
+} from "./coverage-group-artifacts.ts";
 import { browserCssCoverageReceiptNames } from "./browser-css-coverage-contract.ts";
 import { checkCoverage } from "./check-coverage.ts";
 
@@ -586,31 +594,102 @@ async function runFamily(options: {
 
   if (stderr) process.stderr.write(stderr);
 
+  if (status !== 0 && Bun.argv[2] === "--group") {
+    const bundlePath = resolve(repoPath, ".hesperia/coverage/group-artifact");
+
+    mkdirSync(bundlePath);
+
+    writeFileSync(
+      join(bundlePath, "coverage-group-failure.json"),
+      JSON.stringify({
+        status: "failed",
+        family: options.family,
+        platform: process.platform,
+        execution: coverageExecution(),
+        exitCode: status,
+      }),
+      { flag: "wx" },
+    );
+
+    writeFileSync(join(bundlePath, "stdout.log"), stdout, { flag: "wx" });
+
+    writeFileSync(join(bundlePath, "stderr.log"), stderr, { flag: "wx" });
+
+    for (const line of `${stdout}\n${stderr}`.split(/\r?\n/u)) {
+      let value: unknown;
+
+      try {
+        value = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      if (!isRecord(value) || value.status !== "failed" || typeof value.runId !== "string")
+        continue;
+
+      const directory = expectedRunDirectory(
+        options.outputRoot,
+        value.runId,
+        value.outputDirectory,
+      );
+
+      if (existsSync(directory) && statSync(directory).isDirectory()) {
+        cpSync(directory, join(bundlePath, "failed-run", value.runId), {
+          recursive: true,
+          errorOnExist: true,
+          force: false,
+        });
+      }
+    }
+  }
+
   if (status !== 0) throw new Error(`${options.family} coverage child exited with code ${status}`);
 
-  const summary = completedSummary(stdout, stderr, options.family);
+  return admitFamily({
+    family: options.family,
+    summary: completedSummary(stdout, stderr, options.family),
+    outputRoot: options.outputRoot,
+    expectedSources: options.expectedSources,
+  });
+}
+
+function admitFamily(options: {
+  readonly family: FamilyId;
+  readonly summary: FamilySummary;
+  readonly outputRoot: string;
+  readonly expectedSources: readonly string[];
+  readonly imported?: { readonly producerRepoPath: string; readonly outputDirectory: string };
+}): FamilyRun {
+  const summary = options.summary;
 
   if (summary.status !== "completed" || !summary.runId) {
     throw new Error(`${options.family} coverage child did not complete its original run`);
   }
 
-  const outputDirectory = expectedRunDirectory(
+  const originalDirectory = expectedRunDirectory(
     options.outputRoot,
     summary.runId,
     summary.outputDirectory,
   );
-  const lcovPath = resolve(outputDirectory, "lcov.info");
+  const outputDirectory = options.imported?.outputDirectory ?? originalDirectory;
+  const lcovPath = resolve(originalDirectory, "lcov.info");
+  const localLcovPath = resolve(outputDirectory, "lcov.info");
 
   if (
     typeof summary.lcovPath !== "string" ||
     canonicalPath(summary.lcovPath) !== canonicalPath(lcovPath) ||
-    !existsSync(lcovPath) ||
-    !statSync(lcovPath).isFile()
+    !existsSync(localLcovPath) ||
+    !statSync(localLcovPath).isFile()
   ) {
     throw new Error(`${options.family} coverage child omitted its original family report`);
   }
 
-  const artifacts = readArtifacts(options.family, summary.runId, outputDirectory);
+  const originals = readArtifacts(options.family, summary.runId, outputDirectory);
+  const artifacts = options.imported
+    ? originals.map((artifact) =>
+        relocateCoverageArtifact(artifact, options.imported!.producerRepoPath, repoPath),
+      )
+    : originals;
   const seeds = artifacts.filter((artifact) => artifact.kind === "seed");
   const fragments = artifacts.filter((artifact) => artifact.kind === "hits");
 
@@ -738,7 +817,20 @@ async function main(): Promise<void> {
       throw new Error("Final coverage must run through the coverage owner launcher");
     }
 
-    const editorArguments = Bun.argv.slice(2);
+    const args = Bun.argv.slice(2);
+    const group = args[0] === "--group" ? args[1] : undefined;
+    const aggregateRoot = args[0] === "--aggregate" ? args[1] : undefined;
+
+    if (
+      (args[0] === "--group" && !coverageFamilies.includes(group as FamilyId)) ||
+      (args[0] === "--aggregate" && (!aggregateRoot || args.length !== 2))
+    ) {
+      throw new Error(
+        "Usage: run-final-coverage.ts --group <coverage-family> [Code launcher] [version] | --aggregate <group-bundle-root>",
+      );
+    }
+
+    const editorArguments = group ? args.slice(2) : aggregateRoot ? [] : args;
 
     if (editorArguments.length > 2) {
       throw new Error(
@@ -746,20 +838,26 @@ async function main(): Promise<void> {
       );
     }
 
-    const editorDriverArguments = nativeEditorArguments(editorArguments);
+    const editorDriverArguments =
+      !aggregateRoot && (!group || group === "native-editor")
+        ? nativeEditorArguments(editorArguments)
+        : [];
     const ordinaryTests = ordinaryTestPaths();
     const expectedSources = inventoryCoverageSources(repoPath);
-    runId = randomUUID();
-    outputDirectory = resolve(outputRoot, runId);
+    const execution = group || aggregateRoot ? coverageExecution() : undefined;
+    if (!group) {
+      runId = randomUUID();
+      outputDirectory = resolve(outputRoot, runId);
 
-    mkdirSync(outputRoot, { recursive: true });
+      mkdirSync(outputRoot, { recursive: true });
 
-    mkdirSync(outputDirectory);
+      mkdirSync(outputDirectory);
 
-    outputDirectoryCreated = true;
+      outputDirectoryCreated = true;
 
-    if (readdirSync(outputDirectory).length !== 0) {
-      throw new Error("New final coverage run directory was not empty");
+      if (readdirSync(outputDirectory).length !== 0) {
+        throw new Error("New final coverage run directory was not empty");
+      }
     }
 
     const familyDefinitions = [
@@ -793,8 +891,30 @@ async function main(): Promise<void> {
       },
     ];
 
-    for (const definition of familyDefinitions) {
-      let run = await runFamily(definition);
+    const importedGroups = aggregateRoot
+      ? readCoverageGroups({
+          repoPath,
+          bundleRoot: resolve(repoPath, aggregateRoot),
+          execution: execution!,
+        })
+      : undefined;
+
+    for (const definition of familyDefinitions.filter(
+      (definition) => !group || definition.family === group,
+    )) {
+      const imported = importedGroups?.find((candidate) => candidate.family === definition.family);
+      let run = imported
+        ? admitFamily({
+            family: definition.family,
+            summary: imported.summary as FamilySummary,
+            outputRoot: resolve(
+              imported.producerRepoPath,
+              relative(repoPath, definition.outputRoot),
+            ),
+            expectedSources,
+            imported,
+          })
+        : await runFamily(definition);
 
       if (familyRuns.some((previous) => previous.artifacts.runId === run.artifacts.runId)) {
         throw new Error(
@@ -802,15 +922,56 @@ async function main(): Promise<void> {
         );
       }
 
+      if (imported) {
+        const originalSupport = readAggregateArtifacts(
+          run.artifacts.runId,
+          imported.supportDirectory,
+        );
+        const profile = coverageOwnerProfile("driver")!;
+        const expectedSupportSources = profile.sources
+          .map((source) => (process.platform === "win32" ? source.toLowerCase() : source))
+          .sort();
+        const population = run.artifacts.seeds.find((artifact) => artifact.population)?.population;
+
+        if (
+          !population ||
+          originalSupport.length !== 2 ||
+          originalSupport.some(
+            (artifact) =>
+              artifact.ownerId !== profile.ownerId ||
+              artifact.populationFingerprint !== population.fingerprint ||
+              JSON.stringify(artifact.ownerFiles.map((file) => file.sources[0]).sort()) !==
+                JSON.stringify(expectedSupportSources),
+          )
+        ) {
+          throw new Error("Imported coverage group omitted its original wrapper support ownership");
+        }
+
+        const support = originalSupport.map((artifact) =>
+          relocateCoverageArtifact(artifact, imported.producerRepoPath, repoPath),
+        );
+        run = {
+          ...run,
+          artifacts: {
+            ...run.artifacts,
+            seeds: [
+              ...run.artifacts.seeds,
+              ...support.filter((artifact) => artifact.kind === "seed"),
+            ],
+            fragments: [
+              ...run.artifacts.fragments,
+              ...support.filter((artifact) => artifact.kind === "hits"),
+            ],
+          },
+        };
+      }
+
       if (run.family === "project-worker-owner") {
         run = { ...run, workerEvidence: workerReceiptProvenance(run) };
       }
 
       if (run.family === "native-editor") {
-        run = {
-          ...run,
-          nativeProof: validateNativeEditorEvidence(run, expectedSources),
-        };
+        run = { ...run, nativeProof: validateNativeEditorEvidence(run, expectedSources) };
       }
 
       familyRuns.push(run);
@@ -818,6 +979,52 @@ async function main(): Promise<void> {
       process.stderr.write(
         `${run.family} coverage completed with original run ${run.artifacts.runId}\n`,
       );
+    }
+
+    if (group) {
+      const run = familyRuns[0]!;
+      const bundlePath = resolve(repoPath, ".hesperia/coverage/group-artifact");
+
+      writeCoverageGroup({
+        repoPath,
+        bundlePath,
+        family: run.family,
+        runId: run.artifacts.runId,
+        outputDirectory: run.outputDirectory,
+        summary: run.summary,
+        execution: execution!,
+        captureSupport: (directory) => {
+          const population = run.artifacts.seeds.find(
+            (artifact) => artifact.population,
+          )?.population;
+
+          if (!population)
+            throw new Error("Coverage group omitted its original full population seed");
+
+          mkdirSync(outputRoot, { recursive: true });
+
+          mkdirSync(directory);
+
+          bindCoverageOwnerRun({
+            runId: run.artifacts.runId,
+            outputDirectory: directory,
+            population,
+          });
+
+          snapshotCoverageOwnerHits("driver");
+        },
+      });
+
+      console.log(
+        JSON.stringify({
+          status: "completed",
+          family: group,
+          runId: run.artifacts.runId,
+          bundlePath,
+        }),
+      );
+
+      return;
     }
 
     if (familyRuns.length !== 4) {
@@ -896,8 +1103,8 @@ async function main(): Promise<void> {
       },
     });
 
-    const finalLcovPath = join(outputDirectory, "lcov.info");
-    const candidateLcovPath = join(outputDirectory, `.coverage-candidate-${runId}.lcov`);
+    const finalLcovPath = join(outputDirectory!, "lcov.info");
+    const candidateLcovPath = join(outputDirectory!, `.coverage-candidate-${runId}.lcov`);
 
     writeLcovReport(finalRun.coverage, candidateLcovPath);
 
@@ -917,7 +1124,7 @@ async function main(): Promise<void> {
     const platformCapture = createPlatformCoverageCapture({
       repoPath,
       platform,
-      runId,
+      runId: runId!,
       population: finalRun.population,
       runs: familyRuns.map((run) => platformRunProvenance(run, repoPath)),
       coverage: finalRun.coverage,
@@ -927,9 +1134,9 @@ async function main(): Promise<void> {
       version: 2,
       status: "completed",
       acceptance: "deferred-combined",
-      runId,
+      runId: runId!,
       platform,
-      outputDirectory,
+      outputDirectory: outputDirectory!,
       lcovPath: finalLcovPath,
       populationFingerprint: finalRun.population.fingerprint,
       sourceCount: finalRun.coverage.files().length,
@@ -952,12 +1159,12 @@ async function main(): Promise<void> {
     };
 
     writeFileSync(
-      join(outputDirectory, "platform-coverage-capture.json"),
+      join(outputDirectory!, "platform-coverage-capture.json"),
       JSON.stringify(platformCapture),
       { flag: "wx" },
     );
 
-    writeFileSync(join(outputDirectory, "final-coverage-summary.json"), JSON.stringify(summary), {
+    writeFileSync(join(outputDirectory!, "final-coverage-summary.json"), JSON.stringify(summary), {
       flag: "wx",
     });
 
@@ -989,7 +1196,7 @@ async function main(): Promise<void> {
 
       try {
         writeFileSync(
-          join(outputDirectory, "final-coverage-summary.json"),
+          join(outputDirectory!, "final-coverage-summary.json"),
           JSON.stringify(failure),
           {
             flag: "wx",

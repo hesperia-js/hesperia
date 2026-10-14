@@ -182,8 +182,6 @@ try {
         "rgb(20, 30, 40)",
   );
 
-  await page.close();
-
   console.log("Active and cached deletion behavior verified");
 } finally {
   await browser.close();
