@@ -45,7 +45,6 @@ $nativeLanguageServerAckErrors = [System.Collections.Generic.List[string]]::new(
 $fixtureProcessScopeEvidence = $null
 $testFailureMessage = ''
 $verificationControl = ''
-$ownerKillCompleted = $false
 
 if ($coverageEnabled) {
   Add-Type -TypeDefinition @'
@@ -121,7 +120,7 @@ function Test-RetainedHandleGeneration([object]$Record) {
   } catch { return $false }
 }
 
-function Get-LiveRetainedProcessSnapshot([object]$Record) {
+function Get-LiveRetainedProcessSnapshot([object]$Record, [hashtable]$SnapshotByPid) {
   if (-not $Record.attached -or $null -eq $Record.processHandle) { return $null }
 
   try {
@@ -135,7 +134,11 @@ function Get-LiveRetainedProcessSnapshot([object]$Record) {
       throw ('Retained process handle creation identity changed for PID ' + $Record.pid)
     }
 
-    $snapshot = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $($Record.pid)" -ErrorAction Stop
+    $snapshot = if ($null -ne $SnapshotByPid) {
+      $SnapshotByPid[[string]$Record.pid]
+    } else {
+      Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $($Record.pid)" -ErrorAction Stop
+    }
 
     if ($null -eq $snapshot) { return $null }
 
@@ -167,7 +170,7 @@ function Get-LiveRetainedProcessSnapshot([object]$Record) {
   }
 }
 
-function Get-AttachedChildRecord([object]$Parent, [object]$ProcessInfo, [datetime]$ParentCreationTime) {
+function Get-AttachedChildRecord([object]$Parent, [object]$ProcessInfo, [datetime]$ParentCreationTime, [hashtable]$SnapshotByPid) {
   $processId = [int]$ProcessInfo.ProcessId
   $processHandle = $null
   $currentChild = $null
@@ -196,7 +199,11 @@ function Get-AttachedChildRecord([object]$Parent, [object]$ProcessInfo, [datetim
       return $null
     }
 
-    $currentChild = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $processId" -ErrorAction Stop
+    $currentChild = if ($null -ne $SnapshotByPid) {
+      $SnapshotByPid[[string]$processId]
+    } else {
+      Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $processId" -ErrorAction Stop
+    }
 
     if (
       $null -eq $currentChild -or
@@ -215,7 +222,7 @@ function Get-AttachedChildRecord([object]$Parent, [object]$ProcessInfo, [datetim
     return $null
   }
 
-  if ($null -eq (Get-LiveRetainedProcessSnapshot $Parent)) {
+  if ($null -eq (Get-LiveRetainedProcessSnapshot $Parent $SnapshotByPid)) {
     $processHandle.Dispose()
 
     return $null
@@ -473,7 +480,7 @@ function Try-WriteNativeOwnerAdmission {
   [System.IO.File]::WriteAllText($destination, ($admission | ConvertTo-Json -Compress), [System.Text.UTF8Encoding]::new($false))
 }
 
-function Receive-ProcessStarts([switch]$IncludeUnrelated) {
+function Receive-ProcessStarts([switch]$IncludeUnrelated, [switch]$ForceTreeSweep) {
   $script:observerReceiveCalls++
 
   if ($IncludeUnrelated) {
@@ -515,18 +522,57 @@ function Receive-ProcessStarts([switch]$IncludeUnrelated) {
 
   $now = [DateTime]::UtcNow
 
-  if ($now -lt $script:nextTreeSweepAt) { return }
+  if (-not $ForceTreeSweep -and $now -lt $script:nextTreeSweepAt) { return }
 
   $sweepStartedAt = $now
   $script:nextTreeSweepAt = $now.AddMilliseconds($script:treeSweepIntervalMilliseconds)
   $beforeCount = $processEvents.Count
+  $parents = @($processEvents)
+  $snapshotsByPid = $null
 
-  foreach ($parent in @($processEvents)) {
-    if ($null -eq (Get-LiveRetainedProcessSnapshot $parent)) { continue }
+  if ($ForceTreeSweep) {
+    $liveParents = [System.Collections.Generic.List[object]]::new()
 
-    $children = Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($parent.pid)" -ErrorAction Stop
+    foreach ($parent in $parents) {
+      if (-not $parent.attached -or $null -eq $parent.processHandle) { continue }
 
-    if ($null -eq (Get-LiveRetainedProcessSnapshot $parent)) { continue }
+      if ([HesperiaNativeProcess]::HasExited($parent.nativeHandle)) { continue }
+
+      if (-not (Test-RetainedHandleGeneration $parent)) {
+        if ([HesperiaNativeProcess]::HasExited($parent.nativeHandle)) { continue }
+
+        throw ('Live parent kernel creation identity changed before tree observation: ' + $parent.pid)
+      }
+
+      $liveParents.Add($parent)
+    }
+
+    $parents = @($liveParents)
+    $snapshotsByPid = @{}
+
+    if ($parents.Count -gt 0) {
+      foreach ($snapshot in @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)) {
+        $snapshotId = [string][int]$snapshot.ProcessId
+
+        if ($snapshotsByPid.ContainsKey($snapshotId)) {
+          throw ('Native process snapshot contains duplicate PID: ' + $snapshotId)
+        }
+
+        $snapshotsByPid[$snapshotId] = $snapshot
+      }
+    }
+  }
+
+  foreach ($parent in $parents) {
+    if ($null -eq (Get-LiveRetainedProcessSnapshot $parent $snapshotsByPid)) { continue }
+
+    $children = if ($null -ne $snapshotsByPid) {
+      @($snapshotsByPid.Values | Where-Object { [int]$_.ParentProcessId -eq [int]$parent.pid })
+    } else {
+      Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($parent.pid)" -ErrorAction Stop
+    }
+
+    if ($null -eq (Get-LiveRetainedProcessSnapshot $parent $snapshotsByPid)) { continue }
 
     $parentCreationTime = [datetime]$parent.creationTime
 
@@ -552,9 +598,9 @@ function Receive-ProcessStarts([switch]$IncludeUnrelated) {
         continue
       }
 
-      if ($null -eq (Get-LiveRetainedProcessSnapshot $parent)) { continue }
+      if ($null -eq (Get-LiveRetainedProcessSnapshot $parent $snapshotsByPid)) { continue }
 
-      $record = Get-AttachedChildRecord $parent $processInfo $parentCreationTime
+      $record = Get-AttachedChildRecord $parent $processInfo $parentCreationTime $snapshotsByPid
 
       if ($null -eq $record) { continue }
 
@@ -573,6 +619,18 @@ function Receive-ProcessStarts([switch]$IncludeUnrelated) {
     parentCount = $processEvents.Count
     newlyAttachedCount = $processEvents.Count - $beforeCount
   })
+}
+
+function Receive-OwnedProcessTree {
+  for ($sweep = 0; $sweep -lt 16; $sweep++) {
+    $beforeCount = $processEvents.Count
+
+    Receive-ProcessStarts -IncludeUnrelated -ForceTreeSweep
+
+    if ($processEvents.Count -eq $beforeCount) { return }
+  }
+
+  throw 'Owned process discovery did not reach a stable tree before termination.'
 }
 
 function Observe-RetainedProcessExits {
@@ -633,6 +691,8 @@ function Try-RunOwnerKillControl {
   }
 
   Copy-Item -LiteralPath (Join-Path $testRoot 'editor-result.json') -Destination (Join-Path $coverageOutput 'editor-result.json')
+
+  Receive-OwnedProcessTree
 
   $hostRecord = Get-ProcessEventByPid ([int]$ownerAdmissionKeys['extension-host'])
   $serverRecord = Get-ProcessEventByPid ([int]$ownerAdmissionKeys['language-server'])
@@ -712,8 +772,6 @@ function Try-RunOwnerKillControl {
   }
 
   [System.IO.File]::WriteAllText((Join-Path $coverageOutput 'owner-kill-control.json'), ($control | ConvertTo-Json -Depth 6 -Compress), [System.Text.UTF8Encoding]::new($false))
-
-  $script:ownerKillCompleted = $true
 
   throw ('Private native owner kill control terminated ' + $role + ' PID ' + $target.pid)
 }
@@ -1110,14 +1168,8 @@ try {
     try {
       if ($passed) {
         Receive-ProcessStarts
-      } elseif (-not $ownerKillCompleted) {
-        for ($sweep = 0; $sweep -lt 16; $sweep++) {
-          $beforeCount = $processEvents.Count
-
-          Receive-ProcessStarts -IncludeUnrelated
-
-          if ($processEvents.Count -eq $beforeCount) { break }
-        }
+      } else {
+        Receive-OwnedProcessTree
       }
     } catch {
       $observerCleanupErrors.Add($_.Exception.Message)
@@ -1128,7 +1180,10 @@ try {
     if (-not $passed) {
       $forcedPids = @()
 
-      foreach ($record in $processEvents) {
+      $cleanupRecords = @($processEvents)
+      [array]::Reverse($cleanupRecords)
+
+      foreach ($record in $cleanupRecords) {
         if ($record.attached -and $null -ne $record.processHandle) {
           $canTerminate = $false
           $handleOnlyVerification = $false
@@ -1201,22 +1256,6 @@ try {
               if ($stillLive) { $forcedCleanup = $true }
             }
           }
-        }
-      }
-
-      if ($ownerKillCompleted) {
-        try {
-          for ($sweep = 0; $sweep -lt 16; $sweep++) {
-            $beforeCount = $processEvents.Count
-
-            Receive-ProcessStarts -IncludeUnrelated
-
-            if ($processEvents.Count -eq $beforeCount) { break }
-          }
-        } catch {
-          $observerCleanupErrors.Add($_.Exception.Message)
-
-          Write-Output ('Process observer cleanup: ' + $_.Exception.Message)
         }
       }
 

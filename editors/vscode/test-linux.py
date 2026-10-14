@@ -325,7 +325,12 @@ def pidfd_ready(fd: int) -> bool:
 
     poller.register(fd, select.POLLIN | select.POLLHUP | select.POLLERR)
 
-    return bool(poller.poll(0))
+    events = poller.poll(0)
+
+    if any(flags & (select.POLLNVAL | select.POLLERR) for _, flags in events):
+        raise CaptureError(f"Retained pidfd {fd} readiness descriptor is invalid")
+
+    return any(flags & (select.POLLIN | select.POLLHUP) for _, flags in events)
 
 
 def read_proc_kernel_identity(
@@ -2348,6 +2353,29 @@ def raw_process_group_if_complete(
     return raw_process_group_closure(pid, trace, tid_groups)
 
 
+def confirm_traced_exit(
+    generation: Generation,
+    trace: dict[str, Any],
+    tid_groups: dict[int, int],
+) -> bool:
+    """Strace can log closure after pidfd readiness; reobserve the retained handle after closure."""
+    closure = raw_process_group_if_complete(generation.pid, trace, tid_groups)
+
+    if closure is None or not pidfd_ready(generation.pidfd):
+        return False
+
+    observed_at = utc_now()
+    terminal_ns = closure[1]
+
+    if utc_time_ns(observed_at) < terminal_ns:
+        raise CaptureError(f"Retained PID {generation.pid} readiness observation precedes its raw terminal")
+
+    if generation.ready_at is None or utc_time_ns(generation.ready_at) < terminal_ns:
+        generation.ready_at = observed_at
+
+    return True
+
+
 def create_raw_creator_fixture(temporary_root: pathlib.Path) -> RawCreatorFixture:
     directory = temporary_root / "raw-creator-fixture"
 
@@ -2623,6 +2651,10 @@ def raw_creator_child_adoption(
         return None
 
     _, helper_terminal_ns = helper_closure
+
+    if not confirm_traced_exit(helper_generation, trace, tid_groups):
+        return None
+
     helper_exit = trace["exits"].get(fixture.helper_pid)
 
     if helper_exit is None or helper_exit["outcome"] != {"kind": "exit", "status": 0}:
@@ -2880,6 +2912,10 @@ def complete_raw_creator_fixture(
         return
 
     members, terminal_ns = closure
+
+    if not confirm_traced_exit(child_generation, trace, tid_groups):
+        return
+
     terminal = trace["exits"].get(fixture.child_pid)
     child_births = trace["creations"].get(fixture.child_pid, [])
 
@@ -3657,6 +3693,9 @@ def native_ack(
     if gui.check_exit() or host_generation.check_exit():
         raise CaptureError("Extension Host or Code GUI exited while its acknowledgement image was sampled")
 
+    if not confirm_traced_exit(server_generation, trace, tid_groups):
+        raise CaptureError("Language server has no retained pidfd readiness after its raw terminal closure")
+
     acknowledged_at = utc_now()
     acknowledged_at_ns = utc_time_ns(acknowledged_at)
     server_event = process_event(
@@ -4174,6 +4213,8 @@ def main() -> int:
     failure = ""
     passed = False
     display_read_fd: int | None = None
+    control: dict[str, Any] | None = None
+    control_path: pathlib.Path | None = None
 
     try:
         display_read_fd, display_write_fd = os.pipe()
@@ -4613,17 +4654,17 @@ def main() -> int:
                         if target_generation.ready_at is None:
                             raise CaptureError(f"Linux pidfd did not observe SIGKILL termination for {target_role}")
 
-                        control["pidfdReadyAt"] = target_generation.ready_at
                         trace_snapshot = scan_trace(trace_directory, prefix)
                         target_exit = trace_snapshot["exits"].get(target_generation.pid)
 
                         if not target_exit or target_exit["outcome"] != {"kind": "signal", "signal": "SIGKILL"}:
                             raise CaptureError("Raw strace did not independently record the requested owner SIGKILL")
 
+                        confirm_traced_exit(target_generation, trace_snapshot, tid_groups)
+
+                        control["pidfdReadyAt"] = target_generation.ready_at
                         control["outcome"] = target_exit["outcome"]
                         control["traceExit"] = target_exit["trace"]
-
-                        write_json(control_path, control)
 
                         raise CaptureError(f"Private native owner kill control terminated {target_role} PID {target_generation.pid}")
                 elif start_path.exists() and not ack_written and host_start and server_start and current_gui_generation:
@@ -4748,6 +4789,10 @@ def main() -> int:
         for pid, generation in sorted(generations.items()):
             generation.check_exit()
 
+            if not confirm_traced_exit(generation, trace_snapshot, tid_groups):
+                raise CaptureError(f"Retained PID {pid} has no raw-closure readiness confirmation")
+
+        for pid, generation in sorted(generations.items()):
             native_events.append(
                 process_event(
                     generation,
@@ -5055,6 +5100,32 @@ def main() -> int:
             for pid, generation in sorted(generations.items()):
                 generation.check_exit()
 
+                try:
+                    confirmed = confirm_traced_exit(generation, trace_snapshot, tid_groups)
+
+                    if not confirmed:
+                        raise CaptureError(f"Retained PID {pid} has no raw-closure readiness confirmation")
+
+                    if control is not None and generation.pid == control["pid"] and "pidfdReadyAt" in control:
+                        if (
+                            control["runId"] != config["runId"]
+                            or control["populationFingerprint"] != config["populationFingerprint"]
+                            or generation.start_ticks != control["procStarttimeTicks"]
+                            or generation.attached_at != control["pidfdAttachedAt"]
+                            or control_path is None
+                        ):
+                            raise CaptureError("Retained kill target has no matching raw-closure readiness confirmation")
+
+                        if control_path.exists():
+                            raise CaptureError("Linux owner kill control already exists")
+
+                        control["pidfdReadyAt"] = generation.ready_at
+
+                        write_json(control_path, control)
+                except BaseException as confirmation_error:
+                    diagnostic_errors.append(f"Native process {pid} terminal readiness: {confirmation_error}")
+
+            for pid, generation in sorted(generations.items()):
                 try:
                     event = process_event(
                         generation,

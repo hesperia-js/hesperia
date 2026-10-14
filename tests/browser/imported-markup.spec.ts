@@ -110,6 +110,8 @@ test("compiled imported markup keeps native root behavior, ownership, and cleanu
 
   await page.goto("/?importedMarkup");
 
+  await expect(page.locator("#show-panels")).toBeVisible();
+
   const styleLinks = page.locator("head link[data-hesperia-style-id]");
   const disabledLink = page.locator('head link[title="Imported disabled sheet"]');
 

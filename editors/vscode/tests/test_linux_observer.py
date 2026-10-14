@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from dataclasses import replace
 import importlib.util
 import io
 import json
@@ -1053,6 +1054,8 @@ os.waitpid(anchor, 0)
 
                 self.assertTrue(child_generation.check_exit())
 
+                first_ready_at = {pid: generation.ready_at for pid, generation in generations.items()}
+
                 self.assertEqual(process.wait(timeout=10), 0)
 
                 try:
@@ -1067,6 +1070,24 @@ os.waitpid(anchor, 0)
 
                 trace = observer.scan_trace(trace_directory, "native-process-trace", final=True)
                 _, raw_files = observer.trace_files_manifest(trace_directory, "native-process-trace")
+
+                for generation in generations.values():
+                    self.assertTrue(observer.confirm_traced_exit(generation, trace, {}))
+
+                    self.assertGreaterEqual(
+                        observer.utc_time_ns(generation.ready_at),
+                        observer.utc_time_ns(first_ready_at[generation.pid]),
+                    )
+
+                closed_pidfd = os.dup(child_generation.pidfd)
+                os.close(closed_pidfd)
+
+                with self.assertRaises(ValueError):
+                    observer.confirm_traced_exit(replace(child_generation, pidfd=-1), trace, {})
+
+                with self.assertRaisesRegex(observer.CaptureError, "readiness descriptor is invalid"):
+                    observer.confirm_traced_exit(replace(child_generation, pidfd=closed_pidfd), trace, {})
+
                 event = observer.process_event(
                     child_generation,
                     trace,
@@ -1090,6 +1111,19 @@ os.waitpid(anchor, 0)
 
                 if helper_generation is None:
                     self.assertNotIn(helper_pid, generations)
+
+                    _, child_terminal_ns = observer.raw_process_group_closure(child_pid, trace, {})
+                    confirmed_ready_at = child_generation.ready_at
+                    child_generation.ready_at = observer.utc_at_ns(child_terminal_ns - 1)
+
+                    try:
+                        with self.assertRaisesRegex(observer.CaptureError, "pidfd and parent sample do not bind"):
+                            observer.process_event(
+                                child_generation, trace, {}, raw_files, generations,
+                                os.path.realpath(sys.executable), root_pid,
+                            )
+                    finally:
+                        child_generation.ready_at = confirmed_ready_at
                 else:
                     birth = trace["creations"][child_pid][0]
 
