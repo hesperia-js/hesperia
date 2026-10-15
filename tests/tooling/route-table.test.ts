@@ -238,73 +238,35 @@ test("a real split build leaves the route page cold and mounts it through the bu
 
       expect(wrapper).toContain('await start("/dashboard")');
 
-      const script = `
-        import assert from "node:assert/strict";
-        import { chromium, firefox, webkit } from ${JSON.stringify(pathToFileURL(resolve(import.meta.dir, "../../node_modules/playwright/index.mjs")).href)};
-        for (const engine of [chromium, firefox, webkit]) {
-          const browser = await engine.launch();
-          try {
-          const page = await browser.newPage();
-          if (engine.name() === "webkit") {
-            await page.addInitScript(() => {
-              Object.defineProperty(window, "NavigationPrecommitController", {
-                configurable: true,
-                value: undefined,
-              });
-            });
-          }
-          const errors = [];
-          const consoleErrors = [];
-          const failedRequests = [];
-          const badResponses = [];
-          page.on("pageerror", error => errors.push(String(error)));
-          page.on("console", message => { if (message.type() === "error") consoleErrors.push(message.text()); });
-          page.on("requestfailed", request => failedRequests.push({ url: request.url(), failure: request.failure()?.errorText }));
-          page.on("response", response => { if (response.status() >= 400) badResponses.push({ url: response.url(), status: response.status() }); });
-          await page.goto(new URL("/dashboard/", ${JSON.stringify(server.url.href)}).href, { waitUntil: "domcontentloaded", timeout: 5000 }).catch(async error => {
-            throw new Error("Document did not load; page errors=" + JSON.stringify(errors) + "; console errors=" + JSON.stringify(consoleErrors) + "; failed requests=" + JSON.stringify(failedRequests) + "; bad responses=" + JSON.stringify(badResponses) + "; url=" + page.url() + "; body=" + await page.locator("body").innerText().catch(String), { cause: error });
-          });
-          await page.waitForFunction(() => document.querySelector("button")?.textContent === "0", null, { timeout: 5000 }).catch(async error => {
-            throw new Error("Startup did not mount the button; page errors=" + JSON.stringify(errors) + "; console errors=" + JSON.stringify(consoleErrors) + "; failed requests=" + JSON.stringify(failedRequests) + "; bad responses=" + JSON.stringify(badResponses) + "; url=" + page.url() + "; body=" + await page.locator("body").innerText().catch(String), { cause: error });
-          });
-          await page.waitForFunction(() => document.querySelector('[role="status"]')?.textContent === "Startup fixture", null, { timeout: 10000 });
-          assert.equal(await page.locator('[role="status"]').getAttribute("aria-live"), "polite");
-          if (engine.name() === "webkit") {
-            assert.equal(await page.evaluate(() => typeof window.NavigationPrecommitController), "undefined");
-            await page.evaluate(() => window.history.back());
-            await page.waitForFunction(() => window.location.pathname === "/dashboard/early" && document.querySelector('[data-startup-entry="early"]')?.textContent === "Early history entry", null, { timeout: 10000 });
-            assert.deepEqual(await page.evaluate(() => ({ pathname: window.location.pathname, state: window.history.state })), {
-              pathname: "/dashboard/early",
-              state: { startupEntry: "early" },
-            });
-            await page.evaluate(() => window.history.forward());
-            await page.waitForFunction(() => window.location.pathname === "/dashboard/" && document.querySelector("button")?.textContent === "0", null, { timeout: 10000 });
-            assert.equal(await page.evaluate(() => window.history.state), null);
-          }
-          assert.equal(await page.evaluate(() => globalThis.routePageLoaded), true);
-          assert.equal(await page.evaluate(() => {
-            const button = document.querySelector("button");
-            button.click();
-            return button.textContent === "1" && document.querySelector("button") === button;
-          }), true);
-          assert.deepEqual(errors, []);
-          console.log(engine.name() + " startup verified");
-          } catch (error) {
-            throw new Error(engine.name() + " generated startup failed: " + String(error), { cause: error });
-          } finally { await browser.close(); }
-        }
-      `;
-      const child = Bun.spawn(["node", "--input-type=module", "--eval", script], {
-        stdout: "pipe",
-        stderr: "pipe",
-      });
+      const diagnosticsParent = resolve(import.meta.dir, "../../.hesperia/browser-diagnostics");
+
+      await mkdir(diagnosticsParent, { recursive: true });
+
+      const diagnosticsDirectory = await mkdtemp(join(diagnosticsParent, "route-table-"));
+      const child = Bun.spawn(
+        [
+          "node",
+          resolve(import.meta.dir, "fixtures/drivers/route-table-browser.mjs"),
+          pathToFileURL(resolve(import.meta.dir, "../../node_modules/playwright/index.mjs")).href,
+          server.url.href,
+          diagnosticsDirectory,
+        ],
+        {
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+
       const [status, output, errors] = await Promise.all([
         child.exited,
         new Response(child.stdout).text(),
         new Response(child.stderr).text(),
       ]);
 
-      if (status !== 0) throw new Error(`Generated startup failed\n${errors}`);
+      if (status !== 0)
+        throw new Error(
+          `Generated startup failed; diagnostics=${diagnosticsDirectory}\nstdout:\n${output}\nstderr:\n${errors}`,
+        );
 
       expect(output.trim().split(/\r?\n/u)).toStrictEqual([
         "chromium startup verified",

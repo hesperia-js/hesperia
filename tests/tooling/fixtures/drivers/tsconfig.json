@@ -17,6 +17,7 @@
     "async-route-outcomes-browser.mjs",
     "development-browser.mjs",
     "development-deletion-browser.mjs",
+    "route-table-browser.mjs",
     "routing-page-task-browser.mjs",
     "routing-public-flows-browser.mjs",
     "routing-public-flows.d.mts",

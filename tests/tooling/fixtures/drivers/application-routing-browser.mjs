@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
+import { startBrowserDiagnostics } from "./browser-diagnostics.mjs";
 
 /** @typedef {import("playwright").BrowserType} BrowserType */
 /** @typedef {import("playwright").Route} Route */
 
-const [playwrightModuleUrl, applicationUrl] = process.argv.slice(2);
+const [playwrightModuleUrl, applicationUrl, diagnosticsDirectory] = process.argv.slice(2);
 
 const { chromium, firefox, webkit } = /** @type {typeof import("playwright")} */ (
   await import(playwrightModuleUrl)
@@ -12,8 +13,17 @@ const { chromium, firefox, webkit } = /** @type {typeof import("playwright")} */
 for (const engine of [chromium, firefox, webkit]) {
   const browser = await engine.launch();
 
+  /** @type {Awaited<ReturnType<typeof startBrowserDiagnostics>> | undefined} */
+  let diagnostics;
+  let failed = false;
+
   try {
     const page = await browser.newPage();
+
+    diagnostics = await startBrowserDiagnostics(page, {
+      directory: diagnosticsDirectory,
+      label: engine.name() + "-application-routing",
+    });
 
     /** @type {string[]} */
     const errors = [];
@@ -64,6 +74,8 @@ for (const engine of [chromium, firefox, webkit]) {
 
     await page.goto(applicationUrl);
 
+    diagnostics.mark("home-loaded");
+
     const shell = await page.locator("#shell-draft").elementHandle();
 
     const layout = await page.locator("#root-layout").elementHandle();
@@ -78,11 +90,15 @@ for (const engine of [chromium, firefox, webkit]) {
 
     const firstSlowRequest = waitForRequest("one");
 
+    diagnostics.mark("initial-slow-click");
+
     await page.getByRole("link", { name: "Slow page" }).click();
 
     const request = await firstSlowRequest;
 
     await page.locator("#loading").waitFor();
+
+    diagnostics.mark("initial-slow-loading");
 
     assert.equal(new URL(page.url()).pathname, "/");
 
@@ -100,21 +116,29 @@ for (const engine of [chromium, firefox, webkit]) {
       true,
     );
 
+    diagnostics.mark("initial-slow-fulfill");
+
     await request.fulfill({ json: { message: "Query finished" } });
 
     await page.locator("#ready").waitFor();
 
     await page.waitForURL("**/slow");
 
+    diagnostics.mark("initial-slow-ready");
+
     assert.equal(await page.locator("#ready h1").textContent(), "Query finished");
 
     assert.equal(await page.locator("#loading").count(), 0);
+
+    diagnostics.mark("back-to-cached-home");
 
     await page.evaluate(() => history.back());
 
     await page.locator("#draft").waitFor();
 
     await page.waitForURL(applicationUrl);
+
+    diagnostics.mark("cached-home-restored");
 
     assert.equal(await page.locator("#draft").inputValue(), "Keep this draft");
 
@@ -139,11 +163,15 @@ for (const engine of [chromium, firefox, webkit]) {
 
     const forwardToSlow = page.waitForURL("**/slow");
 
+    diagnostics.mark("forward-to-cached-slow");
+
     await page.evaluate(() => history.forward());
 
     await page.locator("#ready").waitFor();
 
     await forwardToSlow;
+
+    diagnostics.mark("cached-slow-restored");
 
     assert.equal(await page.locator("#ready").getAttribute("data-body"), "1");
 
@@ -155,11 +183,15 @@ for (const engine of [chromium, firefox, webkit]) {
       globalThis.savedSlowEffects = /** @type {HTMLElement | SVGElement} */ (node);
     }, oldSlowEffects);
 
+    diagnostics.mark("home-before-reset-click");
+
     await page.getByRole("link", { name: "Home" }).click();
 
     await page.waitForURL(applicationUrl);
 
     await page.locator("#draft").fill("Home survives reset");
+
+    diagnostics.mark("home-before-reset-ready");
 
     const parkedHomeDraft = await page.locator("#draft").elementHandle();
 
@@ -178,6 +210,8 @@ for (const engine of [chromium, firefox, webkit]) {
       (node) => Number(node.dataset.effectCleanups),
       oldSlowEffects,
     );
+
+    diagnostics.mark("api-reset");
 
     await page.evaluate(() => globalThis.resetRoutingApi());
 
@@ -207,6 +241,8 @@ for (const engine of [chromium, firefox, webkit]) {
 
     const backToSlow = page.waitForURL("**/slow");
 
+    diagnostics.mark("back-to-reset-slow");
+
     await page.evaluate(() => history.back());
 
     await page.locator("#loading").waitFor();
@@ -214,6 +250,8 @@ for (const engine of [chromium, firefox, webkit]) {
     assert.equal(await page.locator("#ready").count(), 0);
 
     const freshRouteRequest = await restoredSlowRequest;
+
+    diagnostics.mark("reset-slow-request-held");
 
     assert.equal(
       await page.evaluate(() => globalThis.getRoutingMessageRequests()),
@@ -232,11 +270,15 @@ for (const engine of [chromium, firefox, webkit]) {
 
     assert.equal(disposedSlowState.bodyCount, 1);
 
+    diagnostics.mark("reset-slow-fulfill");
+
     await freshRouteRequest.fulfill({ json: { message: "Reset restored" } });
 
     await page.locator("#ready").waitFor();
 
     await backToSlow;
+
+    diagnostics.mark("reset-slow-ready");
 
     await page.waitForFunction(
       () => document.querySelector("#slow-effects")?.getAttribute("data-runs") === "1",
@@ -258,11 +300,15 @@ for (const engine of [chromium, firefox, webkit]) {
 
     const forwardToParkedHome = page.waitForURL(applicationUrl);
 
+    diagnostics.mark("forward-to-parked-home");
+
     await page.evaluate(() => history.forward());
 
     await page.locator("#draft").waitFor();
 
     await forwardToParkedHome;
+
+    diagnostics.mark("parked-home-restored");
 
     assert.equal(await page.locator("#draft").inputValue(), parkedHomeValue);
 
@@ -281,15 +327,25 @@ for (const engine of [chromium, firefox, webkit]) {
       true,
     );
 
+    diagnostics.mark("broken-page-click");
+
     await page.getByRole("link", { name: "Broken page" }).click();
 
     const broken = await waitForRequest("broken");
 
+    diagnostics.mark("broken-request-held");
+
     await page.locator("#loading").waitFor();
+
+    diagnostics.mark("broken-loading");
 
     await broken.fulfill({ status: 500, contentType: "text/plain", body: "broken backend failed" });
 
+    diagnostics.mark("broken-response-fulfilled");
+
     await page.locator("#root-error").waitFor();
+
+    diagnostics.mark("root-error-visible");
 
     assert.equal(
       /** @type {string} */ (await page.locator("#root-error").textContent()).includes(
@@ -303,9 +359,15 @@ for (const engine of [chromium, firefox, webkit]) {
       true,
     );
 
+    diagnostics.mark("root-error-home-click");
+
     await page.getByRole("link", { name: "Home" }).click();
 
+    diagnostics.mark("root-error-home-click-completed");
+
     await page.locator("#draft").waitFor();
+
+    diagnostics.mark("root-error-home-draft-visible");
 
     assert.equal(
       await page.evaluate((node) => node === document.querySelector("#shell-draft"), shell),
@@ -316,8 +378,20 @@ for (const engine of [chromium, firefox, webkit]) {
 
     console.log(engine.name() + " async routing verified");
   } catch (error) {
+    failed = true;
+
+    await diagnostics?.capture(error);
+
     throw new Error(engine.name() + " generated routing failed", { cause: error });
   } finally {
-    await browser.close();
+    try {
+      await diagnostics?.dispose().catch((error) => {
+        if (!failed) throw error;
+      });
+    } finally {
+      await browser.close().catch((error) => {
+        if (!failed) throw error;
+      });
+    }
   }
 }

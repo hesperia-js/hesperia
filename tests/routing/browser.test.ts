@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chromium, firefox, webkit } from "playwright";
+import { appendFileSync, mkdirSync, mkdtempSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Router } from "../../packages/hesperia/src/routing/index.ts";
+import { startBrowserDiagnostics } from "../tooling/fixtures/drivers/browser-diagnostics.mjs";
 
 let server: ReturnType<typeof Bun.serve>;
 
@@ -810,10 +812,47 @@ for (const engine of [chromium, firefox, webkit]) {
 
   for (const mode of modes) {
     test(`${engine.name()} ${mode}: a newer programmatic route wins over a pending traversal`, async () => {
-      const browser = await engine.launch();
+      const diagnosticsRoot = resolve(import.meta.dir, "../../.hesperia/browser-diagnostics");
+
+      mkdirSync(diagnosticsRoot, { recursive: true });
+
+      const directory = mkdtempSync(resolve(diagnosticsRoot, "pending-traversal-"));
+      const label = `${engine.name()}-${mode}`;
+      const started = Date.now();
+      let browser: Awaited<ReturnType<typeof engine.launch>> | undefined;
+      let diagnostics: Awaited<ReturnType<typeof startBrowserDiagnostics>> | undefined;
+      let failed = false;
+
+      function mark(step: string, detail?: unknown) {
+        try {
+          // Bun's outer deadline can bypass capture and dispose the browser.
+          appendFileSync(
+            resolve(directory, "checkpoints.jsonl"),
+            JSON.stringify({ label, elapsedMs: Date.now() - started, step, detail }) + "\n",
+          );
+        } catch (error) {
+          console.error(`[browser diagnostics] ${label} checkpoint: ${String(error)}`);
+        }
+
+        diagnostics?.mark(step, detail);
+      }
 
       try {
+        mark("browser-launch");
+
+        browser = await engine.launch();
+
+        mark("browser-launched");
+
+        mark("page-create");
+
         const page = await browser.newPage();
+
+        mark("page-created");
+
+        diagnostics = await startBrowserDiagnostics(page, { directory, label });
+
+        mark("diagnostics-started");
 
         if (mode === "legacy")
           await page.addInitScript(() => {
@@ -823,11 +862,17 @@ for (const engine of [chromium, firefox, webkit]) {
             });
           });
 
+        mark("document-navigation");
+
         await page.goto(`http://127.0.0.1:${server.port}/`);
+
+        mark("document-loaded");
 
         await page.waitForFunction(
           () => (window as unknown as { routingFixture: { ready: boolean } }).routingFixture.ready,
         );
+
+        mark("fixture-ready");
 
         const selectedNativePath = await page.evaluate(() => {
           const candidate = window as unknown as {
@@ -849,11 +894,21 @@ for (const engine of [chromium, firefox, webkit]) {
           );
         });
 
+        mark("native-path-selected", selectedNativePath);
+
         expect(selectedNativePath).toBe(mode === "native");
+
+        mark("next-click");
 
         await page.locator("#next").click();
 
+        mark("next-click-completed");
+
         await page.waitForFunction(() => document.querySelector("main")?.textContent === "/next");
+
+        mark("next-visible");
+
+        mark("traversal-start");
 
         const traversal = page.evaluate(async (native) => {
           const candidate = window as unknown as {
@@ -891,11 +946,17 @@ for (const engine of [chromium, firefox, webkit]) {
           }
         }, mode === "native");
 
+        mark("guard-wait");
+
         await page.waitForFunction(
           () =>
             (window as unknown as { routingFixture: { guardStarted: boolean } }).routingFixture
               .guardStarted,
         );
+
+        mark("guard-started");
+
+        mark("programmatic-navigation");
 
         const result = await page.evaluate(async () => {
           const router = (window as unknown as { routingFixture: { router: Router } })
@@ -906,11 +967,17 @@ for (const engine of [chromium, firefox, webkit]) {
           });
         });
 
+        mark("programmatic-navigation-finished", result);
+
         expect(result.status).toBe("committed");
 
         await page.waitForFunction(
           () => document.querySelector("main")?.textContent === "/programmatic",
         );
+
+        mark("programmatic-visible");
+
+        mark("guard-release");
 
         const released = await page.evaluate(() => {
           const fixture = (
@@ -926,13 +993,21 @@ for (const engine of [chromium, firefox, webkit]) {
           return true;
         });
 
+        mark("guard-released", released);
+
         expect(released).toBe(true);
 
+        mark("traversal-outcome-wait");
+
         const traversalOutcome = await traversal;
+
+        mark("traversal-outcome", traversalOutcome);
 
         if (mode === "native") {
           expect(traversalOutcome).toStrictEqual({ status: "rejected", name: "AbortError" });
         }
+
+        mark("final-route-read");
 
         const finalRoute = await page.evaluate(() => {
           const router = (window as unknown as { routingFixture: { router: Router } })
@@ -944,13 +1019,43 @@ for (const engine of [chromium, firefox, webkit]) {
           };
         });
 
+        mark("final-route", finalRoute);
+
         expect(finalRoute).toStrictEqual({
           pathname: "/programmatic",
           content: "/programmatic",
           state: { entry: "programmatic" },
         });
+
+        mark("assertions-completed");
+      } catch (error) {
+        failed = true;
+
+        mark("failure", String(error));
+
+        await diagnostics?.capture(error);
+
+        console.error(`[browser diagnostics] ${label}: ${directory}`);
+
+        throw error;
       } finally {
-        await browser.close();
+        try {
+          mark("diagnostics-dispose");
+
+          await diagnostics?.dispose().catch((error) => {
+            if (!failed) throw error;
+          });
+        } finally {
+          diagnostics = undefined;
+
+          mark("browser-close");
+
+          await browser?.close().catch((error) => {
+            if (!failed) throw error;
+          });
+
+          mark("browser-closed");
+        }
       }
     }, 20_000);
   }

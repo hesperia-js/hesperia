@@ -171,6 +171,15 @@ jobs:
       - name: "Test ci"
         if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.ci == 'true'"
         run: "bun test --timeout=45000 tests/ci"
+      - name: "Retain browser failure diagnostics"
+        if: "failure()"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "hesperia-browser-diagnostics-${{ matrix.platform }}-${{ github.run_attempt }}"
+          if-no-files-found: ignore
+          include-hidden-files: true
+          path: .hesperia/browser-diagnostics/
+          retention-days: 14
   coverage-groups:
     name: "Coverage (${{ matrix.platform }}, ${{ matrix.group }})"
     needs: checks
@@ -264,6 +273,7 @@ jobs:
             .hesperia/coverage/runs/
             .hesperia/coverage/browser-css-runs/
             .hesperia/ec/
+            .hesperia/browser-diagnostics/
           retention-days: 14
   coverage-platform:
     name: "Coverage aggregate (${{ matrix.platform }})"

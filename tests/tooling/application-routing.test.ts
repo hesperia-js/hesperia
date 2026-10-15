@@ -49,12 +49,19 @@ test("generated async routes wait for public query data and restore the cached n
 
     server = await previewProject(root, 0);
 
+    const diagnosticsParent = join(parent, "browser-diagnostics");
+
+    await mkdir(diagnosticsParent, { recursive: true });
+
+    const diagnosticsDirectory = await mkdtemp(join(diagnosticsParent, "application-routing-"));
+
     const child = Bun.spawn(
       [
         "node",
         join(import.meta.dir, "fixtures/drivers/application-routing-browser.mjs"),
         pathToFileURL(resolve(import.meta.dir, "../../node_modules/playwright/index.mjs")).href,
         server.url.href,
+        diagnosticsDirectory,
       ],
       {
         stdout: "pipe",
