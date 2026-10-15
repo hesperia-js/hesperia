@@ -881,7 +881,9 @@ def open_popen_generation(
 
 
 def open_generation(
-    pid: int, pending: dict[int, PendingTraceGeneration]
+    pid: int,
+    pending: dict[int, PendingTraceGeneration],
+    trace: dict[str, Any] | None = None,
 ) -> Generation | None:
     status_path = pathlib.Path("/proc") / str(pid) / "status"
 
@@ -1071,6 +1073,12 @@ def open_generation(
 
             return None
 
+        if trace is not None and not traced_parent_sample_ready(pid, after["ppid"], after_started_ns, trace):
+            attachment = PendingTraceGeneration(pid, after["ppid"], after["startTicks"], fd, attached_at)
+            pending[pid] = attachment
+
+            return None
+
         generation = Generation(pid, after["ppid"], after["startTicks"], fd, attached_at)
 
         generation.observe(after, after_started_ns, after_finished_ns)
@@ -1188,6 +1196,9 @@ def retry_pending_trace_generation(
     if pidfd_ready(attachment.pidfd):
         return False
 
+    if trace is not None and not traced_parent_sample_ready(pid, proc["ppid"], sample_started_ns, trace):
+        return False
+
     generation = Generation(pid, proc["ppid"], proc["startTicks"], attachment.pidfd, attachment.attached_at)
 
     generation.observe(proc, sample_started_ns, sample_finished_ns)
@@ -1293,7 +1304,9 @@ def observe_retained_generation(generation: Generation) -> None:
             return
 
         try:
-            after = read_proc_kernel_identity(generation.pid, "after incomplete current /proc argv sample")
+            after = read_proc_kernel_identity(
+                generation.pid, "after incomplete current /proc argv sample", allow_zombie=True
+            )
         except (FileNotFoundError, ProcessLookupError):
             if generation.check_exit():
                 generation.mark_image_incomplete()
@@ -1307,6 +1320,11 @@ def observe_retained_generation(generation: Generation) -> None:
         validate_retained_generation(
             after, generation.pid, generation.start_ticks, "after incomplete current /proc argv sample"
         )
+
+        if after["state"] == "Z":
+            defer_verified_zombie(generation, after, before, "after incomplete current /proc argv sample")
+
+            return
 
         if after["ppid"] != before["ppid"]:
             generation.mark_image_incomplete()
@@ -1335,7 +1353,9 @@ def observe_retained_generation(generation: Generation) -> None:
     )
 
     try:
-        after = read_proc_kernel_identity(generation.pid, "after complete current /proc image sample")
+        after = read_proc_kernel_identity(
+            generation.pid, "after complete current /proc image sample", allow_zombie=True
+        )
     except (FileNotFoundError, ProcessLookupError) as error:
         if generation.check_exit():
             return
@@ -1345,6 +1365,11 @@ def observe_retained_generation(generation: Generation) -> None:
     validate_retained_generation(
         after, generation.pid, generation.start_ticks, "after complete current /proc image sample"
     )
+
+    if after["state"] == "Z":
+        defer_verified_zombie(generation, after, before, "after complete current /proc image sample")
+
+        return
 
     if proc["ppid"] != before["ppid"] or after["ppid"] != before["ppid"]:
         generation.mark_image_incomplete()
@@ -2351,6 +2376,23 @@ def raw_process_group_if_complete(
         return None
 
     return raw_process_group_closure(pid, trace, tid_groups)
+
+
+def traced_parent_sample_ready(pid: int, ppid: int, sample_started_ns: int, trace: dict[str, Any]) -> bool:
+    edges = trace["creations"].get(pid, [])
+
+    if len(edges) != 1 or edges[0]["thread"]:
+        return True
+
+    creator_pid = raw_trace_tgid(edges[0]["parentTid"], trace)
+
+    if creator_pid == ppid:
+        return True
+
+    closure = raw_process_group_if_complete(creator_pid, trace, {})
+
+    # Kernel adoption can precede strace's terminal record; admit a fresh sample after that record.
+    return closure is not None and closure[1] < sample_started_ns
 
 
 def confirm_traced_exit(
@@ -4277,11 +4319,8 @@ def main() -> int:
             ack_written = False
 
             while time.monotonic() < deadline:
-                if raw_creator_fixture is not None:
-                    trace_snapshot = scan_trace(trace_directory, prefix)
-                    files = trace_snapshot["files"]
-                else:
-                    files = traced_files(trace_directory, prefix)
+                trace_snapshot = scan_trace(trace_directory, prefix)
+                files = trace_snapshot["files"]
 
                 for pid in files:
                     if raw_creator_fixture is not None and raw_creator_pending_child_pid(
@@ -4330,7 +4369,7 @@ def main() -> int:
 
                             generation = generations.get(pid)
                         else:
-                            attached = open_generation(pid, pending_trace_generations)
+                            attached = open_generation(pid, pending_trace_generations, trace_snapshot)
 
                             if attached is not None:
                                 generations[pid] = attached

@@ -363,6 +363,15 @@ export default function Page() {
     const routeSource = new TextEncoder().encode(
       "export default function Page() { return <main>page</main>; }",
     );
+    const routeDiagnostics = () =>
+      [firstRoute, secondRoute].map((route) => ({
+        uri: route.toString(),
+        diagnostics: vscode.languages.getDiagnostics(route).map(({ code, message, severity }) => ({
+          code: typeof code === "object" ? code.value : code,
+          message,
+          severity,
+        })),
+      }));
 
     for (const route of [firstRoute, secondRoute]) {
       await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(route, ".."));
@@ -370,10 +379,13 @@ export default function Page() {
       await vscode.workspace.fs.writeFile(route, routeSource);
     }
 
-    await until(() =>
-      [firstRoute, secondRoute].every((route) =>
-        vscode.languages.getDiagnostics(route).some((item) => item.code === "HES-ROUTE-SCAN"),
-      ),
+    await until(
+      () =>
+        [firstRoute, secondRoute].every((route) =>
+          vscode.languages.getDiagnostics(route).some((item) => item.code === "HES-ROUTE-SCAN"),
+        ),
+      "route collision diagnostics appear on both pages",
+      routeDiagnostics,
     );
 
     await vscode.workspace.fs.rename(
@@ -381,10 +393,13 @@ export default function Page() {
       vscode.Uri.joinPath(folder.uri, "src/routes/(second)/+layout.tsx"),
     );
 
-    await until(() =>
-      [firstRoute, secondRoute].every(
-        (route) => vscode.languages.getDiagnostics(route).length === 0,
-      ),
+    await until(
+      () =>
+        [firstRoute, secondRoute].every(
+          (route) => vscode.languages.getDiagnostics(route).length === 0,
+        ),
+      "route collision diagnostics clear after renaming the second page to a layout",
+      routeDiagnostics,
     );
 
     const declarationUri = vscode.Uri.joinPath(folder.uri, "src/routes/+route.ts");
@@ -465,7 +480,11 @@ export default function Page() {
   }
 }
 
-function until(predicate: () => boolean): Promise<void> {
+function until(
+  predicate: () => boolean,
+  transition?: string,
+  observed?: () => unknown,
+): Promise<void> {
   if (predicate()) return Promise.resolve();
 
   return new Promise((accept, reject) => {
@@ -477,7 +496,17 @@ function until(predicate: () => boolean): Promise<void> {
     const timeout = setTimeout(() => {
       close();
 
-      reject(new Error("VS Code did not reach the expected editor state."));
+      let message = "VS Code did not reach the expected editor state.";
+
+      if (transition) message += ` Transition: ${transition}.`;
+
+      if (observed) {
+        try {
+          message += ` Observed: ${JSON.stringify(observed())}`;
+        } catch {}
+      }
+
+      reject(new Error(message));
     }, 15000);
 
     function close(): void {

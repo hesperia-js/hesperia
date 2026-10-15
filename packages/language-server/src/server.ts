@@ -494,6 +494,8 @@ export function startLanguageServer(
             if (stopped || requested !== revision || project !== outgoingProject) return;
 
             await connection.sendDiagnostics({ uri, ...result });
+
+            published.add(uri);
           }
 
           published = new Set(outgoing.keys());

@@ -5835,6 +5835,17 @@ async function verifyArtifactRejections(
   );
 }
 
+function nativeKillConditionError(
+  message: string,
+  rejectedCondition: readonly [string, unknown],
+): Error {
+  const observed = JSON.stringify(rejectedCondition[1], (_key, value) =>
+    typeof value === "string" && value.length > 240 ? `${value.slice(0, 240)}...` : value,
+  );
+  const bounded = observed && observed.length > 2000 ? `${observed.slice(0, 2000)}...` : observed;
+  return new Error(`${message}; rejected ${rejectedCondition[0]}; observed=${bounded}`);
+}
+
 function verifyLinuxNativeKillRejection(
   mode: "kill-extension-host" | "kill-language-server",
   context: CapturedRunContext,
@@ -5964,6 +5975,9 @@ function verifyLinuxNativeKillRejection(
   const readyAt = timestamp(control.pidfdReadyAt);
   const expectedFailure = `Private native owner kill control terminated ${role} PID ${start.pid}`;
 
+  const rejectionMessage =
+    "Linux native kill control did not prove postassertion SIGKILL and rejected coverage capture";
+
   if (
     control.format !== "hesperia-editor-linux-native-owner-kill-control" ||
     control.version !== 1 ||
@@ -5978,7 +5992,15 @@ function verifyLinuxNativeKillRejection(
     !Array.isArray(control.procArgv) ||
     !control.procArgv.every((argument) => typeof argument === "string") ||
     !Number.isSafeInteger(control.procStarttimeTicks) ||
-    control.requestedSignal !== "SIGKILL" ||
+    control.requestedSignal !== "SIGKILL"
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "control identity and requested signal",
+      control,
+    ]);
+  }
+
+  if (
     attachedAt === undefined ||
     assertionsAt === undefined ||
     signalAt === undefined ||
@@ -5986,31 +6008,91 @@ function verifyLinuxNativeKillRejection(
     signalAt < attachedAt ||
     signalAt < assertionsAt ||
     readyAt < signalAt ||
-    readyAt > observedAt! ||
+    readyAt > observedAt!
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "control timing",
+      {
+        pidfdAttachedAt: control.pidfdAttachedAt,
+        assertionsCompletedAt: control.assertionsCompletedAt,
+        signalSentAt: control.signalSentAt,
+        pidfdReadyAt: control.pidfdReadyAt,
+        observedAt: failure.observedAt,
+      },
+    ]);
+  }
+
+  if (
     !isRecord(control.outcome) ||
-    JSON.stringify(control.outcome) !== JSON.stringify({ kind: "signal", signal: "SIGKILL" }) ||
+    JSON.stringify(control.outcome) !== JSON.stringify({ kind: "signal", signal: "SIGKILL" })
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "control.outcome must be SIGKILL",
+      control.outcome,
+    ]);
+  }
+
+  if (
     ready.format !== "hesperia-editor-owner-kill-ready" ||
     ready.version !== 1 ||
     ready.runId !== context.runId ||
     ready.populationFingerprint !== context.population.fingerprint ||
     ready.mode !== mode ||
     ready.extensionHostPid !== host.pid ||
-    ready.assertionsCompletedAt !== control.assertionsCompletedAt ||
+    ready.assertionsCompletedAt !== control.assertionsCompletedAt
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "ready identity and assertion barrier",
+      ready,
+    ]);
+  }
+
+  if (
     start.format !== "hesperia-editor-owner-start" ||
     start.version !== 1 ||
     start.runId !== context.runId ||
     start.populationFingerprint !== context.population.fingerprint ||
     start.ownerId !== `vscode-${role}-${context.runId}` ||
     start.role !== role ||
-    (role === "extension-host" ? server.ppid !== host.pid : start.ppid !== host.pid) ||
+    (role === "extension-host" ? server.ppid !== host.pid : start.ppid !== host.pid)
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "owner start identity and parent",
+      { start, hostPid: host.pid, serverParentPid: server.ppid },
+    ]);
+  }
+
+  if (
     failure.format !== "hesperia-editor-linux-native-process-failure" ||
     failure.version !== 1 ||
     failure.platform !== "linux" ||
     failure.runId !== context.runId ||
-    failure.populationFingerprint !== context.population.fingerprint ||
+    failure.populationFingerprint !== context.population.fingerprint
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "failure identity",
+      {
+        format: failure.format,
+        version: failure.version,
+        platform: failure.platform,
+        runId: failure.runId,
+        populationFingerprint: failure.populationFingerprint,
+      },
+    ]);
+  }
+
+  if (
     observerStartedAt === undefined ||
     observedAt === undefined ||
-    observerStartedAt > observedAt ||
+    observerStartedAt > observedAt
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "observer timing",
+      { observerStartedAt: failure.observerStartedAt, observedAt: failure.observedAt },
+    ]);
+  }
+
+  if (
     typeof failure.failure !== "string" ||
     failure.failure !== expectedFailure ||
     failure.failureExceptionType !== "__main__.CaptureError" ||
@@ -6019,24 +6101,72 @@ function verifyLinuxNativeKillRejection(
     !failure.failureTraceback.includes(expectedFailure) ||
     failure.failureErrno !== null ||
     failure.failureFilename !== null ||
-    failure.failureFilename2 !== null ||
+    failure.failureFilename2 !== null
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "failure exception must identify the intentional owner kill",
+      {
+        failure: failure.failure,
+        type: failure.failureExceptionType,
+        traceback: failure.failureTraceback,
+        errno: failure.failureErrno,
+        filename: failure.failureFilename,
+        filename2: failure.failureFilename2,
+      },
+    ]);
+  }
+
+  if (
     !Array.isArray(failure.forcedPids) ||
-    !failure.forcedPids.every((pid) => Number.isSafeInteger(pid) && Number(pid) > 0) ||
-    !Array.isArray(failure.cleanupFailures) ||
-    failure.cleanupFailures.length !== 0 ||
-    !Array.isArray(failure.diagnosticErrors) ||
-    failure.diagnosticErrors.length !== 0 ||
-    !Array.isArray(failure.events) ||
+    !failure.forcedPids.every((pid) => Number.isSafeInteger(pid) && Number(pid) > 0)
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "failure.forcedPids must contain positive safe integers",
+      failure.forcedPids,
+    ]);
+  }
+
+  if (!Array.isArray(failure.cleanupFailures) || failure.cleanupFailures.length !== 0) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "failure.cleanupFailures must be an empty array",
+      failure.cleanupFailures,
+    ]);
+  }
+
+  if (!Array.isArray(failure.diagnosticErrors) || failure.diagnosticErrors.length !== 0) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "failure.diagnosticErrors must be an empty array",
+      failure.diagnosticErrors,
+    ]);
+  }
+
+  if (!Array.isArray(failure.events)) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "failure.events must be an array",
+      failure.events,
+    ]);
+  }
+
+  if (
     reportValue.passed !== true ||
     !Array.isArray(reportValue.checks) ||
-    reportValue.checks.length !== expectedChecks ||
+    reportValue.checks.length !== expectedChecks
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "editor assertions must pass with the expected check count",
+      { passed: reportValue.passed, checks: reportValue.checks },
+    ]);
+  }
+
+  if (
     existsSync(join(outputDirectory, `${role}-exit.json`)) ||
     existsSync(join(outputDirectory, `${role}-coverage.json`)) ||
     existsSync(join(outputDirectory, "lcov.info"))
   ) {
-    throw new Error(
-      "Linux native kill control did not prove postassertion SIGKILL and rejected coverage capture",
-    );
+    throw nativeKillConditionError(rejectionMessage, [
+      "target exit, target coverage, and LCOV must be absent",
+      { outputDirectory, role },
+    ]);
   }
 
   const files = validateLinuxTraceEvidence(
@@ -6571,11 +6701,17 @@ function verifyNativeKillRejection(
 
   const diagnostics = failure.observerDiagnostics;
 
+  const rejectionMessage =
+    "Private native kill control did not prove actual nonzero termination and rejected capture";
+
+  if (!isRecord(start) || !isRecord(host) || !isRecord(server) || !isRecord(diagnostics)) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "owner starts and observer diagnostics must be records",
+      { start, host, server, diagnostics },
+    ]);
+  }
+
   if (
-    !isRecord(start) ||
-    !isRecord(host) ||
-    !isRecord(server) ||
-    !isRecord(diagnostics) ||
     control.format !== "hesperia-editor-native-owner-kill-control" ||
     control.version !== 1 ||
     control.runId !== context.runId ||
@@ -6587,14 +6723,30 @@ function verifyNativeKillRejection(
     !Number.isSafeInteger(control.parentPid) ||
     Number(control.parentPid) <= 0 ||
     !Number.isSafeInteger(control.exitCode) ||
-    control.exitCode === 0 ||
+    control.exitCode === 0
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "control identity and nonzero termination",
+      control,
+    ]);
+  }
+
+  if (
     ready.format !== "hesperia-editor-owner-kill-ready" ||
     ready.version !== 1 ||
     ready.runId !== context.runId ||
     ready.populationFingerprint !== context.population.fingerprint ||
     ready.mode !== mode ||
     ready.extensionHostPid !== host.pid ||
-    ready.assertionsCompletedAt !== control.assertionsCompletedAt ||
+    ready.assertionsCompletedAt !== control.assertionsCompletedAt
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "ready identity and assertion barrier",
+      ready,
+    ]);
+  }
+
+  if (
     start.format !== "hesperia-editor-owner-start" ||
     start.version !== 1 ||
     start.role !== role ||
@@ -6608,38 +6760,126 @@ function verifyNativeKillRejection(
     server.runId !== context.runId ||
     host.populationFingerprint !== context.population.fingerprint ||
     server.populationFingerprint !== context.population.fingerprint ||
-    server.ppid !== host.pid ||
+    server.ppid !== host.pid
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "owner start identity and parent",
+      { start, host, server },
+    ]);
+  }
+
+  if (
     report.passed !== true ||
     !Array.isArray(report.checks) ||
-    report.checks.length !== expectedChecks ||
+    report.checks.length !== expectedChecks
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "editor assertions must pass with the expected check count",
+      { passed: report.passed, checks: report.checks },
+    ]);
+  }
+
+  if (
     failure.format !== "hesperia-editor-native-process-failure" ||
     failure.version !== 1 ||
-    failure.runId !== context.runId ||
+    failure.runId !== context.runId
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "failure identity",
+      { format: failure.format, version: failure.version, runId: failure.runId },
+    ]);
+  }
+
+  if (
     timestamp(failure.observerStartedAt) === undefined ||
     timestamp(failure.observedAt) === undefined ||
     !Number.isSafeInteger(failure.codeLaunchPid) ||
-    Number(failure.codeLaunchPid) <= 0 ||
+    Number(failure.codeLaunchPid) <= 0
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "observer timestamps and launch PID",
+      {
+        observerStartedAt: failure.observerStartedAt,
+        observedAt: failure.observedAt,
+        codeLaunchPid: failure.codeLaunchPid,
+      },
+    ]);
+  }
+
+  if (
     typeof failure.failure !== "string" ||
-    !failure.failure.startsWith(`Private native owner kill control terminated ${role} PID `) ||
-    !Array.isArray(failure.events) ||
-    !Array.isArray(failure.observerErrors) ||
-    failure.observerErrors.length !== 0 ||
-    !Array.isArray(failure.cleanupFailures) ||
-    failure.cleanupFailures.length !== 0 ||
+    !failure.failure.startsWith(`Private native owner kill control terminated ${role} PID `)
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "failure must identify the intentional owner kill",
+      failure.failure,
+    ]);
+  }
+
+  if (!Array.isArray(failure.events)) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "failure.events must be an array",
+      failure.events,
+    ]);
+  }
+
+  if (!Array.isArray(failure.observerErrors) || failure.observerErrors.length !== 0) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "failure.observerErrors must be an empty array",
+      failure.observerErrors,
+    ]);
+  }
+
+  if (!Array.isArray(failure.cleanupFailures) || failure.cleanupFailures.length !== 0) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "failure.cleanupFailures must be an empty array",
+      failure.cleanupFailures,
+    ]);
+  }
+
+  if (
     !Array.isArray(failure.forcedPids) ||
-    !failure.forcedPids.every((pid) => Number.isSafeInteger(pid) && pid > 0) ||
+    !failure.forcedPids.every((pid) => Number.isSafeInteger(pid) && pid > 0)
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "failure.forcedPids must contain positive safe integers",
+      failure.forcedPids,
+    ]);
+  }
+
+  if (
     !Array.isArray(diagnostics.ownerAdmissionFailures) ||
-    diagnostics.ownerAdmissionFailures.length !== 0 ||
-    diagnostics.testBudgetSeconds !== 120 ||
-    !Array.isArray(control.ancestry) ||
-    control.ancestry.length < 2 ||
+    diagnostics.ownerAdmissionFailures.length !== 0
+  ) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "diagnostics.ownerAdmissionFailures must be an empty array",
+      diagnostics.ownerAdmissionFailures,
+    ]);
+  }
+
+  if (diagnostics.testBudgetSeconds !== 120) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "diagnostics.testBudgetSeconds must equal 120",
+      diagnostics.testBudgetSeconds,
+    ]);
+  }
+
+  if (!Array.isArray(control.ancestry) || control.ancestry.length < 2) {
+    throw nativeKillConditionError(rejectionMessage, [
+      "control.ancestry must contain at least two entries",
+      control.ancestry,
+    ]);
+  }
+
+  if (
     existsSync(join(outputDirectory, `${role}-exit.json`)) ||
     existsSync(join(outputDirectory, `${role}-coverage.json`)) ||
     existsSync(join(outputDirectory, "lcov.info"))
   ) {
-    throw new Error(
-      "Private native kill control did not prove actual nonzero termination and rejected capture",
-    );
+    throw nativeKillConditionError(rejectionMessage, [
+      "target exit, target coverage, and LCOV must be absent",
+      { outputDirectory, role },
+    ]);
   }
 
   requireExactKeys(

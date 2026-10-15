@@ -1237,23 +1237,35 @@ try {
                 $forcedCleanup = $true
               }
             } catch {
+              $cleanupError = $_.Exception.Message
+
               try { $record.processHandle.Refresh() } catch { }
 
-              $stillLive = -not [HesperiaNativeProcess]::HasExited($record.nativeHandle)
+              $stillLive = $true
+              $sameGeneration = $false
 
-              $cleanupFailures.Add([pscustomobject]@{
-                pid = $record.pid
-                parentPid = $record.parentPid
-                processName = $record.processName
-                executablePath = $record.executablePath
-                creationTime = $record.creationTime
-                commandLine = $record.commandLine
-                identityVerifiedByRetainedHandle = (Test-RetainedHandleGeneration $record)
-                stillLive = $stillLive
-                error = $_.Exception.Message
-              })
+              try {
+                $stillLive = -not [HesperiaNativeProcess]::HasExited($record.nativeHandle)
+                $sameGeneration = Test-SameNativeCreationTime ([HesperiaNativeProcess]::CreationTime($record.nativeHandle)) ([datetime]$record.creationTime)
+              } catch {
+                $cleanupError += '; Could not reconcile retained process handle: ' + $_.Exception.Message
+              }
 
-              if ($stillLive) { $forcedCleanup = $true }
+              if ($stillLive -or -not $sameGeneration) {
+                $cleanupFailures.Add([pscustomobject]@{
+                  pid = $record.pid
+                  parentPid = $record.parentPid
+                  processName = $record.processName
+                  executablePath = $record.executablePath
+                  creationTime = $record.creationTime
+                  commandLine = $record.commandLine
+                  identityVerifiedByRetainedHandle = $sameGeneration
+                  stillLive = $stillLive
+                  error = $cleanupError
+                })
+
+                if ($stillLive) { $forcedCleanup = $true }
+              }
             }
           }
         }

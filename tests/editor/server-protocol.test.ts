@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { PassThrough } from "node:stream";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -424,6 +424,95 @@ test("locationless diagnostics keep severity and publish no authored-text highli
       end: { line: 1, character: 0 },
     });
   } finally {
+    await stopProtocolHarness(streams);
+
+    await rm(root, { recursive: true, force: true });
+  }
+}, 45000);
+
+test("language server clears a renamed route whose collision was published by a superseded refresh", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-language-server-route-publication-"));
+  const fixture = new URL("./fixtures/applications/route-publication/", import.meta.url);
+
+  await cp(fixture, root, { recursive: true });
+
+  const firstFilename = join(root, "src/routes/(first)/+page.tsx");
+  const secondFilename = join(root, "src/routes/(second)/+page.tsx");
+  const layoutFilename = join(root, "src/routes/(second)/+layout.tsx");
+  const firstUri = pathToFileURL(firstFilename).href;
+  const secondUri = pathToFileURL(secondFilename).href;
+  const layoutUri = pathToFileURL(layoutFilename).href;
+  const streams = createProtocolHarness();
+  const publicationHeld = deferred<void>();
+  const releasePublication = deferred<void>();
+  const sendDiagnostics = streams.serverConnection.sendDiagnostics.bind(streams.serverConnection);
+
+  streams.serverConnection.sendDiagnostics = async (params) => {
+    await sendDiagnostics(params);
+
+    if (
+      params.uri === secondUri &&
+      params.diagnostics.some((diagnostic) => diagnostic.code === "HES-ROUTE-SCAN")
+    ) {
+      publicationHeld.resolve(undefined);
+
+      await releasePublication.promise;
+    }
+  };
+
+  startLanguageServer(streams.serverConnection);
+
+  streams.serverStarted = true;
+
+  try {
+    await streams.clientConnection.sendRequest(InitializeRequest.type, {
+      processId: process.pid,
+      rootUri: pathToFileURL(root).href,
+      capabilities: {},
+    });
+
+    await streams.clientConnection.sendNotification("initialized", {});
+
+    await publicationHeld.promise;
+
+    for (const uri of [firstUri, secondUri]) {
+      expect(
+        (await streams.diagnostics(uri, undefined)).diagnostics.some(
+          (diagnostic) => diagnostic.code === "HES-ROUTE-SCAN",
+        ),
+      ).toBe(true);
+    }
+
+    await rename(secondFilename, layoutFilename);
+
+    await streams.clientConnection.sendNotification("workspace/didChangeWatchedFiles", {
+      changes: [
+        { uri: secondUri, type: 3 },
+        { uri: layoutUri, type: 1 },
+      ],
+    });
+
+    await streams.clientConnection.sendRequest(DocumentSymbolRequest.type, {
+      textDocument: { uri: firstUri },
+    });
+
+    releasePublication.resolve(undefined);
+
+    await streams.clientConnection.sendRequest(HoverRequest.type, {
+      textDocument: { uri: firstUri },
+      position: { line: 0, character: 0 },
+    });
+
+    expect(
+      streams.events.filter((event) => event.uri === firstUri).at(-1)?.diagnostics,
+    ).toStrictEqual([]);
+
+    expect(
+      streams.events.filter((event) => event.uri === secondUri).at(-1)?.diagnostics,
+    ).toStrictEqual([]);
+  } finally {
+    releasePublication.resolve(undefined);
+
     await stopProtocolHarness(streams);
 
     await rm(root, { recursive: true, force: true });

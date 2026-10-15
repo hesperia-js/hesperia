@@ -34,13 +34,36 @@ OBSERVER_SPEC.loader.exec_module(observer)
 
 class RetainedGenerationTests(unittest.TestCase):
     def test_zombie_leader_invalidates_image_until_pidfd_is_ready(self) -> None:
+        for exit_stage in ("before-sample", "after-complete-sample", "after-incomplete-argv"):
+            with self.subTest(exit_stage=exit_stage):
+                self.check_zombie_leader_invalidates_image_until_pidfd_is_ready(exit_stage)
+
+    def check_zombie_leader_invalidates_image_until_pidfd_is_ready(self, exit_stage: str) -> None:
         worker_read_fd, worker_release_fd = os.pipe()
         child_script = r'''import ctypes, os, sys
 libc = ctypes.CDLL(None)
+argv_stage = sys.argv[2] == "after-incomplete-argv"
+worker_fd = int(sys.argv[1])
+if argv_stage:
+    stat = open("/proc/self/stat").read()
+    fields = stat[stat.rfind(")") + 1:].split()
+    page_size = os.sysconf("SC_PAGE_SIZE")
+    argv_page = int(fields[45]) // page_size * page_size
 THREAD_START = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)
 def worker(_):
     buffer = ctypes.create_string_buffer(1)
-    libc.read(int(sys.argv[1]), buffer, 1)
+    if argv_stage:
+        libc.read(worker_fd, buffer, 1)
+        if libc.mprotect(ctypes.c_void_p(argv_page), ctypes.c_size_t(page_size), 0):
+            os._exit(1)
+        sys.stdout.buffer.write(b"argv-empty\n")
+        sys.stdout.buffer.flush()
+        libc.read(worker_fd, buffer, 1)
+        if libc.mprotect(ctypes.c_void_p(argv_page), ctypes.c_size_t(page_size), 3):
+            os._exit(1)
+        sys.stdout.buffer.write(b"argv-restored\n")
+        sys.stdout.buffer.flush()
+    libc.read(worker_fd, buffer, 1)
     return None
 THREAD_START_CALLBACK = THREAD_START(worker)
 thread = ctypes.c_ulong()
@@ -55,10 +78,12 @@ libc.pthread_exit(None)
         process: subprocess.Popen[bytes] | None = None
         pidfd: int | None = None
         child_read_fd_open = True
+        argv_protection_requested = False
+        argv_restored = False
 
         try:
             process = subprocess.Popen(
-                [sys.executable, "-c", child_script, str(worker_read_fd)],
+                [sys.executable, "-c", child_script, str(worker_read_fd), exit_stage],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -138,7 +163,7 @@ libc.pthread_exit(None)
             original_sample_proc = observer.sample_proc
             zombie_identities: list[dict[str, int | str]] = []
 
-            def exit_leader_then_sample(*args: object, **kwargs: object):
+            def exit_leader() -> None:
                 self.assertIsNotNone(process.stdin)
 
                 process.stdin.write(b"x")
@@ -167,9 +192,45 @@ libc.pthread_exit(None)
 
                 zombie_identities.append(current)
 
-                return original_sample_proc(*args, **kwargs)
+            def sample_at_transition(*args: object, **kwargs: object):
+                nonlocal argv_protection_requested, argv_restored
 
-            with mock.patch.object(observer, "sample_proc", side_effect=exit_leader_then_sample):
+                if exit_stage == "before-sample":
+                    exit_leader()
+
+                if exit_stage == "after-incomplete-argv":
+                    argv_protection_requested = True
+
+                    os.write(worker_release_fd, b"a")
+
+                    self.assertTrue(select.select([process.stdout], [], [], 5)[0])
+
+                    self.assertEqual(process.stdout.readline(), b"argv-empty\n")
+
+                    self.assertEqual(pathlib.Path(f"/proc/{pid}/cmdline").read_bytes(), b"")
+
+                try:
+                    sampled = original_sample_proc(*args, **kwargs)
+                except observer.IncompleteProcArgv:
+                    if exit_stage == "after-incomplete-argv":
+                        os.write(worker_release_fd, b"r")
+
+                        self.assertTrue(select.select([process.stdout], [], [], 5)[0])
+
+                        self.assertEqual(process.stdout.readline(), b"argv-restored\n")
+
+                        argv_restored = True
+
+                        exit_leader()
+
+                    raise
+
+                if exit_stage == "after-complete-sample":
+                    exit_leader()
+
+                return sampled
+
+            with mock.patch.object(observer, "sample_proc", side_effect=sample_at_transition):
                 observer.observe_retained_generation(generation)
 
             self.assertEqual(zombie_identities[0]["state"], "Z")
@@ -209,6 +270,9 @@ libc.pthread_exit(None)
 
             self.assertFalse(generation.qualify_after_exec(transition))
         finally:
+            if argv_protection_requested and not argv_restored and process is not None and process.poll() is None:
+                process.kill()
+
             if process is not None and process.stdin is not None and process.poll() is None:
                 try:
                     process.stdin.write(b"x")
@@ -868,7 +932,7 @@ if helper_pid == 0:
         os.read(child_gate_fd, 1)
         os._exit(0)
     os.write(protocol_fd, f"helper {os.getpid()}\n".encode())
-    if retain_creator:
+    if retain_creator or creation == "fork":
         os.read(helper_gate_fd, 1)
     os._exit(0)
 os.read(root_gate_fd, 1)
@@ -969,6 +1033,7 @@ os.waitpid(anchor, 0)
                 cleanup_pidfds.append(os.pidfd_open(child_pid, 0))
 
                 helper_generation = None
+                pre_adoption_trace = None
 
                 if retain_creator:
                     helper_generation = observer.open_generation(helper_pid, {})
@@ -976,6 +1041,23 @@ os.waitpid(anchor, 0)
                     self.assertIsNotNone(helper_generation, "the live creator was not retained")
 
                     helper_pidfd = helper_generation.pidfd
+
+                    os.write(helper_gate_write, b"x")
+                elif creation == "fork":
+                    trace_deadline = time.monotonic() + 5
+
+                    while time.monotonic() < trace_deadline:
+                        candidate_trace = observer.scan_trace(trace_directory, "native-process-trace")
+
+                        if candidate_trace["creations"].get(child_pid):
+                            pre_adoption_trace = candidate_trace
+                            break
+
+                        time.sleep(0.001)
+
+                    self.assertIsNotNone(pre_adoption_trace, "the live helper child birth was not traced")
+
+                    self.assertNotIn(helper_pid, pre_adoption_trace["exits"])
 
                     os.write(helper_gate_write, b"x")
 
@@ -1011,7 +1093,38 @@ os.waitpid(anchor, 0)
 
                 pending: dict[int, observer.PendingTraceGeneration] = {}
                 root_generation = observer.open_generation(root_pid, pending)
-                child_generation = observer.open_generation(child_pid, pending)
+                child_generation = observer.open_generation(child_pid, pending, pre_adoption_trace)
+
+                if pre_adoption_trace is not None:
+                    self.assertIsNone(child_generation, "an adopted child was admitted before raw creator closure")
+
+                    attachment = pending[child_pid]
+                    child_pidfd = attachment.pidfd
+                    deferred_at = time.time_ns()
+                    retry_trace = observer.scan_trace(trace_directory, "native-process-trace")
+                    admitted: dict[int, observer.Generation] = {}
+
+                    observer.retry_pending_trace_generation(child_pid, pending, admitted, pre_adoption_trace)
+
+                    self.assertNotIn(child_pid, admitted, "a stale raw snapshot admitted the adopted child on retry")
+
+                    self.assertIs(pending[child_pid], attachment)
+
+                    observer.retry_pending_trace_generation(child_pid, pending, admitted, retry_trace)
+
+                    child_generation = admitted.get(child_pid)
+
+                    self.assertIsNotNone(child_generation, "the fresh post-closure parent sample was not admitted")
+
+                    self.assertEqual(child_generation.pidfd, attachment.pidfd)
+
+                    self.assertEqual(child_generation.start_ticks, attachment.start_ticks)
+
+                    self.assertEqual(child_generation.attached_at, attachment.attached_at)
+
+                    self.assertGreaterEqual(
+                        observer.utc_time_ns(child_generation.parents[0]["observedAt"]), deferred_at
+                    )
 
                 self.assertIsNotNone(root_generation, "the retained anchor was not admitted")
 

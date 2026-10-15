@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
-import { access, readdir, readFile } from "node:fs/promises";
+import { access, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { PAGE_DECLARATION_MARKER } from "@hesperia/compiler/tooling";
 import { readProject, type ProjectDiagnostic } from "./project.ts";
@@ -331,17 +332,24 @@ async function runTool(
   executableName: string,
   args: readonly string[],
 ): Promise<ToolOutput> {
-  const child = Bun.spawn([process.execPath, binaryPath(packageName, executableName), ...args], {
-    cwd: root,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [code, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-  return { code, stdout, stderr };
+  const directory = await mkdtemp(join(tmpdir(), "hesperia-oxc-output-"));
+
+  try {
+    const stdoutFile = Bun.file(join(directory, "stdout"));
+    const stderrFile = Bun.file(join(directory, "stderr"));
+
+    // Capture native Oxc output in files so large reports survive process exit.
+    const child = Bun.spawn([process.execPath, binaryPath(packageName, executableName), ...args], {
+      cwd: root,
+      stdout: stdoutFile,
+      stderr: stderrFile,
+    });
+    const code = await child.exited;
+    const [stdout, stderr] = await Promise.all([stdoutFile.text(), stderrFile.text()]);
+    return { code, stdout, stderr };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 function estimateWindowsArgumentLength(argument: string): number {
