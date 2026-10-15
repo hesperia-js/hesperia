@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "bun:test";
@@ -106,3 +108,135 @@ test("editor setup rejects unsupported versions and unverifiable metadata before
     expect(output).toBe("");
   }
 });
+
+async function downloadEditor(truncatedResponses: number) {
+  const run = action.runs.steps.find((step) => step.id === "windows")?.run;
+
+  assert.ok(run);
+
+  const scratch = await mkdtemp(join(tmpdir(), "hesperia-editor-download-"));
+  const payload = Buffer.alloc(4096, "editor archive fixture");
+  let requests = 0;
+  const server = createServer((socket) => {
+    socket.once("data", () => {
+      requests++;
+
+      const body = requests <= truncatedResponses ? payload.subarray(0, 17) : payload;
+
+      socket.end(
+        Buffer.concat([
+          Buffer.from(
+            `HTTP/1.1 200 OK\r\nContent-Length: ${payload.length}\r\nConnection: close\r\n\r\n`,
+          ),
+          body,
+        ]),
+      );
+    });
+  });
+
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    const address = server.address();
+
+    assert.ok(address && typeof address !== "string");
+
+    const output = join(scratch, "outputs.txt");
+    const script = join(scratch, "setup.ps1");
+
+    await writeFile(output, "");
+
+    await writeFile(script, `$ErrorActionPreference = 'Stop'\n${run}`);
+
+    const child = Bun.spawn(["pwsh", "-NoProfile", "-File", script], {
+      env: {
+        ...process.env,
+        RUNNER_TEMP: scratch,
+        GITHUB_OUTPUT: output,
+        CODE_VERSION: metadata.productVersion,
+        CODE_COMMIT: metadata.version,
+        CODE_SHA256: metadata.sha256hash,
+        CODE_URL: `http://127.0.0.1:${address.port}/editor.zip`,
+      },
+      stdout: "ignore",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    const archive = join(scratch, `vscode-${metadata.productVersion}.zip`);
+
+    return {
+      exitCode,
+      stderr,
+      requests,
+      output: await readFile(output, "utf8"),
+      extracted: existsSync(join(scratch, `vscode-${metadata.productVersion}`)),
+      archive: (await Bun.file(archive).exists()) ? await readFile(archive) : undefined,
+      payload,
+    };
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+test.skipIf(process.platform !== "win32")(
+  "Windows editor setup retries a truncated archive before enforcing its checksum",
+  async () => {
+    const result = await downloadEditor(1);
+
+    expect(result.requests).toBe(2);
+
+    expect(result.archive).toEqual(result.payload);
+
+    expect(result.exitCode).not.toBe(0);
+
+    expect(result.stderr).toContain("archive SHA-256 mismatch");
+
+    expect(result.output).toBe("");
+
+    expect(result.extracted).toBe(false);
+  },
+  20000,
+);
+
+test.skipIf(process.platform !== "win32")(
+  "Windows editor setup stops after bounded download failures before verifying an archive",
+  async () => {
+    const result = await downloadEditor(Infinity);
+
+    expect(result.requests).toBe(4);
+
+    expect(result.exitCode).not.toBe(0);
+
+    expect(result.stderr).toContain("VS Code archive download failed");
+
+    expect(result.stderr).not.toContain("archive SHA-256 mismatch");
+
+    expect(result.archive).toBeUndefined();
+
+    expect(result.output).toBe("");
+
+    expect(result.extracted).toBe(false);
+  },
+  20000,
+);
+
+test.skipIf(process.platform !== "win32")(
+  "Windows editor setup rejects a complete archive with a mismatched checksum without retrying",
+  async () => {
+    const result = await downloadEditor(0);
+
+    expect(result.requests).toBe(1);
+
+    expect(result.exitCode).not.toBe(0);
+
+    expect(result.stderr).toContain("archive SHA-256 mismatch");
+
+    expect(result.output).toBe("");
+
+    expect(result.extracted).toBe(false);
+  },
+);
