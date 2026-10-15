@@ -1031,6 +1031,10 @@ try {
 
   Set-Content -LiteralPath (Join-Path $testRoot 'package.json') -Encoding UTF8 -Value '{"name":"hesperia-editor-test","private":true,"type":"module"}'
 
+  New-Item -ItemType Directory -Path (Join-Path $testRoot '.vscode') | Out-Null
+
+  Set-Content -LiteralPath (Join-Path $testRoot '.vscode\settings.json') -Encoding UTF8 -Value '{"js/ts.tsserver.automaticTypeAcquisition.enabled":false}'
+
   [System.IO.File]::WriteAllText((Join-Path $testRoot 'hesperia.config.json'), '')
 
   Set-Content -LiteralPath (Join-Path $testRoot 'tsconfig.json') -Encoding UTF8 -Value '{"compilerOptions":{"strict":true,"skipLibCheck":true,"lib":["ESNext","DOM"],"target":"ESNext","module":"ESNext","moduleResolution":"Bundler","types":[]}}'

@@ -80,6 +80,10 @@ isolated workspace, user-data directory, and extensions directory:
 bun run test:editor
 ```
 
+The test workspace disables TypeScript's automatic type acquisition. Its npm
+downloads can outlive the editor and keep log files locked on Windows. The
+built-in TypeScript extension remains enabled, and the test uses installed types.
+
 It checks language recognition, exact source diagnostics, absence of duplicate
 stock JSX diagnostics, hover, completion, definition navigation, and unsaved
 edits. Successful runs remove their temporary workspace; failures retain logs
