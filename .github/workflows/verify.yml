@@ -485,6 +485,14 @@ jobs:
             echo "The golden plan returned no runnable suites" >&2
             exit 1
           fi
+
+          if [ "$RUNNER_OS" = "Windows" ] && [ "$GOLDEN_PROJECT" = "firefox" ]; then
+            export DEBUG=pw:protocol,pw:browser
+            export DEBUG_COLORS=0
+            export MAX_LOG_LENGTH=8192
+            exec 2>golden-firefox-stderr.log
+          fi
+
           node ../node_modules/@playwright/test/cli.js test --project="$GOLDEN_PROJECT" "${suites[@]}"
         shell: bash
         working-directory: golden
@@ -493,7 +501,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: "golden-traces-${{ matrix.platform }}-${{ matrix.project }}-${{ strategy.job-index }}"
-          path: golden/test-results/**/trace.zip
+          path: |
+            golden/test-results/**/trace.zip
+            golden/golden-firefox-stderr.log
           if-no-files-found: ignore
           retention-days: 7
       - name: "Reject a catalog that names unimplemented suites"

@@ -332,6 +332,12 @@ function readArtifacts(
 
       requiredNames.add(name);
     }
+
+    if (process.platform === "win32") {
+      fixedNames.add("owner-native-admission.json");
+
+      requiredNames.add("owner-native-admission.json");
+    }
   }
 
   const entries = readdirSync(outputDirectory, { withFileTypes: true });
