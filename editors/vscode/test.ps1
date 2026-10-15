@@ -1228,6 +1228,8 @@ try {
           }
 
           if ($canTerminate) {
+            $terminationWaitPending = $false
+
             try {
               $record.processHandle.Refresh()
 
@@ -1236,7 +1238,11 @@ try {
                   throw 'Retained kernel handle no longer matches its recorded process creation identity.'
                 }
 
+                $terminationWaitPending = $true
+
                 $record.processHandle.Kill()
+
+                $terminationWaitPending = $false
 
                 $record.processHandle.WaitForExit(5000) | Out-Null
 
@@ -1258,6 +1264,8 @@ try {
               $sameGeneration = $false
 
               try {
+                if ($terminationWaitPending) { $record.processHandle.WaitForExit(5000) | Out-Null }
+
                 $stillLive = -not [HesperiaNativeProcess]::HasExited($record.nativeHandle)
                 $sameGeneration = Test-SameNativeCreationTime ([HesperiaNativeProcess]::CreationTime($record.nativeHandle)) ([datetime]$record.creationTime)
               } catch {
