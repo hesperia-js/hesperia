@@ -144,15 +144,23 @@ function Get-LiveRetainedProcessSnapshot([object]$Record, [hashtable]$SnapshotBy
 
     $snapshotCreationTime = ([datetime]$snapshot.CreationDate).ToUniversalTime()
 
-    if (
-      -not (Test-SameNativeCreationTime $handleCreationTime $snapshotCreationTime) -or
-      [int]$snapshot.ParentProcessId -ne [int]$Record.parentPid -or
-      [string]::Compare([string]$snapshot.Name, [string]$Record.processName, $true) -ne 0 -or
-      [string]::Compare([string]$snapshot.ExecutablePath, [string]$Record.executablePath, $true) -ne 0 -or
-      [string]$snapshot.CommandLine -cne [string]$Record.commandLine
-    ) {
-      throw ('Current process snapshot does not match the retained handle for PID ' + $Record.pid)
+    $mismatchFields = @()
+
+    if (-not (Test-SameNativeCreationTime $handleCreationTime $snapshotCreationTime)) { $mismatchFields += 'creationTime' }
+
+    if ([int]$snapshot.ParentProcessId -ne [int]$Record.parentPid) { $mismatchFields += 'parentPid' }
+
+    if ([string]::Compare([string]$snapshot.Name, [string]$Record.processName, $true) -ne 0) { $mismatchFields += 'name' }
+
+    if ($snapshot.ExecutablePath -and [string]::Compare([string]$snapshot.ExecutablePath, [string]$Record.executablePath, $true) -ne 0) { $mismatchFields += 'executablePath' }
+
+    if ($snapshot.CommandLine -and [string]$snapshot.CommandLine -cne [string]$Record.commandLine) { $mismatchFields += 'commandLine' }
+
+    if ($mismatchFields.Count -gt 0) {
+      throw ('Current process snapshot does not match the retained handle for PID ' + $Record.pid + ' (' + ($mismatchFields -join ', ') + ')')
     }
+
+    if (-not $snapshot.ExecutablePath -or -not $snapshot.CommandLine) { return $null }
 
     $Record.processHandle.Refresh()
 
@@ -1191,6 +1199,11 @@ try {
           try {
             $currentSnapshot = Get-LiveRetainedProcessSnapshot $record
             $canTerminate = $null -ne $currentSnapshot
+
+            if (-not $canTerminate -and (Test-RetainedHandleGeneration $record)) {
+              $canTerminate = $true
+              $handleOnlyVerification = $true
+            }
           } catch {
             if (Test-RetainedHandleGeneration $record) {
               $canTerminate = $true
