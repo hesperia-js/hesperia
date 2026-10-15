@@ -55,6 +55,11 @@ commit SHA. Each job checks out Hesperia at the supplied revision and installs
 the workspace with `bun install --frozen-lockfile`. Aeolia is the exact published
 dependency `1.0.0-alpha.1`; CI does not need a sibling Aeolia checkout.
 
+Windows CI runs the browser and golden suites with one Playwright worker per job
+to reduce contention between browser processes. Linux CI and local runs use three
+workers. Separate matrix jobs still run in parallel, with the same test selection,
+assertions, timeouts, and retry policy.
+
 `dorny/paths-filter` uses local Git with no API token to select ordinary suites.
 Missing history, failed detection, missing outputs, an empty comparison, or an
 unknown path requests full verification. CI, manifest, lockfile, configuration,
