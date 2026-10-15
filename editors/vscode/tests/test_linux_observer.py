@@ -32,6 +32,90 @@ sys.modules[OBSERVER_SPEC.name] = observer
 OBSERVER_SPEC.loader.exec_module(observer)
 
 
+class NodeServiceProcHistoryTests(unittest.TestCase):
+    def test_postexec_title_preserves_observed_arguments_and_binds_native_role(self) -> None:
+        executable = "/usr/share/code/code"
+        native_argv = [
+            "/proc/self/exe",
+            "--type=utility",
+            "--utility-sub-type=node.mojom.NodeService",
+            "--user-data-dir=/tmp/editor profile",
+        ]
+        title = (
+            "/usr/share/code/code --type=utility --utility-sub-type=node.mojom.NodeService"
+            " --user-data-dir=/tmp/editor profile"
+        )
+        completion_ns = 1_792_029_363_796_962_000
+        transition = {
+            "resolvedPath": executable,
+            "completionNs": completion_ns,
+            "argv": native_argv,
+        }
+
+        for observed_argv in ([executable, *native_argv[1:]], [title]):
+            with self.subTest(observed_argv=observed_argv):
+                generation = observer.Generation(41, 40, 1234, -1, observer.utc_at_ns(completion_ns))
+                proc = {
+                    "pid": 41,
+                    "ppid": 40,
+                    "tgid": 41,
+                    "startTicks": 1234,
+                    "executablePath": executable,
+                    "argv": list(observed_argv),
+                }
+
+                generation.observe(proc, completion_ns + 1, completion_ns + 2)
+
+                self.assertTrue(generation.qualify_after_exec(transition))
+
+                self.assertTrue(observer.has_node_service_proc_history(generation, executable, transition))
+
+                self.assertEqual(generation.executions[0]["argv"], observed_argv)
+
+                self.assertEqual(generation.current_proc["argv"], observed_argv)
+
+        controls = [
+            ("changed title", [title + " --foreign"], native_argv, executable, completion_ns + 1),
+            ("truncated title", [title[:-1]], native_argv, executable, completion_ns + 1),
+            ("hybrid argv", [title, "--foreign"], native_argv, executable, completion_ns + 1),
+            (
+                "wrong raw role",
+                [title.replace("--type=utility", "--type=renderer")],
+                [argument.replace("--type=utility", "--type=renderer") for argument in native_argv],
+                executable,
+                completion_ns + 1,
+            ),
+            (
+                "wrong raw subtype",
+                [title.replace("node.mojom.NodeService", "foreign.Service")],
+                [argument.replace("node.mojom.NodeService", "foreign.Service") for argument in native_argv],
+                executable,
+                completion_ns + 1,
+            ),
+            ("wrong executable", [title], native_argv, "/usr/share/foreign/code", completion_ns + 1),
+            ("preexec sample", [title], native_argv, executable, completion_ns - 1),
+            ("sample at exec", [title], native_argv, executable, completion_ns),
+        ]
+
+        for label, argv, raw_argv, image_path, observed_ns in controls:
+            with self.subTest(control=label):
+                generation = observer.Generation(41, 40, 1234, -1, observer.utc_at_ns(completion_ns))
+                proc = {
+                    "pid": 41,
+                    "ppid": 40,
+                    "tgid": 41,
+                    "startTicks": 1234,
+                    "executablePath": image_path,
+                    "argv": argv,
+                }
+
+                generation.observe(proc, observed_ns, observed_ns + 1)
+
+                self.assertFalse(observer.has_node_service_proc_history(
+                    generation, executable, {**transition, "argv": raw_argv}
+                ))
+
+
 class RetainedGenerationTests(unittest.TestCase):
     def test_zombie_leader_invalidates_image_until_pidfd_is_ready(self) -> None:
         for exit_stage in ("before-sample", "after-complete-sample", "after-incomplete-argv"):

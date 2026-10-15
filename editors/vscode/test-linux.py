@@ -1857,12 +1857,22 @@ def is_node_service_argv(argv: list[str]) -> bool:
 
 
 def has_node_service_proc_history(
-    generation: Generation, executable_path: str, after_ns: int
+    generation: Generation, executable_path: str, transition: dict[str, Any]
 ) -> bool:
+    native_argv = transition["argv"]
+    native_title = (
+        " ".join([executable_path, *native_argv[1:]])
+        if transition["resolvedPath"] == executable_path and is_node_service_argv(native_argv)
+        else None
+    )
+
     return any(
         image["executablePath"] == executable_path
-        and is_node_service_argv(image["argv"])
-        and utc_time_ns(image["observedAt"]) > after_ns
+        and (
+            is_node_service_argv(image["argv"])
+            or (native_title is not None and image["argv"] == [native_title])
+        )
+        and utc_time_ns(image["observedAt"]) > transition["completionNs"]
         for image in generation.executions
     )
 
@@ -3729,7 +3739,7 @@ def native_ack(
     if not server_generation.qualify_after_exec(server_exec):
         raise CaptureError("Language server has no complete /proc sample after its latest successful exec")
 
-    if not has_node_service_proc_history(host_generation, host_path, host_exec["completionNs"]):
+    if not has_node_service_proc_history(host_generation, host_path, host_exec):
         raise CaptureError("Extension Host has no NodeService /proc image sampled after its latest native exec")
 
     if gui.check_exit() or host_generation.check_exit():
@@ -4438,7 +4448,7 @@ def main() -> int:
                             raise CaptureError(f"Latest native exec does not match the {role} owner generation")
 
                         if role == "extension-host" and not has_node_service_proc_history(
-                            generation, owner_path, latest["completionNs"]
+                            generation, owner_path, latest
                         ):
                             raise CaptureError(
                                 "Extension Host has no NodeService /proc image sampled after its latest native exec"
@@ -4624,7 +4634,7 @@ def main() -> int:
                                 raise CaptureError("Linux Extension Host kill target lacks runtime and native NodeService role anchors")
 
                             if not has_node_service_proc_history(
-                                target_generation, target_path, latest_target_exec["completionNs"]
+                                target_generation, target_path, latest_target_exec
                             ):
                                 raise CaptureError(
                                     "Linux Extension Host kill target has no Code NodeService proc image sampled after its latest native exec"

@@ -2895,13 +2895,22 @@ function hasLinuxNodeServiceProcHistory(
 ): boolean {
   if (!transition || !Array.isArray(event.executions)) return false;
 
+  const nativeTitle =
+    transition.resolvedPath === event.executablePath && isLinuxNodeServiceArgv(transition.argv)
+      ? [transition.resolvedPath, ...transition.argv.slice(1)].join(" ")
+      : undefined;
+
   return event.executions.some((image) => {
     if (!isRecord(image)) return false;
 
     const observedAtNs = linuxTimestampNs(image.observedAt);
     return (
       image.executablePath === event.executablePath &&
-      isLinuxNodeServiceArgv(image.argv) &&
+      (isLinuxNodeServiceArgv(image.argv) ||
+        (nativeTitle !== undefined &&
+          Array.isArray(image.argv) &&
+          image.argv.length === 1 &&
+          image.argv[0] === nativeTitle)) &&
       observedAtNs !== undefined &&
       observedAtNs > transition.completionNs
     );
