@@ -73,6 +73,12 @@ requires deliberately changing an archive or building a fixture retain their
 separate local preparation. Linked-package checks retain their module-identity
 contract alongside the installed candidate checks.
 
+Each candidate archive contains its package's `README.md` and exact copies of the
+root `LICENSE`, `COPYING`, and `LICENSE-COMMERCIAL.md`. Candidate preparation copies
+these files into the staging directory before packing. Verification rejects an
+absent, empty, or changed README and any missing or changed license notice.
+The package suite also checks the guides shipped under each package's `docs/`.
+
 Editor setup resolves current stable VS Code from Microsoft's official update
 metadata. It requires that version to satisfy the extension's `engines.vscode`
 range and meet its `@types/vscode` API baseline, currently `^1.137.0` and
@@ -357,4 +363,4 @@ it cannot replace the tested candidate or retry a partially published version.
 - [Pinned `actions/checkout` release](https://github.com/actions/checkout/releases/tag/v6.0.2)
 - [Pinned `actions/setup-node` release](https://github.com/actions/setup-node/releases/tag/v7.0.0)
 - [Pinned `oven-sh/setup-bun` release](https://github.com/oven-sh/setup-bun/releases/tag/v2.2.0)
-- [Visual Studio Code versioned Windows archive URLs](https://code.visualstudio.com/docs/supporting/faq#_how-do-i-download-a-specific-release)
+- [Visual Studio Code versioned Windows archive URLs](https://code.visualstudio.com/docs/supporting/faq#_previous-release-versions)

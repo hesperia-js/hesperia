@@ -94,7 +94,7 @@ export async function packedFile(archive: string, file: string): Promise<Uint8Ar
     new Response(child.stderr).text(),
   ]);
 
-  assert.equal(status, 0, `Cannot read packed manifest: ${error}`);
+  assert.equal(status, 0, `Cannot read packed file ${file}: ${error}`);
 
   return new Uint8Array(output);
 }

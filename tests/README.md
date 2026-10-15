@@ -71,6 +71,9 @@ build a fixture retain their own preparation. Pinned registry dependencies may
 need network access on a machine without a package cache.
 The package checks also verify public export targets, rejected legacy paths,
 compiler declarations, and the files used by the external TypeScript compiler.
+`contents.test.ts` checks every release archive for its package README and guides,
+plus byte-identical copies of the three root license files. Without a supplied
+candidate, this test prepares archives through the release packaging command.
 Installed commands must check, build, and preview the application. A Node process
 then verifies the served application in all three browser engines, including a
 deep route whose ordinary `api.ts` constructs a custom Aeolia query and mutation,

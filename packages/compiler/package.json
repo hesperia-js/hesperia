@@ -8,7 +8,8 @@
     "directory": "packages/compiler"
   },
   "files": [
-    "dist"
+    "dist",
+    "docs"
   ],
   "type": "module",
   "sideEffects": false,

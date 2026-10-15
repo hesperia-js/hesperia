@@ -5,9 +5,10 @@ import { join, resolve } from "node:path";
 import { archiveIntegrity, readReleaseCandidate } from "../../scripts/ci/release-candidate.ts";
 import { suppliedReleaseArchive } from "../package/release-candidate.ts";
 import { prepareReleaseCandidate } from "../../scripts/ci/prepare-release-candidate.ts";
-import { packedManifest } from "../../scripts/ci/release-candidate.ts";
+import { packedFile, packedManifest } from "../../scripts/ci/release-candidate.ts";
 import { verifyReleaseCandidate } from "../../scripts/ci/verify-release-candidate.ts";
 import { releaseNotices } from "../../scripts/ci/release-candidate.ts";
+import { $ } from "bun";
 
 test("package consumers use the supplied bytes and reject changed, missing, or escaping archives without repacking", async () => {
   const directory = await mkdtemp(join(tmpdir(), "hesperia-candidate-"));
@@ -80,7 +81,7 @@ test("package consumers use the supplied bytes and reject changed, missing, or e
   }
 });
 
-test("one real packed workspace candidate rewrites dependency pins and rejects mismatched provenance before publication", async () => {
+test("one real packed workspace candidate retains package documentation and notices and rejects invalid publication inputs", async () => {
   const scratchRoot = resolve(import.meta.dir, "../../.hesperia");
 
   await mkdir(scratchRoot, { recursive: true });
@@ -113,6 +114,8 @@ test("one real packed workspace candidate rewrites dependency pins and rejects m
       const packageRoot = join(workspace, "packages", directory);
 
       await mkdir(join(packageRoot, "dist"), { recursive: true });
+
+      await writeFile(join(packageRoot, "README.md"), `# ${name}\n\nPackage usage instructions.\n`);
 
       await writeFile(
         join(packageRoot, "package.json"),
@@ -167,6 +170,10 @@ test("one real packed workspace candidate rewrites dependency pins and rejects m
       hesperia: version,
     });
 
+    expect(Buffer.from(await packedFile(join(directory, compiler.file), "README.md"))).toEqual(
+      await readFile(join(workspace, "packages/compiler/README.md")),
+    );
+
     const manifestPath = join(directory, "manifest.json");
 
     await writeFile(manifestPath, JSON.stringify({ ...candidate, channel: "latest" }));
@@ -185,6 +192,50 @@ test("one real packed workspace candidate rewrites dependency pins and rejects m
     await expect(verifyReleaseCandidate(workspace, directory)).rejects.toThrow(
       "dependency order differs",
     );
+
+    const archive = join(directory, compiler.file);
+    const originalArchive = await readFile(archive);
+    const unpacked = join(workspace, "unpacked");
+    const invalidFiles = [
+      { file: "README.md", content: undefined, error: "Cannot read packed file README.md" },
+      { file: "README.md", content: " \n", error: "archive README is empty" },
+      { file: "README.md", content: "# Another package\n", error: "archive README differs" },
+      ...releaseNotices.flatMap((file) => [
+        { file, content: undefined, error: `Cannot read packed file ${file}` },
+        { file, content: "Changed license notice\n", error: `archive notice differs: ${file}` },
+      ]),
+    ];
+
+    await mkdir(unpacked);
+
+    for (const { file, content, error } of invalidFiles) {
+      await writeFile(archive, originalArchive);
+
+      await $`tar -xf ${`./${compiler.file}`} -C ${unpacked}`.cwd(directory).quiet();
+
+      const filename = join(unpacked, "package", file);
+
+      if (content === undefined) await rm(filename);
+      else await writeFile(filename, content);
+
+      await $`${process.execPath} pm pack --filename ${archive} --ignore-scripts`
+        .cwd(join(unpacked, "package"))
+        .quiet();
+
+      const integrity = archiveIntegrity(await readFile(archive));
+
+      await writeFile(
+        manifestPath,
+        JSON.stringify({
+          ...candidate,
+          packages: candidate.packages.map((entry) =>
+            entry === compiler ? { ...entry, integrity } : entry,
+          ),
+        }),
+      );
+
+      await expect(verifyReleaseCandidate(workspace, directory)).rejects.toThrow(error);
+    }
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

@@ -18,11 +18,11 @@ export default defineConfig({
 });
 ```
 
-The defaults are `allowUnsafeHTML: false`, `allowUnsafeEmbed: false`, `mountURL: "/"`, and an empty `resolutionOverrides.browser` map. Unknown settings fail validation. Browser resolution overrides match exact import names and are checked as browser code after replacement. See [getting started](getting-started.md) for an override example and [environment values](env.md) for environment loading and exposure rules.
+The defaults are `allowUnsafeHTML: false`, `allowUnsafeEmbed: false`, `mountURL: "/"`, and an empty `resolutionOverrides.browser` map. Unknown settings fail validation. Browser resolution overrides match exact import names and are checked as browser code after replacement. See [getting started](https://github.com/hesperia-js/hesperia/blob/main/docs/getting-started.md) for an override example and [environment values](https://github.com/hesperia-js/hesperia/blob/main/packages/hesperia/docs/env.md) for environment loading and exposure rules.
 
 ## Application mount and generated assets
 
-`mountURL` is the application's path prefix, such as `/dashboard`. It must be a pathname on the serving origin, without a query or fragment. The build saves its canonical value with the browser asset inventory. At the root mount, Hesperia serves its startup wrapper and generated assets under `/_hesperia/`; at `/dashboard`, that namespace is `/dashboard/_hesperia/`. Route navigation uses the same mount prefix. See [routing](routing.md) for the author-facing navigation behavior.
+`mountURL` is the application's path prefix, such as `/dashboard`. It must be a pathname on the serving origin, without a query or fragment. The build saves its canonical value with the browser asset inventory. At the root mount, Hesperia serves its startup wrapper and generated assets under `/_hesperia/`; at `/dashboard`, that namespace is `/dashboard/_hesperia/`. Route navigation uses the same mount prefix. See [routing](https://github.com/hesperia-js/hesperia/blob/main/docs/routing.md) for the author-facing navigation behavior.
 
 The `@hesperia/hosting` package exposes `createHost` for a Fetch-based server adapter. Pass the captured build's `hosting` record and `files` map, which must contain exactly the recorded `/assets/...` Blobs. A host selection can place the same captured build at another mount without recompiling it:
 
@@ -125,13 +125,13 @@ The importer, import span, import type, and captured file Blob are supplied to e
 
 `transformSource` receives the authored text and current stage text. It can return transformed code, a source map, diagnostics, watched files or directories, and data for its own `generateStyles` hook. Source transforms do not erase errors in the original TypeScript: checking includes the authored source. The compiler discovers component identities after transforms; `generateStyles` can attach application or component ownership to generated CSS. `transformCss` receives imported stylesheets without assigning one component owner; generated styles retain their declared owner. It can return another source map. Maps should relate generated positions to the immediate input stage so Hesperia can chain them back to authored files. These generic style artifacts are prepared by the build; runtime activation depends on the CSS ownership integration.
 
-Plugin functions and their imports run in a Bun process rooted at the application. Command, build, and editor preparation pass captured data across a private process boundary; plugin closures stay in that project process. Development and editor revisions reload a changed TypeScript config without restarting the server. Changes to `.env` files still require restarting the command; see [environment values](env.md). Return watched file or directory inputs from a hook when another file controls its result, so development and editor revisions can rebuild when that input changes.
+Plugin functions and their imports run in a Bun process rooted at the application. Command, build, and editor preparation pass captured data across a private process boundary; plugin closures stay in that project process. Development and editor revisions reload a changed TypeScript config without restarting the server. Changes to `.env` files still require restarting the command; see [environment values](https://github.com/hesperia-js/hesperia/blob/main/packages/hesperia/docs/env.md). Return watched file or directory inputs from a hook when another file controls its result, so development and editor revisions can rebuild when that input changes.
 
 A missing watched directory produces a warning while development watches its nearest existing ancestor for that directory's creation. Unrelated writes under the ancestor do not trigger rebuilds. Once the directory exists, its own watcher observes subsequent changes.
 
 ### Optional CSS and StyleX plugins
 
-CSS integrations are separate optional packages. Installing one does not enable it; add its factory to the ordered `plugins` array. Tailwind and ordinary PostCSS stages run for imported and generated CSS, while `stylex()` transforms recognized StyleX imports and produces one application-owned stylesheet. See [CSS integrations](css.md) for package setup, URL handling, watches, and map behavior.
+CSS integrations are separate optional packages. Installing one does not enable it; add its factory to the ordered `plugins` array. Tailwind and ordinary PostCSS stages run for imported and generated CSS, while `stylex()` transforms recognized StyleX imports and produces one application-owned stylesheet. See [CSS integrations](https://github.com/hesperia-js/hesperia/blob/main/docs/css.md) for package setup, URL handling, watches, and map behavior.
 
 ```ts
 // hesperia.config.ts

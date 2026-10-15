@@ -4,14 +4,27 @@ Reader: a TypeScript application author who knows JSX and wants to build their f
 
 Create a local application, configure its tools and startup, then add the document shell, routes, and page-specific head content. This guide uses the frontend-only starter to build a small task-workspace skeleton.
 
-## Create an application from the local checkout
+## Create an application
 
-These instructions create an application from locally built Hesperia packages.
+Run the creator from the `alpha` release channel with Bun:
+
+```sh
+bunx create-hesperia@alpha hesperia-todos --host none
+cd hesperia-todos
+bun run dev
+```
+
+The creator installs matching Hesperia packages and their dependencies. Open the
+URL printed by the development server, then continue with
+[application scripts](#application-scripts) below.
+
+The creator defaults to an Elysia host. Without `--host`, an interactive terminal prompts for the host; Enter selects Elysia and option 2 selects no host. This guide uses `--host none` for a frontend-only application. See [the Elysia guide](../packages/elysia/docs/elysia.md) for the default starter's server and typed client.
+
+### Use a local framework checkout
+
+To test unpublished framework changes, create an application from locally built Hesperia packages.
 The installed application checks use package archives and dependency overrides.
-Aeolia comes from the exact published `1.0.0-alpha.1` dependency. Registry
-installation of Hesperia requires the matching workspace release to be published.
-
-The creator defaults to an Elysia host. Without `--host`, an interactive terminal prompts for the host; Enter selects Elysia and option 2 selects no host. The commands below use `--host none` explicitly for this frontend-only example. See [the Elysia guide](elysia.md) for the default starter's server and typed client.
+Aeolia comes from the exact published `1.0.0-alpha.1` dependency.
 
 Run the following in PowerShell. Set `$framework` to the Hesperia checkout and
 choose a new or empty application directory. The setup uses Bun 1.4.2 and
@@ -111,7 +124,7 @@ This is the scripts section, not a replacement for the whole manifest.
 
 The installed `hesperia init` command serves an existing production build from the application root. It accepts no arguments and does not create an application. `preview` is an alias for that production server with an optional `--port` argument. The default Elysia starter has its own preview/start scripts for the generated server.
 
-`check` does not rewrite authored files. `check --fix` may change authored files and supported configuration files; it applies safe fixes, not lint suggestions or dangerous fixes. Compiler errors and remaining lint or format errors still fail the command. See [project checks and fixes](project-configuration.md#project-checks-and-fixes) for its file scope.
+`check` does not rewrite authored files. `check --fix` may change authored files and supported configuration files; it applies safe fixes, not lint suggestions or dangerous fixes. Compiler errors and remaining lint or format errors still fail the command. See [project checks and fixes](../packages/tooling/docs/project-configuration.md#project-checks-and-fixes) for its file scope.
 
 Keep `.hesperia/`, `node_modules/`, and `hesperia.d.ts` out of version control. The starter supplies these ignore entries.
 
@@ -379,11 +392,11 @@ This optional root module default-exports the startup configuration object. Curr
 
 Cached pages keep their component instance and DOM. Their reactive updates pause and their effects clean up while inactive. Restoration resumes reactivity and runs effects again. See [the page cache guide](routing-cache.md) for tasks and history-entry ownership.
 
-Import your adapted data API directly from an ordinary module, such as `src/api.ts`; it is not an `app.config.ts` property. The current manual adapter is `withAeolia(graph, contract)` from `hesperia/aeolia`. See [the data guide](data.md) when connecting a backend. For Elysia HTTP routes and Eden's typed client, see [the Elysia guide](elysia.md).
+Import your adapted data API directly from an ordinary module, such as `src/api.ts`; it is not an `app.config.ts` property. The current manual adapter is `withAeolia(graph, contract)` from `hesperia/aeolia`. See [the data guide](data.md) when connecting a backend. For Elysia HTTP routes and Eden's typed client, see [the Elysia guide](../packages/elysia/docs/elysia.md).
 
 ## Compiler/build settings
 
-Use `hesperia.config.json` or `hesperia.config.ts` at the application root. The JSON form is data only, so omit comments and trailing commas. The TypeScript form also registers plugins. Having both files is an error. See [project configuration and plugins](project-configuration.md) for typed configuration, custom imports, and fixed public values.
+Use `hesperia.config.json` or `hesperia.config.ts` at the application root. The JSON form is data only, so omit comments and trailing commas. The TypeScript form also registers plugins. Having both files is an error. See [project configuration and plugins](../packages/tooling/docs/project-configuration.md) for typed configuration, custom imports, and fixed public values.
 
 If you create the file before choosing settings, put `{}` in it. A blank file is invalid JSON. The editor reports that error on the config file while retaining code navigation with the last valid settings or defaults; command-line checking and builds require the file to be repaired.
 
@@ -424,7 +437,7 @@ For example, if a dependency needs a browser replacement:
 
 This is an optional illustration: supply a real replacement module with the exports your application needs before using it. The key matches the complete import text `"some-package"`, not `"some-package/subpath"`; wildcard keys are unsupported. Relative replacement paths resolve from the configuration directory, and a replacement can instead name another installed package. Use forward slashes in module paths on Windows too.
 
-The replacement still undergoes browser checking. This setting cannot make a server-only library work in a browser. Direct environment access remains forbidden in browser code; deployment-setting imports are deferred. See [compiler behavior](compiler.md) for resolution and supported syntax.
+The replacement still undergoes browser checking. This setting cannot make a server-only library work in a browser. Direct environment access remains forbidden in browser code; deployment-setting imports are deferred. See [compiler behavior](../packages/compiler/docs/compiler.md) for resolution and supported syntax.
 
 ## TypeScript and generated route declarations
 

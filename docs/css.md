@@ -4,7 +4,7 @@ Reader: application authors configuring styles for components and routed pages.
 
 ## Optional CSS transforms
 
-Ordinary CSS imports work without an optional transform package. Add an integration only when the application needs it, and register its factory in `hesperia.config.ts` as shown in [project configuration](project-configuration.md#optional-css-and-stylex-plugins). Installation by itself has no effect.
+Ordinary CSS imports work without an optional transform package. Add an integration only when the application needs it, and register its factory in `hesperia.config.ts` as shown in [project configuration](../packages/tooling/docs/project-configuration.md#optional-css-and-stylex-plugins). Installation by itself has no effect.
 
 ```powershell
 bun add @hesperia/postcss postcss

@@ -11,7 +11,8 @@
     "directory": "packages/hesperia"
   },
   "files": [
-    "dist"
+    "dist",
+    "docs"
   ],
   "type": "module",
   "sideEffects": false,

@@ -75,7 +75,7 @@ so `navigation.href("/settings")` returns `/dashboard/settings` and
 at `/dashboard`. Set the standalone mount with `mountURL` in
 `hesperia.config.ts` or `hesperia.config.json`; a host adapter can select
 another mount for the same captured build. See [project configuration and
-hosting](project-configuration.md#application-mount-and-generated-assets).
+hosting](../packages/tooling/docs/project-configuration.md#application-mount-and-generated-assets).
 
 Changing only the URL fragment, such as `/guide#examples` to `/guide#reference`, keeps the current page and its component state. The router runs the current route's guards, applies the requested history change, and focuses and scrolls to the fragment target. It does not run departure checks because the page remains active. Removing the fragment also retains the page. Back and Forward restore the saved focus and scroll position for the destination history entry, including entries whose URLs contain fragments.
 

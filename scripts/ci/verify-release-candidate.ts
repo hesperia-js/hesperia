@@ -10,7 +10,7 @@ import {
   releaseNotices,
 } from "./release-candidate.ts";
 
-/** Check the exact archives, their merge commit, inventory, exports, and registry dependency pins. */
+/** Check the archives, provenance, documentation, notices, exports, and dependency pins. */
 export async function verifyReleaseCandidate(workspaceRoot: string, directory: string) {
   const candidate = await readReleaseCandidate(directory);
   const release = await releaseWorkspace(workspaceRoot);
@@ -58,6 +58,19 @@ export async function verifyReleaseCandidate(workspaceRoot: string, directory: s
       manifest.repository,
       release.packages[index]!.repository,
       `Packed repository metadata differs for ${package_.name}`,
+    );
+
+    const readme = Buffer.from(await packedFile(archive, "README.md"));
+
+    assert.ok(
+      readme.toString("utf8").trim().length > 0,
+      `${package_.name} archive README is empty`,
+    );
+
+    assert.deepEqual(
+      readme,
+      await readFile(resolve(release.plan[index]!.packageRoot, "README.md")),
+      `${package_.name} archive README differs from its package`,
     );
 
     for (const notice of releaseNotices)

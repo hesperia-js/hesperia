@@ -11,7 +11,7 @@ The Elysia integration connects four parts of an application:
 
 The server module is analyzed for types. Hesperia does not execute it in the browser or import its runtime values into the client bundle. At runtime, `treaty<App>(url)` is an Eden proxy configured with a URL; the generic `App` parameter supplies types, while the URL supplies the request destination.
 
-The Hesperia packages share the authored version `1.0.0-alpha.1`. The installed-application checks use local package archives and dependency overrides. Publication, ordinary registry installation, and `bun create hesperia` have not been verified against a published release.
+The integration is part of Hesperia's alpha release channel. Use matching Hesperia alpha packages, Eden 1.4.10, and Aeolia 1.0.0-alpha.1.
 
 ## Select the server App
 
@@ -67,7 +67,7 @@ export const effects = [
 ];
 ```
 
-The Elysia starter generates `src/server-internals.ts`, including `handleHesperiaRequest`, and initializes its host from `src/server-entry.ts`. The import above refers to that generated support module. A hand-written server needs its own initialized Hesperia host and request handler; see [application hosting](project-configuration.md#application-mount-and-generated-assets).
+The Elysia starter generates `src/server-internals.ts`, including `handleHesperiaRequest`, and initializes its host from `src/server-entry.ts`. The import above refers to that generated support module. A hand-written server needs its own initialized Hesperia host and request handler; see [application hosting](https://github.com/hesperia-js/hesperia/blob/main/packages/tooling/docs/project-configuration.md#application-mount-and-generated-assets).
 
 The `onRequest` hook lets the server pass Hesperia-owned document and asset requests to its host. It can also widen Eden's checked route result: the response type may include `Response` or `undefined` in addition to the route's returned data. The client code must handle those cases.
 
@@ -169,7 +169,7 @@ const notes = api.api.notes.get(
 );
 ```
 
-Eden's optional query/header request object remains an input even when `.get()` accepts no argument. Supplying `undefined` explicitly keeps the query options in their own position. The constructor returns a frozen, shallowly readonly copy and preserves the option value types. See [query and mutation options](data.md#query-and-mutation-options) for no-input Aeolia operations and checked input/options overlap.
+Eden's optional query/header request object remains an input even when `.get()` accepts no argument. Supplying `undefined` explicitly keeps the query options in their own position. The constructor returns a frozen, shallowly readonly copy and preserves the option value types. See [query and mutation options](https://github.com/hesperia-js/hesperia/blob/main/docs/data.md#query-and-mutation-options) for no-input Aeolia operations and checked input/options overlap.
 
 ## Declare query effects
 
@@ -222,14 +222,14 @@ Ordinary opaque `Response` values remain permitted. The compiler does not infer 
 
 Eden reserves the exact lowercase `subscribe` property throughout its checked path tree. The compiler rejects HTTP routes with a literal `subscribe` path segment, including nested and intermediate segments and methods other than GET. A custom HTTP `SUBSCRIBE` route is separately rejected because Eden dispatches `.subscribe()` as WebSocket transport. A parameter named `:subscribe` and a path such as `/subscription-status` do not have the reserved literal segment.
 
-Custom HTTP methods require support from both Eden's client transport and the server runtime. In the pinned Elysia and Bun setup, the `M-SEARCH` example carries a JSON body through to the route handler. Bun's `Request` constructor changes `BREW` to `GET`, and its listener rejects raw `BREW` before the handler runs. See [project configuration](project-configuration.md) for the tested runtime context.
+Custom HTTP methods require support from both Eden's client transport and the server runtime. In the pinned Elysia and Bun setup, the `M-SEARCH` example carries a JSON body through to the route handler. Bun's `Request` constructor changes `BREW` to `GET`, and its listener rejects raw `BREW` before the handler runs. See [project configuration](https://github.com/hesperia-js/hesperia/blob/main/packages/tooling/docs/project-configuration.md) for the tested runtime context.
 
-The local `create-hesperia` CLI defaults to the Elysia starter. Pass `--host elysia` to select it explicitly, or `--host none` to create the frontend starter without an Elysia host. When the flag is omitted in an interactive terminal, choose option 2 for no host.
+The `create-hesperia` CLI defaults to the Elysia starter. Pass `--host elysia` to select it explicitly, or `--host none` to create the frontend starter without an Elysia host. When the flag is omitted in an interactive terminal, choose option 2 for no host.
 
 The generated Elysia starter still opens on its counter page. It also provides the explicit server plugin configuration and a typed `src/client.ts` entry for route components to use; adding that client does not replace the starter page.
 
 The starter's server loads `.hesperia/build` with `readBuild` from
 `@hesperia/hosting`, then passes the captured record and Blob map to `createHost`.
 The published browser build can be served without the application source tree.
-See [project configuration](project-configuration.md) for capture validation and
+See [project configuration](https://github.com/hesperia-js/hesperia/blob/main/packages/tooling/docs/project-configuration.md) for capture validation and
 publication behavior.

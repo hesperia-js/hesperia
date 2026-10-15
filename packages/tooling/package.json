@@ -11,7 +11,8 @@
     "hesperia": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "docs"
   ],
   "type": "module",
   "main": "./dist/project-service.js",

@@ -78,5 +78,5 @@ constrained on the wrapper; an unspecified dimension may collapse while the
 inner iframe is stopped in the page cache. Supply sizing or author CSS when
 the inactive page needs a reserved box.
 
-See [native element behavior](native-elements.md#foreign-and-safe-html-domains)
+See [native element behavior](native-elements.md)
 for the broader DOM policy.

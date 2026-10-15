@@ -110,7 +110,7 @@ Browser generation publishes the possible modules and preserves lazy execution: 
 The compiler registers the original dynamic import Promise for component awaits
 without assigning it to a component. A module-level variable can hold that Promise
 for several components to await, each within its own lifetime. This does not make
-arbitrary Promises valid component waits. See [asset imports](assets.md) for direct
+arbitrary Promises valid component waits. See [asset imports](https://github.com/hesperia-js/hesperia/blob/main/docs/assets.md) for direct
 and stored-Promise examples.
 
 Extracted route guards can also import finite TypeScript targets lazily. The compiler includes those modules and their dependencies in the emitted graph, including module initialization, side-effect imports, and dependencies reached through `yield` or `yield*`. They still execute at the native import timing, and shared dependencies initialize once. Browser capability checking applies to that emitted graph before publication.

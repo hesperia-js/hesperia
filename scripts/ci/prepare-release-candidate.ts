@@ -55,12 +55,14 @@ export async function prepareReleaseCandidate(workspaceRoot: string, directory: 
       }
 
       manifest.license = rootManifest.license;
-      manifest.files = [...new Set([...manifest.files, ...releaseNotices])];
+      manifest.files = [...new Set([...manifest.files, "README.md", ...releaseNotices])];
 
       await writeFile(
         resolve(stagedPackage, "package.json"),
         `${JSON.stringify(manifest, null, 2)}\n`,
       );
+
+      await cp(resolve(target.packageRoot, "README.md"), resolve(stagedPackage, "README.md"));
 
       for (const notice of releaseNotices)
         await cp(resolve(workspaceRoot, notice), resolve(stagedPackage, notice));
