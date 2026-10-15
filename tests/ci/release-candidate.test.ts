@@ -211,7 +211,7 @@ test("one real packed workspace candidate retains package documentation and noti
     for (const { file, content, error } of invalidFiles) {
       await writeFile(archive, originalArchive);
 
-      await $`tar -xf ${`./${compiler.file}`} -C ${unpacked}`.cwd(directory).quiet();
+      await $`tar -xf ${`./${compiler.file}`} -C ../unpacked`.cwd(directory).quiet();
 
       const filename = join(unpacked, "package", file);
 
