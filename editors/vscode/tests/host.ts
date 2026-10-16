@@ -1,7 +1,9 @@
 import * as vscode from "vscode";
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { readFile, realpath, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { isAbsolute, join, relative } from "node:path";
 
 /** Verify the built extension inside VS Code's extension host. */
 export async function run(): Promise<void> {
@@ -14,9 +16,62 @@ export async function run(): Promise<void> {
   try {
     const extension = vscode.extensions.getExtension("hesperia.hesperia-vscode");
 
-    assert(extension, "Hesperia development extension is loaded.");
+    assert(extension, "Hesperia extension is loaded.");
 
-    await extension.activate();
+    const expectationPath = join(folder.uri.fsPath, "installed-editor-expectation.json");
+    let installedArtifact: Record<string, unknown> | undefined;
+
+    if (existsSync(expectationPath)) {
+      const expected = JSON.parse(await readFile(expectationPath, "utf8"));
+
+      assert.equal(extension.id, "hesperia.hesperia-vscode");
+
+      assert.equal(extension.packageJSON.version, expected.version);
+
+      assert.equal(await realpath(extension.extensionPath), await realpath(expected.extensionPath));
+
+      const driver = vscode.extensions.getExtension("hesperia-tests.hesperia-acceptance-driver");
+
+      assert(driver, "The development extension is the separate acceptance driver.");
+
+      assert.notEqual(
+        await realpath(extension.extensionPath),
+        await realpath(driver.extensionPath),
+      );
+
+      const require = createRequire(join(folder.uri.fsPath, "package.json"));
+      const modules = await realpath(join(folder.uri.fsPath, "node_modules"));
+      const packages: Record<string, string> = {};
+
+      for (const specifier of [
+        "hesperia/client",
+        "@hesperia/compiler",
+        "@hesperia/tooling",
+        "@hesperia/language-server/bin",
+      ]) {
+        const resolved = await realpath(require.resolve(specifier));
+        const within = relative(modules, resolved);
+
+        assert(
+          within !== ".." &&
+            !within.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) &&
+            !isAbsolute(within),
+          `Installed package resolves inside the isolated node_modules: ${specifier}: ${resolved}`,
+        );
+
+        packages[specifier] = resolved;
+      }
+
+      installedArtifact = {
+        id: extension.id,
+        version: extension.packageJSON.version,
+        extensionPath: extension.extensionPath,
+        vsixSha256: expected.vsixSha256,
+        packages,
+      };
+    }
+
+    if (!installedArtifact) await extension.activate();
 
     const shellUri = vscode.Uri.joinPath(folder.uri, "app.tsx");
     const apiUri = vscode.Uri.joinPath(folder.uri, "api.ts");
@@ -444,6 +499,7 @@ export default function Page() {
       report,
       JSON.stringify({
         passed: true,
+        ...(installedArtifact ? { installedArtifact } : {}),
         checks: [
           "root app shell recognition and diagnostics",
           "unsaved ordinary TypeScript dependency update",

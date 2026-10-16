@@ -1,14 +1,37 @@
 {
   "name": "hesperia-vscode",
   "displayName": "Hesperia",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Authored TSX diagnostics and navigation for Hesperia projects.",
   "categories": [
     "Programming Languages"
   ],
+  "keywords": [
+    "hesperia",
+    "language-server",
+    "tsx"
+  ],
+  "homepage": "https://github.com/hesperia-js/hesperia/tree/main/editors/vscode",
+  "bugs": "https://github.com/hesperia-js/hesperia/issues",
   "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hesperia-js/hesperia.git",
+    "directory": "editors/vscode"
+  },
   "publisher": "hesperia",
+  "files": [
+    "dist/extension.cjs",
+    "syntaxes/hesperia.tmLanguage.json",
+    "language-configuration.json",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "COPYING",
+    "LICENSE-COMMERCIAL.md",
+    "ThirdPartyNotices.txt"
+  ],
   "main": "./dist/extension.cjs",
   "scripts": {
     "build": "bun build src/extension.ts --target=node --format=cjs --external=vscode --outfile=dist/extension.cjs",

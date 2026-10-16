@@ -1,7 +1,10 @@
 param(
   [string]$CodePath = (Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\Code.exe'),
   [string]$ExtensionPath = '',
-  [string]$TestHostPath = ''
+  [string]$TestHostPath = '',
+  [string]$VsixPath = '',
+  [string]$InstalledProjectPath = '',
+  [string]$ReceiptPath = ''
 )
 $ErrorActionPreference = 'Stop'
 
@@ -18,6 +21,12 @@ $testRoot = [System.IO.Path]::GetFullPath($testRoot)
 if (-not $testRoot.StartsWith($temporaryBase, [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid test workspace path.' }
 
 $coverageEnabled = -not [string]::IsNullOrWhiteSpace($env:HESPERIA_EDITOR_COVERAGE_CONFIG)
+$installedMode = -not [string]::IsNullOrWhiteSpace($VsixPath)
+
+if ($installedMode -ne (-not [string]::IsNullOrWhiteSpace($InstalledProjectPath))) { throw 'Supply both -VsixPath and -InstalledProjectPath for installed-artifact acceptance.' }
+
+if ($installedMode -and ($coverageEnabled -or $ExtensionPath)) { throw 'Installed-artifact acceptance requires the ordinary host and cannot use an extension development override or coverage instrumentation.' }
+
 $coverageOutput = $env:HESPERIA_EDITOR_COVERAGE_OUTPUT_DIR
 $processEvents = [System.Collections.Generic.List[object]]::new()
 $ownedProcessIds = @{}
@@ -1024,10 +1033,123 @@ try {
     if (-not (Test-Path -LiteralPath $coverageOutput)) { throw 'Editor coverage output directory is missing.' }
   }
 
-  New-Item -ItemType Directory -Path (Join-Path $testRoot 'src'), (Join-Path $testRoot 'node_modules') | Out-Null
-  New-Item -ItemType Directory -Path (Join-Path $testRoot 'node_modules\@hesperia') | Out-Null
-  New-Item -ItemType Junction -Path (Join-Path $testRoot 'node_modules\hesperia') -Target (Join-Path $packageRoot 'packages\hesperia') | Out-Null
-  New-Item -ItemType Junction -Path (Join-Path $testRoot 'node_modules\@hesperia\language-server') -Target (Join-Path $packageRoot 'packages\language-server') | Out-Null
+  New-Item -ItemType Directory -Path (Join-Path $testRoot 'src') | Out-Null
+
+  if ($installedMode) {
+    $candidateProject = [System.IO.Path]::GetFullPath($InstalledProjectPath)
+    $candidateModules = Join-Path $candidateProject 'node_modules'
+
+    if (-not (Test-Path -LiteralPath (Join-Path $candidateProject 'package.json')) -or -not (Test-Path -LiteralPath $candidateModules)) { throw 'Installed candidate project requires package.json and node_modules.' }
+
+    $linkedEntries = @(Get-Item -LiteralPath $candidateModules; Get-ChildItem -LiteralPath $candidateModules -Recurse -Force) | Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint }
+
+    if ($linkedEntries) { throw ('Installed candidate must contain real npm package files, without links: ' + $linkedEntries[0].FullName) }
+
+    Copy-Item -LiteralPath $candidateModules -Destination (Join-Path $testRoot 'node_modules') -Recurse
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [System.IO.Compression.ZipFile]::OpenRead([System.IO.Path]::GetFullPath($VsixPath))
+
+    try {
+      $entry = $archive.GetEntry('extension/package.json')
+
+      if ($null -eq $entry) { throw 'VSIX has no extension/package.json.' }
+
+      $reader = [System.IO.StreamReader]::new($entry.Open())
+
+      try { $vsixPackage = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+    } finally { $archive.Dispose() }
+
+    if ($vsixPackage.publisher -ne 'hesperia' -or $vsixPackage.name -ne 'hesperia-vscode' -or [string]::IsNullOrWhiteSpace($vsixPackage.version)) { throw 'VSIX identity is not hesperia.hesperia-vscode with a version.' }
+
+    $extensionsDirectory = Join-Path $testRoot 'extensions'
+    $codeRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $CodePath))
+    $cliPath = Join-Path $codeRoot 'resources\app\out\cli.js'
+
+    if (-not (Test-Path -LiteralPath $cliPath -PathType Leaf)) {
+      $commandPath = Join-Path $codeRoot 'bin\code.cmd'
+
+      if (-not (Test-Path -LiteralPath $commandPath -PathType Leaf)) { throw ('VS Code CLI launcher is missing: ' + $commandPath) }
+
+      $commandSource = Get-Content -LiteralPath $commandPath -Raw
+      $cliCommand = [regex]::Match($commandSource, '(?im)^"%~dp0(?<executable>[^"\r\n]+\.exe)"\s+"%~dp0(?<cli>[^"\r\n]+\\resources\\app\\out\\cli\.js)"\s+%\*\s*$')
+
+      if (-not $cliCommand.Success) { throw 'VS Code CLI launcher has no recognized package-owned entry point.' }
+
+      $commandRoot = Split-Path -Parent $commandPath
+      $commandExecutable = [System.IO.Path]::GetFullPath((Join-Path $commandRoot $cliCommand.Groups['executable'].Value))
+      $cliPath = [System.IO.Path]::GetFullPath((Join-Path $commandRoot $cliCommand.Groups['cli'].Value))
+
+      if (
+        -not $commandExecutable.Equals([System.IO.Path]::GetFullPath($CodePath), [StringComparison]::OrdinalIgnoreCase) -or
+        -not $cliPath.StartsWith(($codeRoot.TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase)
+      ) { throw 'VS Code CLI launcher entry point does not belong to the selected installation.' }
+    }
+
+    if (-not (Test-Path -LiteralPath $cliPath -PathType Leaf)) { throw ('VS Code CLI entry point is missing: ' + $cliPath) }
+
+    $installArguments = @(
+      ('"' + $cliPath + '"'),
+      ('--install-extension="' + [System.IO.Path]::GetFullPath($VsixPath) + '"'), '--force',
+      ('--user-data-dir="' + (Join-Path $testRoot 'user-data') + '"'),
+      ('--extensions-dir="' + $extensionsDirectory + '"')
+    )
+    $previousElectronRunAsNode = $env:ELECTRON_RUN_AS_NODE
+
+    try {
+      $env:ELECTRON_RUN_AS_NODE = '1'
+      $installer = Start-Process -FilePath $CodePath -ArgumentList $installArguments -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $testRoot 'install.stdout.log') -RedirectStandardError (Join-Path $testRoot 'install.stderr.log')
+      $null = $installer.Handle
+    } finally { $env:ELECTRON_RUN_AS_NODE = $previousElectronRunAsNode }
+
+    if (-not $installer.WaitForExit(60000)) {
+      $installer.Kill()
+
+      throw 'VSIX installation exceeded 60 seconds.'
+    }
+
+    if ($installer.ExitCode -ne 0) { throw ('VSIX installation failed with exit code ' + $installer.ExitCode + '; logs: ' + $testRoot) }
+
+    $installedExtensions = @(Get-ChildItem -LiteralPath $extensionsDirectory -Directory | Where-Object {
+      $manifestPath = Join-Path $_.FullName 'package.json'
+
+      if (Test-Path -LiteralPath $manifestPath) {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $manifest.publisher -eq $vsixPackage.publisher -and $manifest.name -eq $vsixPackage.name -and $manifest.version -eq $vsixPackage.version
+      }
+    })
+
+    if ($installedExtensions.Count -ne 1) { throw 'The exact VSIX identity/version was not installed once in the isolated extensions directory.' }
+
+    $testExtensionRoot = Join-Path $testRoot 'acceptance-driver'
+
+    New-Item -ItemType Directory -Path $testExtensionRoot | Out-Null
+
+    [System.IO.File]::WriteAllText((Join-Path $testExtensionRoot 'package.json'), '{"name":"hesperia-acceptance-driver","publisher":"hesperia-tests","version":"0.0.0","engines":{"vscode":"*"}}', [System.Text.UTF8Encoding]::new($false))
+
+    $vsixStream = [System.IO.File]::OpenRead([System.IO.Path]::GetFullPath($VsixPath))
+    $vsixHasher = [System.Security.Cryptography.SHA256]::Create()
+
+    try {
+      $vsixHash = [BitConverter]::ToString($vsixHasher.ComputeHash($vsixStream)).Replace('-', '').ToLowerInvariant()
+    } finally {
+      $vsixStream.Dispose()
+      $vsixHasher.Dispose()
+    }
+
+    $expectation = @{
+      extensionPath = $installedExtensions[0].FullName
+      version = [string]$vsixPackage.version
+      vsixSha256 = $vsixHash
+    }
+
+    [System.IO.File]::WriteAllText((Join-Path $testRoot 'installed-editor-expectation.json'), ($expectation | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false))
+  } else {
+    New-Item -ItemType Directory -Path (Join-Path $testRoot 'node_modules') | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $testRoot 'node_modules\@hesperia') | Out-Null
+    New-Item -ItemType Junction -Path (Join-Path $testRoot 'node_modules\hesperia') -Target (Join-Path $packageRoot 'packages\hesperia') | Out-Null
+    New-Item -ItemType Junction -Path (Join-Path $testRoot 'node_modules\@hesperia\language-server') -Target (Join-Path $packageRoot 'packages\language-server') | Out-Null
+  }
 
   Set-Content -LiteralPath (Join-Path $testRoot 'package.json') -Encoding UTF8 -Value '{"name":"hesperia-editor-test","private":true,"type":"module"}'
 
@@ -1146,6 +1268,12 @@ try {
 
   if (-not $result.passed) { throw $result.error }
 
+  if ($installedMode -and ($null -eq $result.installedArtifact -or @($result.checks).Count -ne 19)) { throw 'Installed acceptance did not produce all nineteen checks and artifact identity evidence.' }
+
+  if ($ReceiptPath) {
+    Copy-Item -LiteralPath $resultPath -Destination ([System.IO.Path]::GetFullPath($ReceiptPath))
+  }
+
   if ($coverageEnabled) {
     Copy-Item -LiteralPath (Join-Path $testRoot 'editor-result.json') -Destination (Join-Path $coverageOutput 'editor-result.json')
 
@@ -1174,6 +1302,23 @@ try {
   Write-Output ('VS Code extension checks passed: ' + ($result.checks -join ', '))
 } catch {
   $testFailureMessage = $_.Exception.Message
+
+  if ($installedMode -and $ReceiptPath) {
+    try {
+      $failureEvidence = Join-Path (Split-Path -Parent ([System.IO.Path]::GetFullPath($ReceiptPath))) ('failed-editor-' + [System.IO.Path]::GetFileName($testRoot))
+
+      New-Item -ItemType Directory -Path $failureEvidence -Force | Out-Null
+
+      [System.IO.File]::WriteAllText((Join-Path $failureEvidence 'failure.txt'), $testFailureMessage, [System.Text.UTF8Encoding]::new($false))
+
+      foreach ($relativePath in @('install.stdout.log', 'install.stderr.log', 'editor-result.json', 'installed-editor-expectation.json', 'user-data\logs')) {
+        $sourcePath = Join-Path $testRoot $relativePath
+
+        if (Test-Path -LiteralPath $sourcePath) { Copy-Item -LiteralPath $sourcePath -Destination $failureEvidence -Recurse }
+      }
+    } catch { Write-Output ('Could not copy installed editor diagnostics: ' + $_.Exception.Message) }
+  }
+
   throw
 } finally {
   if ($coverageEnabled) {
@@ -1401,11 +1546,11 @@ try {
 
   $junction = Join-Path $testRoot 'node_modules\hesperia'
 
-  if (Test-Path -LiteralPath $junction) { (Get-Item -LiteralPath $junction).Delete() }
+  if (-not $installedMode -and (Test-Path -LiteralPath $junction)) { (Get-Item -LiteralPath $junction).Delete() }
 
   $languageServerJunction = Join-Path $testRoot 'node_modules\@hesperia\language-server'
 
-  if (Test-Path -LiteralPath $languageServerJunction) { (Get-Item -LiteralPath $languageServerJunction).Delete() }
+  if (-not $installedMode -and (Test-Path -LiteralPath $languageServerJunction)) { (Get-Item -LiteralPath $languageServerJunction).Delete() }
 
   if ($passed) {
     if (-not $testRoot.StartsWith($temporaryBase, [StringComparison]::OrdinalIgnoreCase) -or -not ([System.IO.Path]::GetFileName($testRoot)).StartsWith('hesperia-vscode-')) { throw 'Refusing invalid cleanup path.' }

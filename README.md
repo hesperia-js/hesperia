@@ -23,8 +23,13 @@ Hesperia's compiler must process this source. The current implementation targets
 browser rendering; server rendering, hydration, and static generation follow
 after the browser execution model is verified.
 
-This package is not yet ready for application adoption. To work on it, follow
-the [contributor guide](CONTRIBUTING.md)
+Hesperia is available for experimental application trials. It is not yet ready
+for general application adoption. The [getting-started guide](docs/getting-started.md) covers the application setup for
+the npm alpha release and for a local framework checkout. For VS Code, install
+the [Hesperia extension](editors/vscode/README.md) and the application's matching
+language-server package. Marketplace publication of the extension is pending.
+
+To work on Hesperia itself, follow the [contributor guide](CONTRIBUTING.md)
 and [test guide](tests/README.md).
 
 The [native element guide](docs/native-elements.md) explains element handles,

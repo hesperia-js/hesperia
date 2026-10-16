@@ -68,7 +68,7 @@ source changes run every ordinary test root and the browser, package, and editor
 gates. A known test-only change can select its owning root. Known documentation
 changes can skip runtime gates; distributed documentation still selects package
 consumers. Partial runs do not create or combine whole-project coverage receipts.
-The standalone editor gate runs on Windows. The Linux native editor proof runs
+The standalone editor gate installs the candidate VSIX on Windows. The Linux native editor proof runs
 inside full platform coverage; a partial run does not claim that proof.
 
 The build job packs the ten workspace packages once and saves a versioned candidate
@@ -77,6 +77,13 @@ the installed behavior tests against those exact archives. Tests whose contract
 requires deliberately changing an archive or building a fixture retain their
 separate local preparation. Linked-package checks retain their module-identity
 contract alongside the installed candidate checks.
+
+When the editor gate is selected, the build job also prepares an `editor-candidate`
+artifact. The Windows editor job installs that exact VSIX and the same run's npm
+archives, then runs the existing nineteen behavior checks. It saves the installed
+identity, archive hash, and package paths in `editor-package-evidence`. See
+[releasing the VS Code extension](editor-release.md) for packaging, publisher
+setup, approval, and publication of the accepted archive.
 
 Each candidate archive contains its package's `README.md` and exact copies of the
 root `LICENSE`, `COPYING`, and `LICENSE-COMMERCIAL.md`. Candidate preparation copies
@@ -96,7 +103,9 @@ documents the update metadata fields and checksum validation.
 On Windows, setup checks `resources/app/package.json`, the product commit, and
 `Code.exe`'s `ProductVersion` against the resolved metadata without starting the
 executable. The coverage step passes the verified path and actual version to
-the native-editor coverage group; the standalone editor job runs `editors/vscode/test.ps1`.
+the native-editor coverage group; the standalone editor job runs
+`scripts/ci/test-editor-package.ts`, which invokes `editors/vscode/test.ps1` in
+installed-VSIX mode.
 Both exercise a real editor process.
 
 The Linux coverage step installs Python 3, Xvfb, and `strace` on the ephemeral
@@ -296,16 +305,27 @@ For each release, update the root and public package versions, internal package
 pins, and the versions emitted by the creator and tooling application templates.
 Aeolia keeps its independently chosen exact dependency version.
 
-Configure the GitHub `npm` environment before merging the first release. Leave
-the repository variable `NPM_TRUSTED_PUBLISHING` unset or `false` for that release.
-The workflow still verifies the exact merge commit, preflights the candidate,
-and creates `v<VERSION>`. Its job summary links the candidate artifact and states
-that manual npm publication is required. The approved first version remains
-`1.0.0-alpha.1`.
+The VS Code extension uses its own numeric pre-release version. Full release
+verification prepares and tests its VSIX alongside the npm candidates, but npm
+publication does not publish to the Marketplace. Complete the separate
+[editor publication steps](editor-release.md#publish-after-approval) after
+approval to make both distributions available to application authors.
 
-After the merge, download the original `release-candidate` artifact from that
-successful workflow run. Check out its merge commit and extract the artifact
-into `.hesperia/release-candidate`. Verify the archives and registry retry state:
+Configure the GitHub `npm` environment before merging a release. For packages
+that already exist on npm, configure or confirm all ten trusted publishers as
+described below, then set `NPM_TRUSTED_PUBLISHING` to `true` before the release
+workflow runs. Its first successful publication activates each new configuration.
+
+If the packages have never been published, bootstrap them with manual
+publication. Leave `NPM_TRUSTED_PUBLISHING` unset or `false` for that release.
+The workflow verifies the exact merge commit, preflights the candidate, and
+creates `v<VERSION>`. Its job summary links the candidate artifact and states
+that manual npm publication is required. The same manual path is available when
+automatic publication is disabled for an existing package release.
+
+For manual publication after the merge, download the original
+`release-candidate` artifact from that successful workflow run. Check out its
+merge commit and extract the artifact into `.hesperia/release-candidate`. Verify the archives and registry retry state:
 
 ```powershell
 bun scripts/ci/verify-release-candidate.ts --candidate-dir .hesperia/release-candidate
@@ -327,8 +347,9 @@ only after all verification commands succeed. Keep credentials in your local
 npm client; the workflow does not need an npm token. Do not publish before the
 release PR passes and merges: its unpublished-version check must still succeed.
 
-After manual publication, configure an npm trusted publisher for each of
-the ten package names: `hesperia`, `@hesperia/compiler`, `@hesperia/tooling`,
+For packages already published to npm, configure or confirm an npm trusted
+publisher for each of the ten package names: `hesperia`, `@hesperia/compiler`,
+`@hesperia/tooling`,
 `@hesperia/language-server`, `@hesperia/hosting`, `create-hesperia`,
 `@hesperia/elysia`, `@hesperia/postcss`, `@hesperia/tailwind`, and
 `@hesperia/stylex`. Use organization `hesperia-js`, repository `hesperia`, workflow
@@ -342,8 +363,8 @@ activated publisher remains available for later releases. See
 [npm's activation window](https://docs.npmjs.com/trusted-publishers/#trusted-publisher-configuration-expiry).
 
 Once all ten publishers are configured, set the repository variable
-`NPM_TRUSTED_PUBLISHING` to `true` to enable automatic npm
-publication for later releases. npm requires each package to exist before its
+`NPM_TRUSTED_PUBLISHING` to `true` before the next release workflow runs to enable
+automatic npm publication. npm requires each package to exist before its
 trusted publisher can be configured. See
 [npm's trusted publisher prerequisites](https://docs.npmjs.com/cli/v11/commands/npm-trust/#prerequisites).
 

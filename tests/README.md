@@ -45,13 +45,30 @@ the browser tests exercise the bundle, including retained native objects and
 synchronous DOM updates. The first counter fixture alone does not establish the
 full milestone.
 
-The VS Code extension has a separate real editor gate, `bun run test:editor`,
-also included in `bun run check`. Install its pinned dependencies once with
-`bun install --cwd editors/vscode`. The command builds and typechecks the extension,
-then runs the installed Windows VS Code in isolated user-data and extension
-directories. See [the extension guide](../editors/vscode/README.md) for the exact
-checks and an alternate VS Code executable path. This gate must not be replaced
-by a mocked `vscode` module.
+The VS Code extension has two real editor gates on Windows. Both use isolated
+workspace, user-data, and extension directories, and both are included in
+`bun run check`. Install the pinned dependencies with
+`bun install --cwd editors/vscode`.
+
+- `bun run test:editor` builds and typechecks the extension, then loads its built
+  source through `--extensionDevelopmentPath`. The language server uses workspace
+  packages. Native coverage capture uses this development path with its own
+  instrumentation and process-observation controls.
+- `bun run test:editor:installed` builds npm package candidates and a prerelease
+  VSIX, installs them into isolated directories, then runs the installed
+  extension against the installed application packages. It retains the result
+  and candidate hashes under `.hesperia/editor-package-evidence/`. This checks
+  the distribution boundary, including extension identity and physical package
+  resolution outside the checkout.
+
+Both gates exercise recognition, diagnostics, navigation, completions, and
+unsaved changes. The standalone Windows CI editor job installs the exact VSIX
+and npm candidates prepared by the artifact job. Full native editor coverage
+remains a separate Windows and Linux gate. See
+[the extension guide](../editors/vscode/README.md) for features and
+[the editor release guide](../docs/editor-release.md) for commands that reuse
+existing candidates or select another VS Code executable. A mocked `vscode`
+module cannot replace either native gate.
 
 The Linux editor observer has Python standard-library controls for trace parsing
 and editor log retention. CI runs them before the final Linux coverage aggregate.

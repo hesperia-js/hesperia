@@ -39,11 +39,13 @@
     "test:golden": "bun run --cwd golden test",
     "test:editor": "bun run build && bun run --cwd editors/vscode typecheck && bun run --cwd editors/vscode build && bun run --cwd editors/vscode build:test && powershell -NoProfile -ExecutionPolicy Bypass -File editors/vscode/test.ps1",
     "typecheck": "bunx tsc --noEmit -p tsconfig.json && bunx tsc --noEmit -p tests/package/fixtures/tsconfig.json && bunx tsc --noEmit -p tests/tooling/fixtures/drivers/tsconfig.json && bunx tsc --noEmit -p packages/create-hesperia/tsconfig.json",
-    "check": "bun run build && bun run typecheck && bun run lint && bun run fmt:check && bun test --timeout=45000 tests/compiler tests/runtime tests/data tests/tooling tests/routing tests/editor tests/hosting tests/ci && bun run test:browser && bun test --timeout=60000 tests/package && bun run test:golden && bun run test:editor",
+    "check": "bun run build && bun run typecheck && bun run lint && bun run fmt:check && bun test --timeout=45000 tests/compiler tests/runtime tests/data tests/tooling tests/routing tests/editor tests/hosting tests/ci && bun run test:browser && bun test --timeout=60000 tests/package && bun run test:golden && bun run test:editor && bun run test:editor:installed",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "lint": "oxlint",
-    "lint:fix": "oxlint --fix"
+    "lint:fix": "oxlint --fix",
+    "package:editor": "bun scripts/ci/editor-package.ts",
+    "test:editor:installed": "bun run build && bun scripts/ci/prepare-release-candidate.ts --candidate-dir .hesperia/release-candidate && bun run package:editor && bun run --cwd editors/vscode build:test && bun scripts/ci/test-editor-package.ts"
   },
   "devDependencies": {
     "@elysia/eden": "1.4.10",
@@ -53,6 +55,7 @@
     "@jridgewell/trace-mapping": "0.3.31",
     "@playwright/test": "1.63.0",
     "@types/bun": "1.4.2",
+    "@vscode/vsce": "4.0.0",
     "aeolia": "1.0.0-alpha.1",
     "elysia": "1.4.30",
     "happy-dom": "20.14.3",
