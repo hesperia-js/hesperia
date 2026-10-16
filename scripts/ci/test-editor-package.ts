@@ -41,7 +41,9 @@ async function testEditorPackage() {
     ]),
   );
   const rootManifest = JSON.parse(await readFile(join(workspaceRoot, "package.json"), "utf8"));
-  const project = await mkdtemp(join(tmpdir(), "hesperia-installed-editor-packages-"));
+  const project = await realpath(
+    await mkdtemp(join(tmpdir(), "hesperia-installed-editor-packages-")),
+  );
   let passed = false;
 
   try {
