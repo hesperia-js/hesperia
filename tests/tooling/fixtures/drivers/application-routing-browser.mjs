@@ -1,24 +1,40 @@
 import assert from "node:assert/strict";
 import { startBrowserDiagnostics } from "./browser-diagnostics.mjs";
+import { startProcessDiagnostics } from "./process-diagnostics.mjs";
 
 /** @typedef {import("playwright").BrowserType} BrowserType */
 /** @typedef {import("playwright").Route} Route */
 
 const [playwrightModuleUrl, applicationUrl, diagnosticsDirectory] = process.argv.slice(2);
+const driver = startProcessDiagnostics({ directory: diagnosticsDirectory, label: "node-driver" });
+
+process.env.DEBUG = [process.env.DEBUG, "pw:browser"].filter(Boolean).join(",");
+
+driver.mark("playwright-import");
 
 const { chromium, firefox, webkit } = /** @type {typeof import("playwright")} */ (
   await import(playwrightModuleUrl)
 );
 
 for (const engine of [chromium, firefox, webkit]) {
+  driver.mark("browser-launch", { engine: engine.name() });
+
   const browser = await engine.launch();
+
+  driver.mark("browser-launched", { engine: engine.name(), version: browser.version() });
+
+  browser.on("disconnected", () => driver.mark("browser-disconnected", { engine: engine.name() }));
 
   /** @type {Awaited<ReturnType<typeof startBrowserDiagnostics>> | undefined} */
   let diagnostics;
   let failed = false;
 
   try {
+    driver.mark("page-create", { engine: engine.name() });
+
     const page = await browser.newPage();
+
+    driver.mark("page-created", { engine: engine.name() });
 
     diagnostics = await startBrowserDiagnostics(page, {
       directory: diagnosticsDirectory,
@@ -380,6 +396,8 @@ for (const engine of [chromium, firefox, webkit]) {
   } catch (error) {
     failed = true;
 
+    driver.mark("failure", { engine: engine.name(), error: String(error) });
+
     await diagnostics?.capture(error);
 
     throw new Error(engine.name() + " generated routing failed", { cause: error });
@@ -389,9 +407,16 @@ for (const engine of [chromium, firefox, webkit]) {
         if (!failed) throw error;
       });
     } finally {
-      await browser.close().catch((error) => {
-        if (!failed) throw error;
-      });
+      driver.mark("browser-close", { engine: engine.name() });
+
+      await browser.close().then(
+        () => driver.mark("browser-close-completed", { engine: engine.name() }),
+        (error) => {
+          driver.mark("browser-close-failed", { engine: engine.name(), error: String(error) });
+
+          if (!failed) throw error;
+        },
+      );
     }
   }
 }

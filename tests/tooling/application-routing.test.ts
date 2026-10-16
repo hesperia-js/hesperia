@@ -4,6 +4,8 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { prepareBuild, ProjectError, writeBuild } from "../../packages/tooling/src/project.ts";
 import { previewProject } from "../../packages/tooling/src/server.ts";
+import { startProcessDiagnostics } from "./fixtures/drivers/process-diagnostics.mjs";
+import { captureDriverStderr, observePreviewServer } from "./server-diagnostics.ts";
 
 const applicationFixture = join(import.meta.dir, "fixtures/applications/application-routing");
 
@@ -14,6 +16,15 @@ test("generated async routes wait for public query data and restore the cached n
 
   const root = await mkdtemp(join(parent, "application-routing-"));
 
+  const diagnosticsParent = join(parent, "browser-diagnostics");
+
+  await mkdir(diagnosticsParent, { recursive: true });
+
+  const diagnosticsDirectory = await mkdtemp(join(diagnosticsParent, "application-routing-"));
+  const diagnostics = startProcessDiagnostics({
+    directory: diagnosticsDirectory,
+    label: "bun-parent",
+  });
   let server: Awaited<ReturnType<typeof previewProject>> | undefined;
 
   try {
@@ -47,13 +58,11 @@ test("generated async routes wait for public query data and restore the cached n
       throw error;
     }
 
-    server = await previewProject(root, 0);
+    server = await observePreviewServer(() => previewProject(root, 0), diagnostics.mark);
 
-    const diagnosticsParent = join(parent, "browser-diagnostics");
+    diagnostics.mark("preview-ready", { url: server.url.href });
 
-    await mkdir(diagnosticsParent, { recursive: true });
-
-    const diagnosticsDirectory = await mkdtemp(join(diagnosticsParent, "application-routing-"));
+    diagnostics.mark("driver-spawn-start");
 
     const child = Bun.spawn(
       [
@@ -69,21 +78,46 @@ test("generated async routes wait for public query data and restore the cached n
       },
     );
 
+    diagnostics.mark("driver-spawned", { pid: child.pid });
+
     const [status, output, errors] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
+      child.exited.then((status) => {
+        diagnostics.mark("driver-exited", { pid: child.pid, status });
+
+        return status;
+      }),
+      new Response(child.stdout).text().then((output) => {
+        diagnostics.mark("driver-stdout-eof");
+
+        return output;
+      }),
+      captureDriverStderr(child.stderr, diagnosticsDirectory, diagnostics.mark),
     ]);
 
-    if (status !== 0) throw new Error(`Generated route application failed\n${output}\n${errors}`);
+    if (status !== 0)
+      throw new Error(
+        `Generated route application failed; diagnostics=${diagnosticsDirectory}\n${output}\n${errors}`,
+      );
 
     expect(output.trim().split(/\r?\n/u)).toStrictEqual([
       "chromium async routing verified",
       "firefox async routing verified",
       "webkit async routing verified",
     ]);
+  } catch (error) {
+    diagnostics.mark("parent-error", { error: String(error) });
+
+    throw error;
   } finally {
-    await server?.close();
+    try {
+      diagnostics.mark("preview-close-start");
+
+      await server?.close();
+
+      diagnostics.mark("preview-close-complete");
+    } finally {
+      diagnostics.dispose();
+    }
 
     await rm(root, { recursive: true, force: true });
   }

@@ -11,6 +11,8 @@ import { createRouteTable } from "../../packages/tooling/src/route-table.ts";
 import type { RouteTable } from "../../packages/hesperia/src/routing/route-table.ts";
 import { prepareBuild, writeBuild } from "../../packages/tooling/src/project.ts";
 import { previewProject } from "../../packages/tooling/src/server.ts";
+import { startProcessDiagnostics } from "./fixtures/drivers/process-diagnostics.mjs";
+import { captureDriverStderr, observePreviewServer } from "./server-diagnostics.ts";
 
 const temporaryRoots: string[] = [];
 
@@ -225,9 +227,22 @@ test("a real split build leaves the route page cold and mounts it through the bu
 
     expect(marker.routePageLoaded).toBeUndefined();
 
-    const server = await previewProject(root, 0);
+    const diagnosticsParent = resolve(import.meta.dir, "../../.hesperia/browser-diagnostics");
+
+    await mkdir(diagnosticsParent, { recursive: true });
+
+    const diagnosticsDirectory = await mkdtemp(join(diagnosticsParent, "route-table-"));
+    const diagnostics = startProcessDiagnostics({
+      directory: diagnosticsDirectory,
+      label: "bun-parent",
+    });
+    let server: Awaited<ReturnType<typeof previewProject>> | undefined;
 
     try {
+      server = await observePreviewServer(() => previewProject(root, 0), diagnostics.mark);
+
+      diagnostics.mark("preview-ready", { url: server.url.href });
+
       const wrapper = await (
         await fetch(new URL("/dashboard/_hesperia/startup.js", server.url))
       ).text();
@@ -238,11 +253,8 @@ test("a real split build leaves the route page cold and mounts it through the bu
 
       expect(wrapper).toContain('await start("/dashboard")');
 
-      const diagnosticsParent = resolve(import.meta.dir, "../../.hesperia/browser-diagnostics");
+      diagnostics.mark("driver-spawn-start");
 
-      await mkdir(diagnosticsParent, { recursive: true });
-
-      const diagnosticsDirectory = await mkdtemp(join(diagnosticsParent, "route-table-"));
       const child = Bun.spawn(
         [
           "node",
@@ -257,10 +269,20 @@ test("a real split build leaves the route page cold and mounts it through the bu
         },
       );
 
+      diagnostics.mark("driver-spawned", { pid: child.pid });
+
       const [status, output, errors] = await Promise.all([
-        child.exited,
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
+        child.exited.then((status) => {
+          diagnostics.mark("driver-exited", { pid: child.pid, status });
+
+          return status;
+        }),
+        new Response(child.stdout).text().then((output) => {
+          diagnostics.mark("driver-stdout-eof");
+
+          return output;
+        }),
+        captureDriverStderr(child.stderr, diagnosticsDirectory, diagnostics.mark),
       ]);
 
       if (status !== 0)
@@ -273,8 +295,20 @@ test("a real split build leaves the route page cold and mounts it through the bu
         "firefox startup verified",
         "webkit startup verified",
       ]);
+    } catch (error) {
+      diagnostics.mark("parent-error", { error: String(error) });
+
+      throw error;
     } finally {
-      await server.close();
+      try {
+        diagnostics.mark("preview-close-start");
+
+        await server?.close();
+
+        diagnostics.mark("preview-close-complete");
+      } finally {
+        diagnostics.dispose();
+      }
     }
 
     const guardPath = [...build.files.keys()].find(

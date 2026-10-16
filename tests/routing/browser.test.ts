@@ -4,8 +4,11 @@ import { appendFileSync, mkdirSync, mkdtempSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Router } from "../../packages/hesperia/src/routing/index.ts";
 import { startBrowserDiagnostics } from "../tooling/fixtures/drivers/browser-diagnostics.mjs";
+import { startProcessDiagnostics } from "../tooling/fixtures/drivers/process-diagnostics.mjs";
+import { observeFetch } from "../tooling/server-diagnostics.ts";
 
 let server: ReturnType<typeof Bun.serve>;
+let serverDiagnostics: ReturnType<typeof startProcessDiagnostics> | undefined;
 
 beforeAll(async () => {
   const build = await Bun.build({
@@ -22,15 +25,18 @@ beforeAll(async () => {
     hostname: "127.0.0.1",
     port: 0,
 
-    fetch(request) {
-      if (new URL(request.url).pathname === "/entry.js")
-        return new Response(script, { headers: { "content-type": "text/javascript" } });
+    fetch: observeFetch(
+      (request: Request) => {
+        if (new URL(request.url).pathname === "/entry.js")
+          return new Response(script, { headers: { "content-type": "text/javascript" } });
 
-      return new Response(
-        '<!doctype html><title>routing</title><a id="next" href="/next"><span>Next</span></a><a id="probe" href="/probe">Probe</a><div id="route"></div><div id="scroll-space" style="height:2400px"></div><script type="module" src="/entry.js"></script>',
-        { headers: { "content-type": "text/html" } },
-      );
-    },
+        return new Response(
+          '<!doctype html><title>routing</title><a id="next" href="/next"><span>Next</span></a><a id="probe" href="/probe">Probe</a><div id="route"></div><div id="scroll-space" style="height:2400px"></div><script type="module" src="/entry.js"></script>',
+          { headers: { "content-type": "text/html" } },
+        );
+      },
+      (kind, detail) => serverDiagnostics?.mark(kind, detail),
+    ),
   });
 });
 
@@ -818,12 +824,16 @@ for (const engine of [chromium, firefox, webkit]) {
 
       const directory = mkdtempSync(resolve(diagnosticsRoot, "pending-traversal-"));
       const label = `${engine.name()}-${mode}`;
+      const driver = startProcessDiagnostics({ directory, label: "bun-driver" });
+      serverDiagnostics = driver;
       const started = Date.now();
       let browser: Awaited<ReturnType<typeof engine.launch>> | undefined;
       let diagnostics: Awaited<ReturnType<typeof startBrowserDiagnostics>> | undefined;
       let failed = false;
 
       function mark(step: string, detail?: unknown) {
+        driver.mark(step, detail);
+
         try {
           // Bun's outer deadline can bypass capture and dispose the browser.
           appendFileSync(
@@ -841,6 +851,8 @@ for (const engine of [chromium, firefox, webkit]) {
         mark("browser-launch");
 
         browser = await engine.launch();
+
+        browser.on("disconnected", () => mark("browser-disconnected"));
 
         mark("browser-launched");
 
@@ -1050,11 +1062,20 @@ for (const engine of [chromium, firefox, webkit]) {
 
           mark("browser-close");
 
-          await browser?.close().catch((error) => {
-            if (!failed) throw error;
-          });
+          try {
+            await browser?.close().then(
+              () => mark("browser-closed"),
+              (error) => {
+                mark("browser-close-failed", String(error));
 
-          mark("browser-closed");
+                if (!failed) throw error;
+              },
+            );
+          } finally {
+            if (serverDiagnostics === driver) serverDiagnostics = undefined;
+
+            driver.dispose();
+          }
         }
       }
     }, 20_000);

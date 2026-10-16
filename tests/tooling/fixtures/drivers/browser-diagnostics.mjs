@@ -1,5 +1,6 @@
 import { createWriteStream, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 
 /** @typedef {import("playwright").Page} Page */
 /** @typedef {import("playwright").Request} Request */
@@ -62,10 +63,11 @@ async function bounded(operation, timeout) {
  */
 export async function startBrowserDiagnostics(page, { directory, label }) {
   const started = Date.now();
+  const startedMonotonic = performance.now();
   const context = page.context();
   const safeLabel = label.replace(/[^a-zA-Z0-9_.-]/g, "_").replace(/^\.+$/, "browser");
   const artifactDirectory = resolve(directory, safeLabel || "browser");
-  /** @type {{elapsedMs: number, kind: string, detail: unknown}[]} */
+  /** @type {{at: string, monotonicMs: number, elapsedMs: number, pid: number, kind: string, detail: unknown}[]} */
   const timeline = [];
   /** @type {Record<string, number>} */
   const truncated = {};
@@ -109,7 +111,15 @@ export async function startBrowserDiagnostics(page, { directory, label }) {
       if (removed) truncated[removed.kind] = (truncated[removed.kind] ?? 0) + 1;
     }
 
-    const event = { elapsedMs: Date.now() - started, kind, detail };
+    const monotonicMs = performance.now();
+    const event = {
+      at: new Date().toISOString(),
+      monotonicMs,
+      elapsedMs: monotonicMs - startedMonotonic,
+      pid: process.pid,
+      kind,
+      detail,
+    };
 
     timeline.push(event);
 
@@ -121,7 +131,10 @@ export async function startBrowserDiagnostics(page, { directory, label }) {
           truncated.journal = 1;
           line =
             JSON.stringify({
+              at: event.at,
+              monotonicMs: event.monotonicMs,
               elapsedMs: event.elapsedMs,
+              pid: process.pid,
               kind: "journal-truncated",
               entryLimit: 2000,
               byteLimit: 2_000_000,
@@ -154,7 +167,7 @@ export async function startBrowserDiagnostics(page, { directory, label }) {
       method: request.method(),
       resourceType: request.resourceType(),
       navigation: request.isNavigationRequest(),
-      elapsedMs: Date.now() - started,
+      elapsedMs: performance.now() - startedMonotonic,
     };
   }
 
@@ -228,6 +241,7 @@ export async function startBrowserDiagnostics(page, { directory, label }) {
   record("diagnostics-start", {
     label,
     startedAt: new Date(started).toISOString(),
+    timeOriginMs: performance.timeOrigin,
     url: page.url(),
     browserVersion: context.browser()?.version(),
   });

@@ -14,6 +14,8 @@
   },
   "files": [
     "application-routing-browser.mjs",
+    "browser-diagnostics.mjs",
+    "process-diagnostics.mjs",
     "async-route-outcomes-browser.mjs",
     "development-browser.mjs",
     "development-deletion-browser.mjs",

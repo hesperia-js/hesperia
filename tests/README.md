@@ -90,6 +90,46 @@ control retains its DOM node while updating. These checks catch duplicate
 module instances caused by resolving one linked file under multiple path names;
 they do not prove that separately installed Aeolia copies deduplicate.
 
+### Browser stall diagnostics
+
+The split-build route-table case, asynchronous application-routing case, and
+pending-traversal cases retain diagnostics under `.hesperia/browser-diagnostics/`.
+Failed selected-test and coverage-group artifacts include this directory. Browser
+captures retain the original error, pending requests, native request timing, DOM,
+screenshot, and trace when capture completes. Synchronous process journals start
+before browser launch and remain active through cleanup, so an outer test timeout
+can leave useful checkpoints even when final capture never runs.
+
+Each `bun-parent-*.jsonl`, `node-driver-*.jsonl`, or `bun-driver-*.jsonl` file records
+UTC and monotonic timestamps, process identity, and lifecycle checkpoints. An
+unreferenced 100 ms timer records gaps above 250 ms; heartbeats at least one second
+apart include the current process's CPU and memory usage. These are observation
+intervals, not test deadlines. Each journal is limited to 2,000 records and
+1,000,000 bytes, with truncation and final lifecycle records reserved within those
+limits. Filesystem failures disable capture without replacing the test result.
+
+Server events record request path and method at handler ingress, then handler
+return, Promise settlement, or throw. A returned Response does not establish that
+its bytes reached the browser. The tooling cases observe the actual preview
+handler through a temporary `Bun.serve` hook that is restored when the server is
+created; other server startup must not overlap that scope.
+
+The tooling cases retain Playwright `pw:browser` lifecycle output in
+`driver-stderr.log`, capped at 8 MiB with a truncation marker. The original error
+path still receives complete decoded stderr. Parent journals separately record
+Node driver exit, stdout EOF, and stderr EOF. Playwright's browser process-exit
+message comes from its child-process `close` event, which includes stdio closure;
+it cannot by itself separate browser OS exit from inherited open pipes. Pending
+traversal records Bun activity, browser disconnect, and browser-close completion,
+but does not collect that raw Playwright lifecycle stream.
+
+Use these timestamps to compare server handling, parent scheduling, driver
+scheduling, and browser progress. CPU samples describe only the process writing
+the journal, not its browser descendants or the whole host. A timer gap alone
+does not identify the cause of a stall. Synchronous writes bound capture volume
+but can themselves affect timing. Assertions, browser coverage, and test
+deadlines remain authoritative.
+
 ### Authored application fixtures
 
 Complete static test programs live in ordinary files under
