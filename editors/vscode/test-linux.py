@@ -282,7 +282,7 @@ def parse_proc(pid: int, stage: str = "native process observation") -> dict[str,
         detail = f"Incomplete live /proc identity for PID {pid}: {json.dumps({'stage': stage, 'missingFields': missing, 'observed': observed}, separators=(',', ':'))}"
 
         if (
-            missing == ["executablePath", "argv"]
+            missing in (["executablePath"], ["executablePath", "argv"])
             and executable_link_missing
             and tgid == pid
         ):

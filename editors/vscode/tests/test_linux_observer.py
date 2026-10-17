@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 from dataclasses import replace
 import importlib.util
 import io
@@ -117,6 +118,131 @@ class NodeServiceProcHistoryTests(unittest.TestCase):
 
 
 class RetainedGenerationTests(unittest.TestCase):
+    def test_exit_between_cmdline_and_executable_invalidates_retained_image(self) -> None:
+        for changed_generation in (False, True):
+            with self.subTest(changed_generation=changed_generation):
+                self.check_exit_between_cmdline_and_executable(changed_generation)
+
+    def check_exit_between_cmdline_and_executable(self, changed_generation: bool) -> None:
+        process = subprocess.Popen(
+            ["/bin/sh", "-c", "printf 'ready\\n'; read release; exit 0"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        pidfd: int | None = None
+
+        try:
+            self.assertIsNotNone(process.stdout)
+
+            self.assertTrue(select.select([process.stdout], [], [], 5)[0])
+
+            self.assertEqual(process.stdout.readline(), b"ready\n")
+
+            pid = process.pid
+            pidfd = os.pidfd_open(pid, 0)
+            proc = observer.parse_proc(pid)
+            generation = observer.Generation(
+                pid, proc["ppid"], proc["startTicks"], pidfd, observer.utc_now()
+            )
+
+            observer.observe_retained_generation(generation)
+
+            self.assertFalse(observer.pidfd_ready(pidfd))
+
+            self.assertIsNotNone(generation.current_proc)
+
+            transition = {
+                "completionNs": int(generation.sample_started_ns) - 1,
+                "resolvedPath": proc["executablePath"],
+            }
+
+            self.assertTrue(generation.qualify_after_exec(transition))
+
+            executions = [dict(image) for image in generation.executions]
+            exe_path = pathlib.Path(f"/proc/{pid}/exe")
+            cmdline_path = pathlib.Path(f"/proc/{pid}/cmdline")
+            original_readlink = os.readlink
+            original_read_bytes = pathlib.Path.read_bytes
+            cmdline_samples: list[bytes] = []
+            executable_errors: list[int | None] = []
+
+            def read_bytes(path: pathlib.Path) -> bytes:
+                content = original_read_bytes(path)
+
+                if path == cmdline_path:
+                    cmdline_samples.append(content)
+
+                return content
+
+            def readlink(path: str | os.PathLike[str], *args: object, **kwargs: object) -> str:
+                if pathlib.Path(path) == exe_path:
+                    self.assertEqual(len(cmdline_samples), 1)
+
+                    self.assertTrue(cmdline_samples[0])
+
+                    self.assertFalse(observer.pidfd_ready(pidfd))
+
+                    if changed_generation:
+                        generation.start_ticks += 1
+
+                    self.assertIsNotNone(process.stdin)
+
+                    process.stdin.write(b"exit\n")
+
+                    process.stdin.flush()
+
+                    self.assertTrue(select.select([pidfd], [], [], 5)[0])
+
+                try:
+                    return original_readlink(path, *args, **kwargs)
+                except FileNotFoundError as error:
+                    if pathlib.Path(path) == exe_path:
+                        executable_errors.append(error.errno)
+
+                    raise
+
+            with (
+                mock.patch.object(pathlib.Path, "read_bytes", new=read_bytes),
+                mock.patch.object(os, "readlink", side_effect=readlink),
+            ):
+                if changed_generation:
+                    with self.assertRaisesRegex(observer.CaptureError, "generation"):
+                        observer.observe_retained_generation(generation)
+                else:
+                    observer.observe_retained_generation(generation)
+
+            self.assertEqual(executable_errors, [errno.ENOENT])
+
+            self.assertEqual(generation.executions, executions)
+
+            self.assertFalse(generation.current_image_complete)
+
+            self.assertIsNone(generation.current_proc)
+
+            self.assertFalse(generation.qualify_after_exec(transition))
+
+            if changed_generation:
+                self.assertIsNone(generation.ready_at)
+            else:
+                self.assertIsNotNone(generation.ready_at)
+
+                self.assertTrue(generation.check_exit())
+
+            self.assertEqual(process.wait(timeout=5), 0)
+        finally:
+            if process.poll() is None:
+                process.kill()
+
+            process.wait(timeout=5)
+
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+
+            if pidfd is not None:
+                os.close(pidfd)
+
     def test_zombie_leader_invalidates_image_until_pidfd_is_ready(self) -> None:
         for exit_stage in ("before-sample", "after-complete-sample", "after-incomplete-argv"):
             with self.subTest(exit_stage=exit_stage):
