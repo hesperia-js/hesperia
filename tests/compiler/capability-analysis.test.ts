@@ -1,11 +1,13 @@
 import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { analyzeBrowserCapabilities, compile } from "../../src/compiler/index.ts";
+import { analyzeBrowserCapabilities, compile } from "../../packages/compiler/src/index.ts";
 
 test.each([
   "switch (process.env.KEY) { default: break; } export const value = 1;",
   "switch (1) { case process.env.KEY: break; } export const value = 1;",
+  "export const value = (0, globalThis).process.env.SECRET;",
+  "export function value(scope) { return (process.env.SECRET, scope.constructor).name; }",
   "let value; switch (1) { case 1: const callback = () => process.env.SECRET; value = callback; } export { value };",
   "export function value(...[input = process.env.SECRET]) { return input; }",
   "const [...[value = () => process.env.SECRET]] = []; export { value };",
@@ -22,6 +24,7 @@ test.each([
     ],
     ".",
   );
+
   expect(diagnostics.map((item) => item.code)).toStrictEqual(["HES-CAPABILITY"]);
 });
 
@@ -39,7 +42,9 @@ test("generated startup makes app.config.ts a browser entry even without a shell
     ],
     ".",
   );
+
   expect(diagnostics.map((item) => item.code)).toStrictEqual(["HES-CAPABILITY"]);
+
   expect(diagnostics[0]!.filename).toBe("app.config.ts");
 });
 
@@ -55,21 +60,25 @@ test("reachable generator yield operands retain host capability provenance", () 
       source: "export function* load() { yield globalThis.process.env.SECRET; }",
     },
   ]);
+
   expect(diagnostics).toEqual(
     expect.arrayContaining([expect.objectContaining({ code: "HES-CAPABILITY" })]),
   );
 });
 
-test("generated async component continuations cannot conceal a yielded host operation", () => {
-  const compiled = compile(
+test("generated async component continuations cannot conceal a yielded host operation", async () => {
+  const compiled = await compile(
     `export default async function Page() {
       const value = await globalThis.process.load();
       return <span>{value}</span>;
     }`,
     { filename: "async-page.tsx" },
   );
+
   expect(compiled.diagnostics).toStrictEqual([]);
+
   expect(compiled.code).toContain("yield globalThis.process.load()");
+
   const filename = resolve("generated-async-page.js");
   const diagnostics = analyzeBrowserCapabilities(
     [{ filename, source: compiled.code }],
@@ -77,6 +86,7 @@ test("generated async component continuations cannot conceal a yielded host oper
     undefined,
     [filename],
   );
+
   expect(diagnostics).toContainEqual(
     expect.objectContaining({
       filename,
@@ -84,6 +94,7 @@ test("generated async component continuations cannot conceal a yielded host oper
       message: expect.stringContaining("process"),
     }),
   );
+
   expect(diagnostics.some((item) => item.code === "HES-CAPABILITY-UNRESOLVED")).toBe(false);
 });
 
@@ -101,6 +112,7 @@ test("an unreferenced nested app.tsx file is not a browser entry by its basename
     ],
     ".",
   );
+
   expect(diagnostics).toStrictEqual([]);
 });
 
@@ -123,6 +135,7 @@ test.each([
     ],
     ".",
   );
+
   expect(diagnostics).toStrictEqual([]);
 });
 
@@ -141,6 +154,7 @@ test("a nested var iteration exposes its callable value through the function sco
     ],
     ".",
   );
+
   expect(diagnostics.map((item) => item.code)).toStrictEqual(["HES-CAPABILITY"]);
 });
 
@@ -160,6 +174,7 @@ test("an escaping catch-local var initializer retains its host capability", () =
     ],
     ".",
   );
+
   expect(diagnostics.map((item) => item.code)).toStrictEqual(["HES-CAPABILITY"]);
 });
 
@@ -175,9 +190,12 @@ test.each([
     source:
       'import { value } from "./api.ts"; export default function App() { return <html><head/><body>{value}</body></html>; }',
   };
+
   for (const source of [`${body} export const value = 1;`, `export function value() { ${body} }`]) {
     const diagnostics = analyzeBrowserCapabilities([entry, { filename: "api.ts", source }], ".");
+
     expect(diagnostics.map((item) => item.code)).toStrictEqual(["HES-CAPABILITY"]);
+
     expect(diagnostics[0]!.message).toContain("process");
   }
 });
@@ -198,6 +216,7 @@ test("a catch binding shadows an outer host-backed helper", () => {
     ],
     ".",
   );
+
   expect(diagnostics).toStrictEqual([]);
 });
 
@@ -217,6 +236,7 @@ test.each([
     ],
     ".",
   );
+
   expect(diagnostics.map((item) => item.code)).toStrictEqual(["HES-CAPABILITY"]);
 });
 
@@ -236,6 +256,7 @@ test("an unused catch default callback is not executed by binding initialization
     ],
     ".",
   );
+
   expect(diagnostics).toStrictEqual([]);
 });
 
@@ -256,12 +277,15 @@ test.each([
     source:
       'import { value } from "./api.ts"; export default function App() { return <html><head/><body>{value}</body></html>; }',
   };
+
   for (const source of [
     `${body} export const value = "ok";`,
     `export function value() { ${body} }`,
   ]) {
     const diagnostics = analyzeBrowserCapabilities([entry, { filename: "api.ts", source }], ".");
+
     expect(diagnostics.map((item) => item.code)).toStrictEqual(["HES-CAPABILITY"]);
+
     expect(diagnostics[0]!.message).toContain("process");
   }
 });
@@ -284,6 +308,7 @@ test.each([
     ],
     ".",
   );
+
   expect(diagnostics.map((item) => item.code)).toStrictEqual(["HES-CAPABILITY"]);
 });
 
@@ -303,6 +328,7 @@ test("unused loop closures stay deferred and local loop bindings do not inherit 
     ],
     ".",
   );
+
   expect(diagnostics).toStrictEqual([]);
 });
 
@@ -323,8 +349,11 @@ test("browser re-exports reject route declarations before following their server
     ],
     ".",
   );
+
   expect(diagnostics.map((item) => item.code)).toStrictEqual(["HES-ROUTE-SERVER"]);
+
   expect(diagnostics[0]!.filename).toBe("src/routes/+route.ts");
+
   expect(diagnostics[0]!.message).toContain("./api.ts");
 });
 
@@ -347,7 +376,9 @@ test.each([
     ],
     ".",
   );
+
   expect(diagnostics.map((item) => item.code)).toStrictEqual(["HES-CAPABILITY"]);
+
   expect(diagnostics[0]!.message).toContain("process");
 });
 
@@ -357,13 +388,16 @@ test("module assignments execute while unused callback assignments remain deferr
     source:
       'import { value } from "./api.ts"; export default function App() { return <html><head/><body>{value}</body></html>; }',
   };
+
   const check = (source: string) =>
     analyzeBrowserCapabilities([entry, { filename: "api.ts", source }], ".");
+
   expect(
     check('export const value = "ok"; let result; result = process.env.SECRET;').map(
       (item) => item.code,
     ),
   ).toStrictEqual(["HES-CAPABILITY"]);
+
   expect(
     check(
       'export const value = "ok"; function unused() { let result; result = process.env.SECRET; return result; }',
@@ -387,7 +421,9 @@ test("a used binding retains callable values assigned through another initialize
       ],
       ".",
     );
+
   expect(check("callback").map((item) => item.code)).toStrictEqual(["HES-CAPABILITY"]);
+
   expect(check("safe")).toStrictEqual([]);
 });
 
@@ -406,6 +442,7 @@ test.each([
     ],
     ".",
   );
+
   expect(diagnostics.map((item) => item.code)).toStrictEqual(["HES-CAPABILITY"]);
 });
 
@@ -426,11 +463,14 @@ test("browser capability checking follows a referenced imported binding", () => 
   );
 
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]).toMatchObject({
     code: "HES-CAPABILITY",
     filename: "api.ts",
   });
+
   expect(diagnostics[0]!.message).toContain("app.tsx -> ./api.ts");
+
   expect(diagnostics[0]!.message).toContain("node:fs");
 });
 
@@ -453,6 +493,139 @@ test("type-only host imports and unreferenced server bindings do not taint a bro
   expect(diagnostics).toStrictEqual([]);
 });
 
+test("the env entry remains host-only through import and reexport aliases", () => {
+  const modules = [
+    {
+      filename: "app.tsx",
+      source:
+        'import { publicReader } from "./barrel.ts"; export default function App() { return <html><head/><body><main>{publicReader("TOKEN")}</main></body></html>; }',
+    },
+    { filename: "barrel.ts", source: 'export { env as publicReader } from "hesperia/env";' },
+  ];
+  const diagnostics = analyzeBrowserCapabilities(modules, ".");
+
+  expect(diagnostics).toContainEqual(
+    expect.objectContaining({
+      code: "HES-CAPABILITY",
+      filename: "barrel.ts",
+      message: expect.stringContaining("hesperia/env"),
+    }),
+  );
+});
+
+test("an unused browser value import of env remains forbidden", () => {
+  const diagnostics = analyzeBrowserCapabilities(
+    [
+      {
+        filename: "app.tsx",
+        source:
+          'import { env as unusedReader } from "hesperia/env"; export default function App() { return <html><head/><body>Ready</body></html>; }',
+      },
+    ],
+    ".",
+  );
+
+  expect(diagnostics).toContainEqual(
+    expect.objectContaining({
+      code: "HES-CAPABILITY",
+      filename: "app.tsx",
+      message: expect.stringContaining("hesperia/env"),
+    }),
+  );
+});
+
+test("an unused browser import through a barrel still reaches the env entry", () => {
+  const diagnostics = analyzeBrowserCapabilities(
+    [
+      {
+        filename: "app.tsx",
+        source:
+          'import { reader } from "./barrel.ts"; export default function App() { return <html><head/><body>Ready</body></html>; }',
+      },
+      { filename: "barrel.ts", source: 'export { env as reader } from "hesperia/env";' },
+    ],
+    ".",
+  );
+
+  expect(diagnostics).toContainEqual(
+    expect.objectContaining({
+      code: "HES-CAPABILITY",
+      filename: "barrel.ts",
+      message: expect.stringContaining("hesperia/env"),
+    }),
+  );
+});
+
+test("an env value import has one diagnostic at its authored specifier", () => {
+  const source =
+    'import { env as reader } from "hesperia/env"; export default function App() { return <html><head/><body>{reader("TOKEN")}</body></html>; }';
+  const diagnostics = analyzeBrowserCapabilities([{ filename: "app.tsx", source }], ".");
+
+  expect(diagnostics).toHaveLength(1);
+
+  expect(diagnostics[0]).toMatchObject({
+    code: "HES-CAPABILITY",
+    filename: "app.tsx",
+    span: {
+      start: source.indexOf('"hesperia/env"'),
+      end: source.indexOf('"hesperia/env"') + '"hesperia/env"'.length,
+    },
+  });
+});
+
+test("an escaped env module name cannot bypass the browser host boundary", () => {
+  const source = String.raw`import { env as reader } from "hesperia/\u0065nv"; export default function App() { return <html><head/><body>Ready</body></html>; }`;
+
+  expect(analyzeBrowserCapabilities([{ filename: "app.tsx", source }], ".")).toContainEqual(
+    expect.objectContaining({
+      code: "HES-CAPABILITY",
+      filename: "app.tsx",
+      message: expect.stringContaining("hesperia/env"),
+    }),
+  );
+});
+
+test("a type-only env import contributes no host value to a browser entry", () => {
+  const diagnostics = analyzeBrowserCapabilities(
+    [
+      {
+        filename: "app.tsx",
+        source:
+          'import type { env } from "hesperia/env"; type Reader = typeof env; export default function App() { return <html><head/><body><main>Ready</main></body></html>; }',
+      },
+    ],
+    ".",
+  );
+
+  expect(diagnostics).toStrictEqual([]);
+
+  expect(
+    analyzeBrowserCapabilities(
+      [
+        {
+          filename: "app.tsx",
+          source:
+            'import { type env } from "hesperia/env"; export default function App() { return <html><head/><body>Ready</body></html>; }',
+        },
+      ],
+      ".",
+    ),
+  ).toStrictEqual([]);
+
+  expect(
+    analyzeBrowserCapabilities(
+      [
+        {
+          filename: "app.tsx",
+          source:
+            'export type { env as ServerReader } from "hesperia/env"; export default function App() { return <html><head/><body>Ready</body></html>; }',
+        },
+      ],
+      ".",
+    ),
+  ).toStrictEqual([]);
+});
+
 test("a referenced server binding reports its captured host global", () => {
   const diagnostics = analyzeBrowserCapabilities(
     [
@@ -470,17 +643,24 @@ test("a referenced server binding reports its captured host global", () => {
   );
 
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]!.message).toContain("process");
+
   expect(diagnostics[0]!.message).toContain("app.tsx -> default -> serverOnly");
 });
 
 test("package conditions select source for proof without granting browser safety", () => {
   const parent = resolve(import.meta.dir, "../../.hesperia");
+
   mkdirSync(parent, { recursive: true });
+
   const root = mkdtempSync(join(parent, "capability-package-"));
+
   try {
     const dependency = join(root, "node_modules/example");
+
     mkdirSync(dependency, { recursive: true });
+
     const modules = [
       {
         filename: join(root, "app.tsx"),
@@ -488,26 +668,37 @@ test("package conditions select source for proof without granting browser safety
           'import { value } from "example"; export default function App() { return <html><head/><body><main>{value}</main></body></html>; }',
       },
     ];
+
     const manifest = (exports: unknown) =>
       writeFileSync(
         join(dependency, "package.json"),
         JSON.stringify({ name: "example", exports, main: "./safe.js" }),
       );
+
     writeFileSync(join(dependency, "safe.js"), 'export const value = "safe";');
+
     writeFileSync(join(dependency, "host.js"), "export const value = process.env.SECRET;");
+
     manifest({ browser: "./safe.js", default: "./host.js" });
+
     expect(analyzeBrowserCapabilities(modules, root)).toStrictEqual([]);
+
     manifest({ default: "./host.js", browser: "./safe.js" });
+
     expect(
       analyzeBrowserCapabilities(modules, root).some(
         (item) => item.code === "HES-CAPABILITY" && item.message.includes("process"),
       ),
     ).toBe(true);
+
     manifest({ browser: "./host.js", default: "./safe.js" });
+
     expect(
       analyzeBrowserCapabilities(modules, root).some((item) => item.code === "HES-CAPABILITY"),
     ).toBe(true);
+
     manifest({ node: "./safe.js" });
+
     expect(
       analyzeBrowserCapabilities(modules, root).some(
         (item) => item.code === "HES-CAPABILITY-RESOLVE",
@@ -537,9 +728,13 @@ test("local export aliases and named reexports retain the host provenance path",
     "barrel.ts": 'export { operation as value } from "./operations.ts";',
     "operations.ts": "const hidden = () => process.env.SECRET; export { hidden as operation };",
   });
+
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]).toMatchObject({ code: "HES-CAPABILITY", filename: "operations.ts" });
+
   expect(diagnostics[0]!.message).toContain("./barrel.ts.value -> ./operations.ts.operation");
+
   expect(diagnostics[0]!.message).toContain("process");
 });
 
@@ -558,8 +753,11 @@ test("an unused broken reexport still prevents native module linking", () => {
     "barrel.ts": 'export { missing } from "./operations.ts"; export const value = "browser";',
     "operations.ts": 'export const available = "browser";',
   });
+
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]).toMatchObject({ code: "HES-CAPABILITY-RESOLVE", filename: "barrel.ts" });
+
   expect(diagnostics[0]!.message).toContain("missing export missing");
 });
 
@@ -570,10 +768,15 @@ test("star reexports traverse cycles and retain only the requested binding", () 
     "operations.ts":
       'export const value = "browser"; export const hidden = () => process.env.SECRET;',
   };
+
   expect(throughExports(modules)).toStrictEqual([]);
+
   const diagnostics = throughExports(modules, "hidden");
+
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]!.code).toBe("HES-CAPABILITY");
+
   expect(diagnostics[0]!.message).toContain("./cycle.ts.hidden -> ./operations.ts.hidden");
 });
 
@@ -584,11 +787,17 @@ test("star export ambiguity differs from two paths to the same binding", () => {
     "right.ts": 'export { value } from "./operations.ts";',
     "operations.ts": 'export const value = "browser";',
   };
+
   expect(throughExports(modules)).toStrictEqual([]);
+
   const diagnostics = throughExports({ ...modules, "right.ts": 'export const value = "other";' });
+
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]).toMatchObject({ code: "HES-CAPABILITY-RESOLVE", filename: "app.tsx" });
+
   expect(diagnostics[0]!.message).toContain("ambiguous export value");
+
   expect(
     throughExports({
       ...modules,
@@ -606,6 +815,7 @@ test("an explicit export overrides competing stars and stars never forward defau
       "safe.ts": 'export const value = "browser";',
     }),
   ).toStrictEqual([]);
+
   const diagnostics = throughExports(
     {
       "barrel.ts": 'export * from "./safe.ts";',
@@ -613,7 +823,9 @@ test("an explicit export overrides competing stars and stars never forward defau
     },
     "default",
   );
+
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]!.message).toContain("missing export default");
 });
 
@@ -622,18 +834,25 @@ test("reexport source evaluation remains part of the browser closure", () => {
     "barrel.ts": 'export { value } from "./operations.ts";',
     "operations.ts": 'process.env.SECRET; export const value = "browser";',
   });
+
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]).toMatchObject({ code: "HES-CAPABILITY", filename: "operations.ts" });
+
   const empty = throughExports({
     "barrel.ts": 'export {} from "./operations.ts"; export const value = "browser";',
     "operations.ts": "process.env.SECRET;",
   });
+
   expect(empty).toHaveLength(1);
+
   expect(empty[0]).toMatchObject({ code: "HES-CAPABILITY", filename: "operations.ts" });
 });
 
 test.each([
   'const helper = () => 0; export const value = helper.constructor("return 1")();',
+  'export const value = (0, Function)("return 1")();',
+  'export const value = (0, eval)("1");',
   'function helper() {} export const value = helper.constructor("return 1")();',
   "const scope = globalThis; export const value = scope.eval();",
   'const name = "eval"; export const value = Reflect.get(globalThis, name)();',
@@ -656,14 +875,98 @@ test.each([
   'export const value = Math.max.bind(null).constructor("return 1")();',
   'const bound = Math.max.bind(null); export const value = bound.constructor("return 1")();',
   'const scope = globalThis; export const value = scope.Object.prototype.constructor.constructor("return 1")();',
+  'export const value = (Function("return 1")(), globalThis).process.env.SECRET;',
 ])("reachable native execution aliases remain prohibited: %s", (source) => {
   const diagnostics = throughExports({
     "barrel.ts": 'export { value } from "./operations.ts";',
     "operations.ts": source,
   });
+
   expect(diagnostics).toContainEqual(
     expect.objectContaining({ code: "HES-CAPABILITY-DYNAMIC", filename: "operations.ts" }),
   );
+});
+
+test("an aliased native Reflect.get cannot hide a host global", () => {
+  const diagnostics = throughExports({
+    "barrel.ts": 'export { value } from "./operations.ts";',
+    "operations.ts":
+      'const get = Reflect.get; export const value = () => get(globalThis, "process").env.SECRET;',
+  });
+
+  expect(diagnostics).toContainEqual(
+    expect.objectContaining({
+      code: "HES-CAPABILITY",
+      filename: "operations.ts",
+      message: expect.stringContaining("process"),
+    }),
+  );
+});
+
+test("Object and Reflect descriptors cannot hide host globals", () => {
+  for (const source of [
+    'export const value = () => Object.getOwnPropertyDescriptor(globalThis, "process")?.value.env.SECRET;',
+    'export const value = () => Reflect.getOwnPropertyDescriptor(globalThis, "process")?.value.env.SECRET;',
+  ]) {
+    const diagnostics = throughExports({
+      "barrel.ts": 'export { value } from "./operations.ts";',
+      "operations.ts": source,
+    });
+
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "HES-CAPABILITY",
+        filename: "operations.ts",
+        message: expect.stringContaining("process"),
+      }),
+    );
+  }
+});
+
+test("safe reflection on ordinary objects and shadowed methods remains allowed", () => {
+  expect(
+    throughExports({
+      "barrel.ts": 'export { value } from "./operations.ts";',
+      "operations.ts": `export const value = () => [
+        Reflect.get({ process: "safe" }, "process"),
+        Object.getOwnPropertyDescriptor({ process: "safe" }, "process")?.value,
+      ];`,
+    }),
+  ).toStrictEqual([]);
+
+  expect(
+    throughExports({
+      "barrel.ts": 'export { value } from "./operations.ts";',
+      "operations.ts": `const Reflect = { get: (target, key) => target[key] };
+const Object = { getOwnPropertyDescriptor: (target, key) => ({ value: target[key] }) };
+export const value = () => [
+  Reflect.get({ process: "safe" }, "process"),
+  Object.getOwnPropertyDescriptor({ process: "safe" }, "process")?.value,
+];`,
+    }),
+  ).toStrictEqual([]);
+});
+
+test("sequence prefixes remain visible around safe native Function metadata", () => {
+  const unsafe = throughExports({
+    "barrel.ts": 'export { value } from "./operations.ts";',
+    "operations.ts": "export const value = (process.env.SECRET, Function).name;",
+  });
+
+  expect(unsafe).toContainEqual(
+    expect.objectContaining({
+      code: "HES-CAPABILITY",
+      filename: "operations.ts",
+      message: expect.stringContaining("process"),
+    }),
+  );
+
+  expect(
+    throughExports({
+      "barrel.ts": 'export { value } from "./operations.ts";',
+      "operations.ts": "export const value = (0, Function).name;",
+    }),
+  ).toStrictEqual([]);
 });
 
 test.each([
@@ -697,6 +1000,7 @@ test.each([
     "barrel.ts": 'export { value } from "./operations.ts";',
     "operations.ts": source,
   });
+
   expect(diagnostics.some((diagnostic) => diagnostic.code.startsWith("HES-CAPABILITY"))).toBe(true);
 });
 
@@ -710,6 +1014,7 @@ test.each([
     "barrel.ts": 'export { value } from "./operations.ts";',
     "operations.ts": source,
   });
+
   expect(diagnostics.some((diagnostic) => diagnostic.code.startsWith("HES-CAPABILITY"))).toBe(true);
 });
 
@@ -723,6 +1028,7 @@ test.each([
     "barrel.ts": 'export { value } from "./operations.ts";',
     "operations.ts": source,
   });
+
   expect(diagnostics).toContainEqual(
     expect.objectContaining({ code: "HES-CAPABILITY-DYNAMIC", filename: "operations.ts" }),
   );
@@ -777,6 +1083,8 @@ test.each([
 test.each([
   "export function value(scope) { return scope.constructor.name; }",
   "export function value(scope) { return scope.constructor.length; }",
+  "export function value(scope) { return (0, scope.constructor).name; }",
+  "export function value(scope) { return (0, scope.constructor).length; }",
   "export function value(scope) { return scope.constructor?.name; }",
 ])("unknown constructor metadata remains readable: %s", (source) => {
   expect(
@@ -826,6 +1134,7 @@ test.each([
     "barrel.ts": 'export { value } from "./operations.ts";',
     "operations.ts": source,
   });
+
   expect(diagnostics).toContainEqual(
     expect.objectContaining({ code: "HES-CAPABILITY", filename: "operations.ts" }),
   );
@@ -839,6 +1148,7 @@ test("local function metadata and an assigned custom constructor remain ordinary
         'const helper = () => 0; helper.constructor = () => "safe"; export const value = helper.constructor();',
     }),
   ).toStrictEqual([]);
+
   expect(
     throughExports({
       "barrel.ts": 'export { value } from "./operations.ts";',
@@ -846,6 +1156,7 @@ test("local function metadata and an assigned custom constructor remain ordinary
         'const helper = () => 0; const key = "constructor"; helper[key] = () => "safe"; export const value = helper.constructor();',
     }),
   ).toStrictEqual([]);
+
   expect(
     throughExports({
       "barrel.ts": 'export { value } from "./operations.ts";',
@@ -860,6 +1171,7 @@ test.each([
   'const helper = () => 0; function never() { helper.constructor = () => "safe"; } export const value = helper.constructor("return 1")();',
   'const helper = () => 0; helper.constructor = helper.constructor("return 1"); export const value = 1;',
   'const helper = () => 0; helper.constructor = () => "safe"; delete helper.constructor; export const value = helper.constructor("return 1")();',
+  'export function value(enabled) { const helper = () => 0; helper.constructor = () => "safe"; if (enabled) delete helper.constructor; return helper.constructor("return 1")(); }',
   'const helper = () => 0; helper.constructor = () => "safe"; const key = "constructor"; delete helper[key]; export const value = helper.constructor("return 1")();',
   'const helper = () => 0; helper.constructor = () => "safe"; const key = process.env.KEY ? "constructor" : "name"; delete helper[key]; export const value = helper.constructor("return 1")();',
   'const helper = () => 0; helper.constructor = () => "safe"; const key = process.env.KEY; delete helper[key]; export const value = helper.constructor("return 1")();',
@@ -872,18 +1184,50 @@ test.each([
     "barrel.ts": 'export { value } from "./operations.ts";',
     "operations.ts": source,
   });
+
   expect(diagnostics).toContainEqual(
     expect.objectContaining({ code: "HES-CAPABILITY-DYNAMIC", filename: "operations.ts" }),
   );
 });
 
-test("a missing reexport dependency reports the source without inventing a missing binding", () => {
+test.each([
+  {
+    specifier: "./missing-capability-source.ts",
+    guidance: "missing module ./missing-capability-source.ts",
+  },
+  {
+    specifier: "hesperia:plugin/missing/value",
+    guidance: "Configure the plugin that provides it",
+  },
+])("a missing reexport dependency reports its source: $specifier", ({ specifier, guidance }) => {
+  const source = `export { value } from "${specifier}";`;
   const diagnostics = throughExports({
-    "barrel.ts": 'export { value } from "./missing-capability-source.ts";',
+    "barrel.ts": source,
   });
+
   expect(diagnostics).toHaveLength(1);
-  expect(diagnostics[0]).toMatchObject({ code: "HES-CAPABILITY-RESOLVE", filename: "barrel.ts" });
-  expect(diagnostics[0]!.message).toContain("missing module ./missing-capability-source.ts");
+
+  const diagnostic = diagnostics[0]!;
+
+  expect(diagnostic).toMatchObject({ code: "HES-CAPABILITY-RESOLVE", filename: "barrel.ts" });
+
+  expect(diagnostic.message).toContain(specifier);
+
+  expect(diagnostic.message).toContain("app.tsx");
+
+  expect(diagnostic.message).toContain("./barrel.ts");
+
+  expect(diagnostic.span).toBeDefined();
+
+  expect(diagnostic.span!.start).toBeGreaterThanOrEqual(0);
+
+  expect(diagnostic.span!.end).toBeGreaterThan(diagnostic.span!.start);
+
+  expect(diagnostic.span!.end).toBeLessThanOrEqual(source.length);
+
+  expect(source.slice(diagnostic.span!.start, diagnostic.span!.end)).toContain("value");
+
+  expect(diagnostic.message).toContain(guidance);
 });
 
 test("a reexported namespace cannot hide a host-backed member", () => {
@@ -891,12 +1235,16 @@ test("a reexported namespace cannot hide a host-backed member", () => {
     "barrel.ts": 'export * as value from "./operations.ts";',
     "operations.ts": 'export const safe = "browser";',
   };
+
   expect(throughExports(modules)).toStrictEqual([]);
+
   const diagnostics = throughExports({
     ...modules,
     "operations.ts": "export const hidden = () => process.env.SECRET;",
   });
+
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]!.message).toContain("process");
 });
 
@@ -907,11 +1255,14 @@ test("default expression exports retain their callable closure", () => {
       "operation.ts": 'export default () => "browser";',
     }),
   ).toStrictEqual([]);
+
   const diagnostics = throughExports({
     "barrel.ts": 'export { default as value } from "./operation.ts";',
     "operation.ts": "export default () => process.env.SECRET;",
   });
+
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]).toMatchObject({ code: "HES-CAPABILITY", filename: "operation.ts" });
 });
 
@@ -924,8 +1275,11 @@ test.each([
   "export function value({ input = process.env.SECRET } = {}) { return input; }",
 ])("default values retain host provenance: %s", (source) => {
   const diagnostics = throughExports({ "barrel.ts": source });
+
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]).toMatchObject({ code: "HES-CAPABILITY", filename: "barrel.ts" });
+
   expect(diagnostics[0]!.message).toContain("process");
 });
 
@@ -934,8 +1288,11 @@ test("a body-local declaration cannot conceal a parameter default's outer depend
     "barrel.ts": `const read = () => process.env.SECRET;
 export function value(input = read()) { const read = () => "local"; return input; }`,
   });
+
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]!.code).toBe("HES-CAPABILITY");
+
   expect(diagnostics[0]!.message).toContain("process");
 });
 
@@ -965,6 +1322,8 @@ test("a rendered list's destructuring default retains its host dependency", () =
       return <div>{rows.map(({label = process.env.SECRET}) => <span key={label}>{label}</span>)}</div>;
     }`,
   });
+
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]).toMatchObject({ code: "HES-CAPABILITY", filename: "list.tsx" });
 });

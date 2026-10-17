@@ -1,4 +1,4 @@
-import { Router } from "../../src/routing/index.ts";
+import { Router } from "../../packages/hesperia/src/routing/index.ts";
 
 const events: string[] = [];
 const fixture: {
@@ -8,6 +8,8 @@ const fixture: {
   redirectBack: boolean;
   guardPending: boolean;
   guardStarted: boolean;
+  guardRuns: number;
+  guardVetoes: number;
   releaseGuard?: (decision: boolean) => void;
   lastNode?: HTMLElement;
   beforeBackNode?: HTMLElement;
@@ -19,9 +21,13 @@ const fixture: {
   redirectBack: false,
   guardPending: false,
   guardStarted: false,
+  guardRuns: 0,
+  guardVetoes: 0,
   router: undefined as Router | undefined,
 };
+
 Object.assign(window, { routingFixture: fixture });
+
 const target = document.getElementById("route")!;
 const router = new Router({
   window,
@@ -34,15 +40,26 @@ const router = new Router({
     guards: [
       () => {
         if (url.pathname !== "/") return true;
+
+        fixture.guardRuns++;
+
         if (fixture.redirectBack) return { redirect: "/redirected" };
+
         if (fixture.guardPending)
           return new Promise<boolean>((resolve) => {
             fixture.guardStarted = true;
             fixture.releaseGuard = resolve;
           });
-        return !fixture.denyBack;
+
+        if (fixture.denyBack) {
+          fixture.guardVetoes++;
+          return false;
+        }
+
+        return true;
       },
     ],
+
     prepare() {
       const node = document.createElement("main");
       const control = document.createElement("button");
@@ -53,13 +70,18 @@ const router = new Router({
       return {
         owners: [],
         title: url.pathname,
+
         install() {
           target.append(node);
+
           target.append(control);
+
           events.push(`install:${url.pathname}`);
         },
+
         dispose() {
           node.remove();
+
           control.remove();
         },
       };
@@ -67,7 +89,11 @@ const router = new Router({
   }),
 });
 fixture.router = router;
+
 await router.navigate(location.href, { history: "replace", state: { entry: "root" } });
+
 router.installHistoryNavigation();
+
 router.listenToLinks();
+
 fixture.ready = true;

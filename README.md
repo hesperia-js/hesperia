@@ -23,17 +23,39 @@ Hesperia's compiler must process this source. The current implementation targets
 browser rendering; server rendering, hydration, and static generation follow
 after the browser execution model is verified.
 
-This package is not yet ready for application adoption. To work on it, follow
-the [contributor guide](CONTRIBUTING.md)
+Hesperia is available for experimental application trials. It is not yet ready
+for general application adoption. The [getting-started guide](docs/getting-started.md) covers the application setup for
+the npm alpha release and for a local framework checkout. For VS Code, install
+the [Hesperia extension](editors/vscode/README.md) and the application's matching
+language-server package. Marketplace publication of the extension is pending.
+
+To work on Hesperia itself, follow the [contributor guide](CONTRIBUTING.md)
 and [test guide](tests/README.md).
 
 The [native element guide](docs/native-elements.md) explains element handles,
 bindings, and browser event types.
-The [getting-started guide](docs/getting-started.md) covers local application
+The [getting-started guide](docs/getting-started.md) covers application
 creation, configuration, the HTML shell, head and titles, routes, and boundary views.
 The [component props guide](docs/component-props.md) explains value accessors,
 callable props, and optional inputs.
 The [page inputs guide](docs/page-props.md) explains generated route parameters
 and author-declared query names.
-The [compiler guide](docs/compiler.md) explains native control flow, browser import
+The [compiler guide](packages/compiler/docs/compiler.md) explains native control flow, browser import
 checking, and the current syntax limitations.
+
+## Packages
+
+Each package README covers installation and its public entry points.
+
+| Package                                                         | Purpose                                                       |
+| --------------------------------------------------------------- | ------------------------------------------------------------- |
+| [hesperia](packages/hesperia/README.md)                         | Components, DOM updates, routing, and data lifetimes.         |
+| [@hesperia/compiler](packages/compiler/README.md)               | TypeScript and JSX compilation, checking, and source maps.    |
+| [@hesperia/tooling](packages/tooling/README.md)                 | Application checks, browser builds, and development servers.  |
+| [@hesperia/hosting](packages/hosting/README.md)                 | Serve captured builds through Fetch request handlers.         |
+| [@hesperia/language-server](packages/language-server/README.md) | Diagnostics and source navigation for editors.                |
+| [create-hesperia](packages/create-hesperia/README.md)           | Generate an application with an optional Elysia host.         |
+| [@hesperia/elysia](packages/elysia/README.md)                   | Connect Elysia HTTP routes and Eden clients to Hesperia data. |
+| [@hesperia/postcss](packages/postcss/README.md)                 | Run an application's PostCSS plugins.                         |
+| [@hesperia/tailwind](packages/tailwind/README.md)               | Generate Tailwind CSS utilities.                              |
+| [@hesperia/stylex](packages/stylex/README.md)                   | Compile StyleX definitions and collect application CSS.       |

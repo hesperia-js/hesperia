@@ -15,6 +15,23 @@
     "noEmit": true,
     "types": ["bun"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"],
-  "exclude": ["node_modules", "dist", "build"]
+  "include": [
+    "packages/**/*.ts",
+    "tests/**/*.ts",
+    "scripts/**/*.ts",
+    "golden/**/*.ts",
+    "editors/vscode/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "**/dist",
+    "build",
+    "golden/fixtures",
+    "packages/create-hesperia/templates",
+    "tests/package/fixtures/installed-app",
+    "tests/package/fixtures/applications",
+    "tests/tooling/fixtures/applications",
+    "tests/compiler/fixtures/applications",
+    "tests/editor/fixtures/applications"
+  ]
 }

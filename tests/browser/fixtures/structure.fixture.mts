@@ -18,20 +18,28 @@ const app = mount(
     development: true,
   },
 );
+
 setStructureDispose(() => app.dispose());
+
 document.getElementById("remove")!.addEventListener("click", () => app.dispose());
+
 Object.assign(globalThis, {
   structureFixture: {
     errors,
     warnings,
+
     get panelCleanups() {
       return getPanelCleanupCount();
     },
+
     controls: getStructureControls(),
+
     dispose() {
       app.dispose();
     },
   },
 });
+
 await app.settled();
+
 document.documentElement.dataset.ready = "true";

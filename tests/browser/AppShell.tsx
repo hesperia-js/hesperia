@@ -1,6 +1,7 @@
 import * as client from "hesperia/client";
 
 let effects = 0;
+
 export function effectRuns() {
   return effects;
 }
@@ -8,10 +9,13 @@ export function effectRuns() {
 export default function AppShell() {
   const binding = client.bind<HTMLInputElement>();
   const value = client.state("first");
+
   client.effect(() => {
     effects++;
+
     binding().focus();
   });
+
   return (
     <html lang="en">
       <head>

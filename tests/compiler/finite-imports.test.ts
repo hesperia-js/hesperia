@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { analyzeBrowserCapabilities } from "../../src/compiler/capability-analysis.ts";
-import { compile } from "../../src/compiler/index.ts";
+import { analyzeBrowserCapabilities } from "../../packages/compiler/src/capability-analysis.ts";
+import { compile } from "../../packages/compiler/src/index.ts";
 
 function check(source: string, second = 'export const value = "second";') {
   return analyzeBrowserCapabilities(
@@ -47,11 +47,13 @@ test("a conditional target cannot conceal a host-backed exported value", () => {
     'export const load = (choose) => import(choose ? "./first.ts" : "./second.ts");',
     "export const read = () => process.env.SECRET;",
   );
+
   expect(diagnostics).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ code: "HES-CAPABILITY", filename: "second.ts" }),
     ]),
   );
+
   expect(diagnostics.some((item) => item.message.includes("import(./second.ts)"))).toBe(true);
 });
 
@@ -59,16 +61,27 @@ test("import options retain host provenance", () => {
   expect(
     check('export const load = () => import("./first.ts", { with: { type: process.env.TYPE } });'),
   ).toEqual(expect.arrayContaining([expect.objectContaining({ code: "HES-CAPABILITY" })]));
+
+  expect(
+    check(
+      'export const load = () => import("./first.ts", { "with": { "type": process.env.TYPE } });',
+    ),
+  ).toEqual(expect.arrayContaining([expect.objectContaining({ code: "HES-CAPABILITY" })]));
+
+  expect(
+    check('export const load = () => import("./first.ts", { "with": { "type": "json" } });'),
+  ).toStrictEqual([]);
 });
 
 test.each(["import(binding())", 'import("./first.ts", binding())'])(
   "component import operands cannot hide a binding read: %s",
-  (expression) => {
-    const result = compile(
+  async (expression) => {
+    const result = await compile(
       `import { bind } from "hesperia/client";
     export default function App() { const binding = bind<string>(); ${expression}; return <span/>; }`,
       { filename: "import-body.tsx" },
     );
+
     expect(result.diagnostics).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: "HES-BIND-BODY" })]),
     );

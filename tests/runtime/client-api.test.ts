@@ -1,10 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
 import { createGraph, createMutation, createQuery, defineContract } from "aeolia";
 import { Window } from "happy-dom";
-import { withAeolia } from "../../src/aeolia/index.ts";
-import { bindImported } from "../../src/data/api.ts";
-import type { HesperiaContractApi } from "../../src/data/contract.ts";
-import { element, defineComponent, mount } from "../../src/runtime/dom.ts";
+import { withAeolia } from "../../packages/hesperia/src/aeolia/index.ts";
+import { bindImported } from "../../packages/hesperia/src/data/api.ts";
+import type { HesperiaContractApi } from "../../packages/hesperia/src/data/contract.ts";
+import { client } from "../../packages/hesperia/src/client.ts";
+import * as navigationApi from "../../packages/hesperia/src/navigation.ts";
+import * as routingApi from "../../packages/hesperia/src/routing/index.ts";
+import { element, defineComponent, mount } from "../../packages/hesperia/src/runtime/dom.ts";
 
 const windows: Window[] = [];
 
@@ -12,9 +15,21 @@ afterEach(() => {
   for (const window of windows.splice(0)) window.close();
 });
 
+test("departure authoring stays on the navigation entry while route exports remain", () => {
+  expect("navigation" in client).toBe(false);
+
+  expect("beforeLeave" in routingApi).toBe(false);
+
+  expect(typeof navigationApi.beforeLeave).toBe("function");
+
+  expect("route" in routingApi).toBe(true);
+});
+
 function target(): Element {
   const window = new Window();
+
   windows.push(window);
+
   return window.document.body as unknown as Element;
 }
 
@@ -48,14 +63,21 @@ test("a direct imported API is owner-bound when a compiled component reads it", 
   const app = mount(target(), App, {});
   const view = api.user.get("ada");
   const ready = view.revalidate();
+
   for (const resolve of responses.splice(0)) resolve({ name: "Ada" });
+
   await ready;
+
   expect(view.value()).toStrictEqual({ name: "ada" });
+
   await expect(api.save().run("Ada")).resolves.toStrictEqual({ saved: "Ada" });
 
   app.dispose();
+
   expect(() => api.user.get("after-disposal")).toThrow("no longer active");
+
   expect(graph.api.user.get("ada")).toBeDefined();
+
   graph.dispose();
 });
 
@@ -66,16 +88,22 @@ test("separate component roots receive isolated imported API projections over on
   const apis: unknown[] = [];
   const App = defineComponent((owner) => {
     apis.push(bindImported(owner, imported));
+
     return element(owner, "main");
   });
 
   const first = mount(target(), App, {});
   const second = mount(target(), App, {});
+
   expect(apis).toHaveLength(2);
+
   expect(apis[0]).not.toBe(apis[1]);
 
   first.dispose();
+
   second.dispose();
+
   expect(graph.api).toBeDefined();
+
   graph.dispose();
 });

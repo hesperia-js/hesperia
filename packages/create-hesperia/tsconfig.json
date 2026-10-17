@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@hesperia/elysia": ["../elysia"],
+      "@hesperia/elysia/client": ["../elysia/dist/client"],
+      "@hesperia/hosting": ["../hosting"]
+    }
+  },
+  "include": ["src", "templates/elysia"],
+  "exclude": ["dist"]
+}

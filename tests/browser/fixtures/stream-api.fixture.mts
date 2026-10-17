@@ -13,24 +13,32 @@ const numbers = createStream({
     const queue: number[] = [];
     let waiting: ((result: IteratorResult<number>) => void) | undefined;
     let ended = false;
+
     const stop = () => {
       ended = true;
+
       waiting?.({ done: true, value: undefined });
+
       waiting = undefined;
     };
+
     abortSignal.addEventListener(
       "abort",
       () => {
         aborts++;
+
         stop();
       },
       { once: true },
     );
+
     publish = (value) => {
       if (ended) return;
+
       if (waiting) {
         const resolve = waiting;
         waiting = undefined;
+
         resolve({ done: false, value });
       } else queue.push(value);
     };
@@ -39,13 +47,17 @@ const numbers = createStream({
         return {
           next(): Promise<IteratorResult<number>> {
             if (ended) return Promise.resolve({ done: true, value: undefined });
+
             if (queue.length) return Promise.resolve({ done: false, value: queue.shift()! });
+
             return new Promise((resolve) => {
               waiting = resolve;
             });
           },
+
           return(): Promise<IteratorResult<number>> {
             stop();
+
             return Promise.resolve({ done: true, value: undefined });
           },
         };
@@ -57,6 +69,9 @@ const numbers = createStream({
 const contract = defineContract({ namespace: "browser-stream", operations: { numbers } });
 const graph = createGraph({ contract, idleMs: 1000 });
 export const api = withAeolia(graph, contract);
+
 export const streamStats = () => ({ opens, aborts });
+
 export const emitNumber = (value: number) => publish?.(value);
+
 export const disposeGraph = () => graph.dispose();

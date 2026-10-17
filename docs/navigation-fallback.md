@@ -4,13 +4,28 @@ Reader: a junior TypeScript engineer familiar with Hesperia routing and the brow
 
 Audit date: 2026-09-11.
 
+## Current runtime status
+
+This audit predates the Navigation runtime implementation. Its candidate review,
+browser observations, and statements that fallback work is unfinished describe
+the 2026-09-11 research snapshot. The current API and routing behavior are
+documented in [routing](routing.md). The runtime uses the native Navigation API
+only when the required interception support is present; otherwise it uses the
+History-event fallback. That fallback tracks the current entry and entries
+created through Hesperia or the installed History wrappers. The classic History
+API does not expose earlier entry keys or indexes, so the fallback cannot list
+or traverse an entry created before tracking began. It also cannot provide the
+same interception events for direct `window.location` changes. During a
+fallback Back or Forward, the address may change while Hesperia checks the
+route; a rejected move restores the previous tracked entry.
+
 Hesperia has approval to use the native Navigation API, while retaining the project's Baseline 2024 compatibility objective. This document records what the current platform and the concrete polyfill candidate can prove. It does not select a dependency, change the browser support floor, or define behavior for foreign history entries.
 
 ## The compatibility problem
 
 The native Navigation API is a good match for Hesperia's routing transaction. A navigation entry has a stable `key`, a unique `id`, an `index`, a URL, and serializable state. The API can traverse to an entry by key, and navigation methods expose separate `committed` and `finished` promises. A `navigate` event has an abort signal and can be intercepted for asynchronous work.
 
-Entry identity lets Hesperia distinguish repeated URLs. Cancellation lets it stop a same-document traversal before preparing its destination. However, an ordinary intercepted `handler` runs after the browser commits the destination entry: rejecting that handler does not restore the previous URL. Hesperia must cancel the original traversal synchronously, run its checks, and traverse to the saved destination key only if that candidate still wins. The [WHATWG Navigation API section](https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-navigation-api) defines the platform behavior; [MDN's interception reference](https://developer.mozilla.org/en-US/docs/Web/API/NavigateEvent/intercept) explains handler timing.
+Entry identity lets Hesperia distinguish repeated URLs. Cancellation lets it stop a same-document traversal before preparing its destination. However, an ordinary intercepted `handler` runs after the browser commits the destination entry: rejecting that handler does not restore the previous URL. Hesperia must cancel the original traversal synchronously, run its checks, and traverse to the saved destination key only if that candidate still wins. The [WHATWG Navigation API section](https://html.spec.whatwg.org/multipage/nav-history-apis.html#navigation-api) defines the platform behavior; [MDN's interception reference](https://developer.mozilla.org/en-US/docs/Web/API/NavigateEvent/intercept) explains handler timing.
 
 The current MDN browser-compatibility data does not put those capabilities on a 2024 browser floor. It lists Navigation API support beginning at Chrome 102, Firefox 147, and Safari 26.2, with the individual navigation methods and events following the same modern support boundary. See the checked-in [MDN browser-compatibility data for `Navigation`](https://raw.githubusercontent.com/mdn/browser-compat-data/main/api/Navigation.json). This means “the native path works in the browsers probed for Hesperia” and “the feature is available on the Baseline 2024 floor” are separate claims.
 

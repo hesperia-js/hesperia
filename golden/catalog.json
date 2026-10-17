@@ -1,0 +1,672 @@
+{
+  "version": 1,
+  "behaviors": [
+    {
+      "id": "golden-harness",
+      "paths": [
+        "golden/index.html",
+        "golden/package.json",
+        "golden/playwright.config.ts",
+        "golden/server.ts",
+        "golden/verify-aeolia-inputs.ts",
+        "golden/verify-packages.ts"
+      ]
+    },
+    {
+      "id": "task-cancellation-late-result",
+      "paths": [
+        "packages/hesperia/src/client.ts",
+        "packages/hesperia/src/data/task.ts",
+        "golden/fixtures/task-cancellation/TaskCancellation.tsx",
+        "golden/fixtures/task-cancellation/task-cancellation.fixture.ts",
+        "golden/tests/task-cancellation.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "native-update-retains-elements",
+      "paths": [
+        "packages/hesperia/src/client.ts",
+        "packages/hesperia/src/runtime/binding.ts",
+        "packages/hesperia/src/runtime/dom.ts",
+        "packages/hesperia/src/runtime/owner.ts",
+        "packages/hesperia/src/runtime/scheduler.ts",
+        "packages/hesperia/src/runtime/structure.ts",
+        "golden/fixtures/native-identity/Counter.tsx",
+        "golden/fixtures/native-identity/identity.fixture.ts",
+        "golden/tests/native-identity.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "native-identity-witness",
+      "paths": [
+        "golden/fixtures/native-identity/Counter.tsx",
+        "golden/fixtures/native-identity/identity.fixture.ts",
+        "golden/tests/native-identity.spec.ts"
+      ],
+      "dependsOn": ["native-update-retains-elements"]
+    },
+    {
+      "id": "native-event-handler-identity",
+      "paths": [
+        "packages/compiler/src/checking.ts",
+        "packages/compiler/src/checking-view.ts",
+        "packages/compiler/src/canonical.ts",
+        "packages/compiler/src/event-options.ts",
+        "packages/compiler/src/generate.ts",
+        "packages/hesperia/src/runtime/dom.ts",
+        "golden/fixtures/native-events/NativeEvents.tsx",
+        "golden/fixtures/native-events/native-events.fixture.ts",
+        "golden/tests/native-events.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "native-event-options-once",
+      "paths": [
+        "packages/compiler/src/checking.ts",
+        "packages/compiler/src/checking-view.ts",
+        "packages/compiler/src/canonical.ts",
+        "packages/compiler/src/event-options.ts",
+        "packages/compiler/src/generate.ts",
+        "packages/hesperia/package.json",
+        "packages/hesperia/src/client.ts",
+        "packages/hesperia/src/events.ts",
+        "packages/hesperia/src/runtime/dom.ts",
+        "golden/fixtures/native-events/NativeEvents.tsx",
+        "golden/fixtures/native-events/native-events.fixture.ts",
+        "golden/tests/native-events.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "native-event-capture-order",
+      "paths": [
+        "packages/compiler/src/checking.ts",
+        "packages/compiler/src/checking-view.ts",
+        "packages/compiler/src/canonical.ts",
+        "packages/compiler/src/event-options.ts",
+        "packages/compiler/src/generate.ts",
+        "packages/hesperia/src/events.ts",
+        "packages/hesperia/src/runtime/dom.ts",
+        "golden/fixtures/native-events/NativeEvents.tsx",
+        "golden/fixtures/native-events/native-events.fixture.ts",
+        "golden/tests/native-events.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "native-event-passive-cancellation",
+      "paths": [
+        "packages/compiler/src/checking.ts",
+        "packages/compiler/src/checking-view.ts",
+        "packages/compiler/src/canonical.ts",
+        "packages/compiler/src/event-options.ts",
+        "packages/compiler/src/generate.ts",
+        "packages/hesperia/src/events.ts",
+        "packages/hesperia/src/runtime/dom.ts",
+        "golden/fixtures/native-events/NativeEvents.tsx",
+        "golden/fixtures/native-events/native-events.fixture.ts",
+        "golden/tests/native-events.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "native-event-release-recreation",
+      "paths": [
+        "packages/compiler/src/checking.ts",
+        "packages/compiler/src/checking-view.ts",
+        "packages/compiler/src/canonical.ts",
+        "packages/compiler/src/event-options.ts",
+        "packages/compiler/src/generate.ts",
+        "packages/hesperia/src/events.ts",
+        "packages/hesperia/src/runtime/dom.ts",
+        "packages/hesperia/src/runtime/owner.ts",
+        "golden/fixtures/native-events/NativeEvents.tsx",
+        "golden/fixtures/native-events/native-events.fixture.ts",
+        "golden/tests/native-events.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "native-event-broken-shared-once-control",
+      "paths": ["golden/tests/native-events.spec.ts"],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "blob-attribute-owner-release",
+      "paths": [
+        "packages/hesperia/src/runtime/dom.ts",
+        "packages/hesperia/src/runtime/owner.ts",
+        "golden/fixtures/blob-attributes/BlobAttributes.tsx",
+        "golden/fixtures/blob-attributes/blob-attributes.fixture.ts",
+        "golden/tests/blob-attributes.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "blob-target-document-lease",
+      "paths": [
+        "packages/hesperia/src/runtime/dom.ts",
+        "packages/hesperia/src/runtime/owner.ts",
+        "golden/fixtures/blob-attributes/ForeignFileImage.tsx",
+        "golden/fixtures/blob-attributes/blob-attributes.fixture.ts",
+        "golden/tests/blob-attributes.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "blob-srcset-candidates",
+      "paths": [
+        "packages/compiler/src/checking.ts",
+        "packages/hesperia/src/runtime/dom.ts",
+        "packages/hesperia/src/runtime/owner.ts",
+        "golden/fixtures/blob-attributes/BlobAttributes.tsx",
+        "golden/fixtures/blob-attributes/blob-attributes.fixture.ts",
+        "golden/tests/blob-attributes.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "embed-sandbox-isolation",
+      "paths": [
+        "packages/hesperia/src/embed.ts",
+        "packages/hesperia/src/runtime/project-policy.ts",
+        "golden/fixtures/embed-security/EmbedSecurity.tsx",
+        "golden/fixtures/embed-security/embed-security.fixture.ts",
+        "golden/tests/embed-security.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "embed-permission-replacement",
+      "paths": [
+        "packages/hesperia/src/client.ts",
+        "packages/hesperia/src/embed.ts",
+        "packages/hesperia/src/runtime/binding.ts",
+        "packages/hesperia/src/runtime/owner.ts",
+        "packages/hesperia/src/runtime/project-policy.ts",
+        "golden/fixtures/embed-security/EmbedSecurity.tsx",
+        "golden/fixtures/embed-security/embed-security.fixture.ts",
+        "golden/tests/embed-security.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "embed-wrapper-binding-sizing",
+      "paths": [
+        "packages/hesperia/src/embed.ts",
+        "packages/hesperia/src/runtime/binding.ts",
+        "golden/fixtures/embed-security/EmbedSecurity.tsx",
+        "golden/fixtures/embed-security/embed-security.fixture.ts",
+        "golden/tests/embed-security.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "embed-native-load-callback",
+      "paths": [
+        "packages/compiler/src/checking.ts",
+        "packages/compiler/src/generate.ts",
+        "packages/hesperia/src/embed.ts",
+        "golden/fixtures/embed-security/EmbedSecurity.tsx",
+        "golden/fixtures/embed-security/embed-security.fixture.ts",
+        "golden/tests/embed-security.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "embed-parent-disposal",
+      "paths": [
+        "packages/hesperia/src/embed.ts",
+        "packages/hesperia/src/runtime/binding.ts",
+        "packages/hesperia/src/runtime/owner.ts",
+        "golden/fixtures/embed-security/EmbedSecurity.tsx",
+        "golden/fixtures/embed-security/embed-security.fixture.ts",
+        "golden/tests/embed-security.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "component-css-readiness",
+      "paths": [
+        "packages/compiler/src/project-compilation.ts",
+        "packages/compiler/src/generate.ts",
+        "packages/tooling/src/project.ts",
+        "packages/tooling/src/css-bundling.ts",
+        "packages/tooling/src/style-topology.ts",
+        "packages/hesperia/src/client.ts",
+        "packages/hesperia/src/runtime/application.ts",
+        "packages/hesperia/src/runtime/owner.ts",
+        "packages/hesperia/src/runtime/scheduler.ts",
+        "packages/hesperia/src/runtime/style.ts",
+        "golden/fixtures/component-css/app.tsx",
+        "golden/fixtures/component-css/src/routes/component-css/+page.tsx",
+        "golden/fixtures/component-css/src/StyledPanel.tsx",
+        "golden/fixtures/component-css/src/panel.css",
+        "golden/tests/component-css.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "component-css-unwaited-control",
+      "paths": [
+        "golden/fixtures/component-css/src/routes/component-css/+page.tsx",
+        "golden/fixtures/component-css/src/UnwaitedControl.tsx",
+        "golden/tests/component-css.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "component-css-shared-ownership",
+      "paths": [
+        "packages/compiler/src/project-compilation.ts",
+        "packages/compiler/src/generate.ts",
+        "packages/tooling/src/project.ts",
+        "packages/tooling/src/css-bundling.ts",
+        "packages/tooling/src/style-topology.ts",
+        "packages/hesperia/src/runtime/application.ts",
+        "packages/hesperia/src/runtime/owner.ts",
+        "packages/hesperia/src/runtime/style.ts",
+        "golden/fixtures/component-css/app.tsx",
+        "golden/fixtures/component-css/src/routes/component-css/+page.tsx",
+        "golden/fixtures/component-css/src/StyledPanel.tsx",
+        "golden/fixtures/component-css/src/panel.css",
+        "golden/tests/component-css.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "optional-styling-css-output",
+      "paths": [
+        "packages/compiler/src/canonical.ts",
+        "packages/compiler/src/checking.ts",
+        "packages/compiler/src/compilation.ts",
+        "packages/compiler/src/generate.ts",
+        "packages/compiler/src/project-compilation.ts",
+        "packages/hosting/src/index.ts",
+        "packages/hosting/src/internal/mount.ts",
+        "packages/postcss/src/index.ts",
+        "packages/stylex/src/index.ts",
+        "packages/tailwind/src/index.ts",
+        "packages/tooling/src/configuration.ts",
+        "packages/tooling/src/css-bundling.ts",
+        "packages/tooling/src/project.ts",
+        "packages/tooling/src/style-plan.ts",
+        "packages/tooling/src/style-topology.ts",
+        "golden/fixtures/optional-styling/app.tsx",
+        "golden/fixtures/optional-styling/hesperia.config.ts",
+        "golden/fixtures/optional-styling/src/routes/+page.tsx",
+        "golden/fixtures/optional-styling/src/styles.css",
+        "golden/tests/optional-styling.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "public-values-fixture",
+      "paths": [
+        "golden/fixtures/public-values/app.tsx",
+        "golden/fixtures/public-values/hesperia.config.ts",
+        "golden/fixtures/public-values/public-consumer.ts",
+        "golden/fixtures/public-values/src/routes/public-values/+page.tsx",
+        "golden/fixtures/public-values/tsconfig.public-consumer.json",
+        "golden/tests/public-values.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "public-values-project-projection",
+      "paths": [
+        "packages/tooling/src/configuration.ts",
+        "packages/tooling/src/project.ts",
+        "packages/tooling/src/public-values.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "lifecycle-fixture",
+      "paths": [
+        "golden/fixtures/lifecycle/api.ts",
+        "golden/fixtures/lifecycle/Lifecycle.tsx",
+        "golden/fixtures/lifecycle/Query.tsx",
+        "golden/fixtures/lifecycle/lifecycle.fixture.ts",
+        "golden/fixtures/lifecycle/Stream.tsx",
+        "golden/tests/lifecycle.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "lifecycle-effect-order-and-binding",
+      "paths": [
+        "packages/compiler/src/body-validation.ts",
+        "packages/compiler/src/compilation.ts",
+        "packages/compiler/src/generate.ts",
+        "packages/hesperia/src/client.ts",
+        "packages/hesperia/src/runtime/binding.ts",
+        "packages/hesperia/src/runtime/dom.ts",
+        "packages/hesperia/src/runtime/owner.ts",
+        "packages/hesperia/src/runtime/scheduler.ts",
+        "packages/hesperia/src/runtime/structure.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "lifecycle-shared-stream",
+      "paths": [
+        "packages/compiler/src/body-validation.ts",
+        "packages/compiler/src/compilation.ts",
+        "packages/compiler/src/generate.ts",
+        "packages/hesperia/src/aeolia/index.ts",
+        "packages/hesperia/src/client.ts",
+        "packages/hesperia/src/data/contract.ts",
+        "packages/hesperia/src/data/feed.ts",
+        "packages/hesperia/src/runtime/owner.ts",
+        "packages/hesperia/src/runtime/scheduler.ts",
+        "packages/hesperia/src/runtime/structure.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "lifecycle-async-query-boundary",
+      "paths": [
+        "packages/compiler/src/body-validation.ts",
+        "packages/compiler/src/canonical.ts",
+        "packages/compiler/src/checking.ts",
+        "packages/compiler/src/compilation.ts",
+        "packages/compiler/src/generate.ts",
+        "packages/hesperia/src/aeolia/index.ts",
+        "packages/hesperia/src/client.ts",
+        "packages/hesperia/src/data/contract.ts",
+        "packages/hesperia/src/data/protocol.ts",
+        "packages/hesperia/src/data/query.ts",
+        "packages/hesperia/src/runtime/async.ts",
+        "packages/hesperia/src/runtime/dom.ts",
+        "packages/hesperia/src/runtime/owner.ts",
+        "packages/hesperia/src/runtime/structure.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "checklist-fixture",
+      "paths": [
+        "golden/fixtures/checklist/app.config.ts",
+        "golden/fixtures/checklist/app.tsx",
+        "golden/fixtures/checklist/hesperia.d.ts",
+        "golden/fixtures/checklist/src/api.ts",
+        "golden/fixtures/checklist/src/routes/checklist/+page.tsx",
+        "golden/tests/checklist.spec.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "checklist-aeolia-adaptation",
+      "paths": ["packages/hesperia/src/aeolia/index.ts", "packages/hesperia/src/data/api.ts"],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "checklist-live-list-detail-mutations",
+      "paths": [
+        "packages/hesperia/src/data/api.ts",
+        "packages/hesperia/src/data/contract.ts",
+        "packages/hesperia/src/data/query.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "checklist-cached-page-restoration",
+      "paths": [
+        "packages/hesperia/src/routing/browser-history.ts",
+        "packages/hesperia/src/routing/history.ts",
+        "packages/hesperia/src/routing/navigation-api.ts",
+        "packages/hesperia/src/routing/navigation.ts",
+        "packages/hesperia/src/routing/native-navigation.ts",
+        "packages/hesperia/src/routing/page-cache.ts",
+        "packages/hesperia/src/routing/presentation.ts",
+        "packages/hesperia/src/routing/route-host.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "checklist-keyed-controls",
+      "paths": ["packages/compiler/src/generate.ts", "packages/hesperia/src/runtime/structure.ts"],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "checklist-component-cleanup",
+      "paths": [
+        "packages/hesperia/src/client.ts",
+        "packages/hesperia/src/runtime/owner.ts",
+        "packages/hesperia/src/runtime/scheduler.ts",
+        "packages/hesperia/src/runtime/structure.ts"
+      ],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "checklist-seeded-model",
+      "paths": ["golden/tests/checklist.spec.ts"],
+      "dependsOn": ["golden-harness"]
+    },
+    {
+      "id": "checklist-latest-run-suppression",
+      "paths": ["packages/hesperia/src/client.ts", "packages/hesperia/src/data/task.ts"],
+      "dependsOn": ["golden-harness"]
+    }
+  ],
+  "cases": [
+    {
+      "id": "task-cancellation-late-result",
+      "title": "a cancelled task stays cancelled after its backend completes late",
+      "suite": "tests/task-cancellation.spec.ts",
+      "behaviors": ["task-cancellation-late-result"]
+    },
+    {
+      "id": "native-update-retains-elements",
+      "title": "reactive text updates keep the native button and uncontrolled input",
+      "suite": "tests/native-identity.spec.ts",
+      "behaviors": ["native-update-retains-elements"]
+    },
+    {
+      "id": "native-identity-witness",
+      "title": "the native identity witness rejects a deliberately replaced node",
+      "suite": "tests/native-identity.spec.ts",
+      "behaviors": ["native-identity-witness"]
+    },
+    {
+      "id": "native-event-handler-identity",
+      "title": "plain native handlers receive the dispatched Event and element as this",
+      "suite": "tests/native-events.spec.ts",
+      "behaviors": ["native-event-handler-identity"]
+    },
+    {
+      "id": "native-event-options-once",
+      "title": "helper imports and literal pairs keep shared once behavior native and per element",
+      "suite": "tests/native-events.spec.ts",
+      "behaviors": ["native-event-options-once"]
+    },
+    {
+      "id": "native-event-capture-order",
+      "title": "capture helpers preserve native capture and bubbling order",
+      "suite": "tests/native-events.spec.ts",
+      "behaviors": ["native-event-capture-order"]
+    },
+    {
+      "id": "native-event-passive-cancellation",
+      "title": "passive preventDefault is ignored while the default listener cancels",
+      "suite": "tests/native-events.spec.ts",
+      "behaviors": ["native-event-passive-cancellation"]
+    },
+    {
+      "id": "native-event-release-recreation",
+      "title": "disposing releases old listeners and a recreated component gets fresh once state",
+      "suite": "tests/native-events.spec.ts",
+      "behaviors": ["native-event-release-recreation"]
+    },
+    {
+      "id": "native-event-broken-shared-once-control",
+      "title": "a callback-level shared once guard incorrectly suppresses the second element",
+      "suite": "tests/native-events.spec.ts",
+      "behaviors": ["native-event-broken-shared-once-control"]
+    },
+    {
+      "id": "blob-attribute-owner-release",
+      "title": "public package mount loads Blob sources and releases replaced and destroyed URLs",
+      "suite": "tests/blob-attributes.spec.ts",
+      "behaviors": ["blob-attribute-owner-release"]
+    },
+    {
+      "id": "blob-target-document-lease",
+      "title": "a parent-document File uses the target document URL lease across replacement and release",
+      "suite": "tests/blob-attributes.spec.ts",
+      "behaviors": ["blob-target-document-lease"]
+    },
+    {
+      "id": "blob-srcset-candidates",
+      "title": "native srcset loads one of its emitted Blob and author candidates",
+      "suite": "tests/blob-attributes.spec.ts",
+      "behaviors": ["blob-srcset-candidates"]
+    },
+    {
+      "id": "embed-sandbox-isolation",
+      "title": "embed-sandbox-isolation: scripts run while a same-origin child cannot write the parent",
+      "suite": "tests/embed-security.spec.ts",
+      "behaviors": ["embed-sandbox-isolation"]
+    },
+    {
+      "id": "embed-permission-replacement",
+      "title": "embed-permission-replacement: the wrapper survives while the old frame is detached",
+      "suite": "tests/embed-security.spec.ts",
+      "behaviors": ["embed-permission-replacement"]
+    },
+    {
+      "id": "embed-wrapper-binding-sizing",
+      "title": "embed-wrapper-binding-sizing: authored numeric and CSS dimensions reach the native layout",
+      "suite": "tests/embed-security.spec.ts",
+      "behaviors": ["embed-wrapper-binding-sizing"]
+    },
+    {
+      "id": "embed-native-load-callback",
+      "title": "embed-native-load-callback: native options are present and load targets the bound frame",
+      "suite": "tests/embed-security.spec.ts",
+      "behaviors": ["embed-native-load-callback"]
+    },
+    {
+      "id": "embed-parent-disposal",
+      "title": "embed-parent-disposal: disposing the parent removes its owned iframe",
+      "suite": "tests/embed-security.spec.ts",
+      "behaviors": ["embed-parent-disposal"]
+    },
+    {
+      "id": "component-css-readiness",
+      "title": "compiled component CSS gates module preload and mount effects on their own Documents",
+      "suite": "tests/component-css.spec.ts",
+      "behaviors": ["component-css-readiness", "component-css-unwaited-control"]
+    },
+    {
+      "id": "component-css-shared-ownership",
+      "title": "multiple component mounts share CSS until the last mount is disposed",
+      "suite": "tests/component-css.spec.ts",
+      "behaviors": ["component-css-shared-ownership"]
+    },
+    {
+      "id": "optional-styling-development-output",
+      "title": "development optional CSS integrations produce observable browser styles",
+      "suite": "tests/optional-styling.spec.ts",
+      "behaviors": ["optional-styling-css-output"]
+    },
+    {
+      "id": "optional-styling-production-output",
+      "title": "production optional CSS integrations produce observable browser styles",
+      "suite": "tests/optional-styling.spec.ts",
+      "behaviors": ["optional-styling-css-output"]
+    },
+    {
+      "id": "public-values-runtime-shape",
+      "title": "compiled public values distinguish an omitted key from own undefined and null",
+      "suite": "tests/public-values.spec.ts",
+      "behaviors": ["public-values-fixture", "public-values-project-projection"]
+    },
+    {
+      "id": "public-values-emitted-asset-control",
+      "title": "missing own undefined in an isolated emitted asset is caught by the same oracle",
+      "suite": "tests/public-values.spec.ts",
+      "behaviors": ["public-values-fixture", "public-values-project-projection"]
+    },
+    {
+      "id": "public-values-declarations",
+      "title": "generated declarations preserve public value types and omit absent keys",
+      "suite": "tests/public-values.spec.ts",
+      "behaviors": ["public-values-fixture", "public-values-project-projection"]
+    },
+    {
+      "id": "lifecycle-effect-order-and-binding",
+      "title": "compiled mount orders effects, publishes a native binding, and cleans up by owner",
+      "suite": "tests/lifecycle.spec.ts",
+      "behaviors": ["lifecycle-fixture", "lifecycle-effect-order-and-binding"]
+    },
+    {
+      "id": "lifecycle-shared-stream-idle-expiry",
+      "title": "two mounted owners share one stream until the configured idle expiry",
+      "suite": "tests/lifecycle.spec.ts",
+      "behaviors": ["lifecycle-fixture", "lifecycle-shared-stream"]
+    },
+    {
+      "id": "lifecycle-query-boundary-success",
+      "title": "AsyncBoundary keeps its fallback until a pending query succeeds",
+      "suite": "tests/lifecycle.spec.ts",
+      "behaviors": ["lifecycle-fixture", "lifecycle-async-query-boundary"]
+    },
+    {
+      "id": "lifecycle-query-error-cleanup",
+      "title": "an initial query failure reaches mount onError and releases the waiting owner",
+      "suite": "tests/lifecycle.spec.ts",
+      "behaviors": ["lifecycle-fixture", "lifecycle-async-query-boundary"]
+    },
+    {
+      "id": "checklist-crud-live-queries-cleanup",
+      "title": "compiled checklist CRUD revalidates live queries and releases component effects",
+      "suite": "tests/checklist.spec.ts",
+      "behaviors": [
+        "checklist-fixture",
+        "checklist-aeolia-adaptation",
+        "checklist-live-list-detail-mutations",
+        "checklist-keyed-controls",
+        "checklist-component-cleanup"
+      ]
+    },
+    {
+      "id": "checklist-cached-page-restoration",
+      "title": "cached checklist pages restore controls and revalidate data changed on the detail route",
+      "suite": "tests/checklist.spec.ts",
+      "behaviors": [
+        "checklist-fixture",
+        "checklist-aeolia-adaptation",
+        "checklist-live-list-detail-mutations",
+        "checklist-component-cleanup",
+        "checklist-cached-page-restoration"
+      ]
+    },
+    {
+      "id": "checklist-seeded-model-keyed-rows",
+      "title": "seeded bounded checklist actions match an independent model and retain keyed rows",
+      "suite": "tests/checklist.spec.ts",
+      "behaviors": [
+        "checklist-fixture",
+        "checklist-aeolia-adaptation",
+        "checklist-live-list-detail-mutations",
+        "checklist-keyed-controls",
+        "checklist-seeded-model"
+      ]
+    },
+    {
+      "id": "checklist-latest-run-suppression",
+      "title": "a cancelled latest-run task cannot publish its late response",
+      "suite": "tests/checklist.spec.ts",
+      "behaviors": [
+        "checklist-fixture",
+        "checklist-aeolia-adaptation",
+        "checklist-latest-run-suppression"
+      ]
+    }
+  ]
+}

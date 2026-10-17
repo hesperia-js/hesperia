@@ -1,374 +1,522 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { prepareBuild, ProjectError, writeBuild } from "../../src/tooling/project.ts";
-import { previewProject } from "../../src/tooling/server.ts";
+import { threadId } from "node:worker_threads";
+import { prepareBuild, ProjectError, writeBuild } from "../../packages/tooling/src/project.ts";
+import { previewProject } from "../../packages/tooling/src/server.ts";
+import {
+  coverageVariable,
+  createCoverageArtifact,
+  inventoryCoverageSources,
+  writeCoverageFragment,
+  type CoverageFile,
+  type CoveragePopulation,
+} from "../../scripts/ci/coverage-collector.ts";
+import {
+  withCoverageWorkerBuild,
+  type WorkerCoverageBuildRecord,
+  type WorkerCoverageOutput,
+} from "../../scripts/ci/coverage-worker-build.ts";
 
-test("generated public routing flows preserve ownership, shared freshness, and guard boundaries", async () => {
+const browserDriver = join(import.meta.dir, "fixtures/drivers/routing-public-flows-browser.mjs");
+
+test("generated public routing flows preserve ownership, shared freshness, guard boundaries and whole-document reload", async () => {
   const parent = resolve(import.meta.dir, "../../.hesperia");
+
   await mkdir(parent, { recursive: true });
+
   const root = await mkdtemp(join(parent, "routing-public-flows-"));
+
   let server: Awaited<ReturnType<typeof previewProject>> | undefined;
+
   try {
+    const browserPageTemplatePath = process.env.HESPERIA_COVERAGE_BROWSER_PAGE_TEMPLATE;
+    const browserPageOutputMapPath = process.env.HESPERIA_COVERAGE_BROWSER_PAGE_OUTPUT_MAP;
+    const browserPageBuildDirectory = process.env.HESPERIA_COVERAGE_BROWSER_PAGE_BUILD_DIRECTORY;
+    const browserPagePopulationFingerprint = process.env.HESPERIA_COVERAGE_BROWSER_PAGE_POPULATION;
+    const browserPageConfiguration = [
+      browserPageTemplatePath,
+      browserPageOutputMapPath,
+      browserPageBuildDirectory,
+      browserPagePopulationFingerprint,
+    ];
+
+    const browserPageCoverageEnabled = browserPageConfiguration.some(
+      (value) => value !== undefined,
+    );
+
+    if (
+      browserPageCoverageEnabled &&
+      browserPageConfiguration.some((value) => value === undefined)
+    ) {
+      throw new Error("Browser page coverage environment is incomplete");
+    }
+
+    const browserPageCoverage = browserPageCoverageEnabled
+      ? await (async () => {
+          const template = JSON.parse(await readFile(browserPageTemplatePath!, "utf8")) as {
+            readonly sourcePopulation?: CoveragePopulation;
+          };
+
+          const outputs = JSON.parse(await readFile(browserPageOutputMapPath!, "utf8")) as
+            | WorkerCoverageOutput[]
+            | undefined;
+
+          const runId = process.env.HESPERIA_COVERAGE_RUN_ID;
+          const ownerId = process.env.HESPERIA_COVERAGE_OWNER_ID;
+          const outputDirectory = process.env.HESPERIA_COVERAGE_OUTPUT_DIR;
+          const repoPath = resolve(import.meta.dir, "../..");
+          const sourcePopulation = template.sourcePopulation;
+
+          if (
+            !sourcePopulation ||
+            !Array.isArray(sourcePopulation.files) ||
+            !Array.isArray(outputs) ||
+            !runId ||
+            !ownerId ||
+            !outputDirectory ||
+            sourcePopulation.fingerprint !== browserPagePopulationFingerprint
+          ) {
+            throw new Error("Browser page coverage run identity or population is malformed");
+          }
+
+          const expectedSources = inventoryCoverageSources(repoPath)
+            .map((source) => relative(repoPath, source).split(sep).join("/"))
+            .sort();
+
+          const capturedSources = sourcePopulation.files.map((file) => file.source).sort();
+
+          if (JSON.stringify(capturedSources) !== JSON.stringify(expectedSources)) {
+            throw new Error(
+              "Browser page coverage population does not match the complete current inventory",
+            );
+          }
+
+          return {
+            buildDirectory: browserPageBuildDirectory!,
+            outputs,
+            ownerId,
+            outputDirectory,
+            populationFingerprint: sourcePopulation.fingerprint,
+            repoPath,
+            runId,
+            sourcePopulation,
+          };
+        })()
+      : undefined;
+
+    const fixtureRoot = new URL("./fixtures/applications/routing-public-flows/", import.meta.url);
+
     const sources = {
-      "app.config.ts": `import type { AppConfiguration } from "hesperia";
-export default { pageCacheSize: 1 } satisfies AppConfiguration;`,
-      "app.tsx": `import type { Component, Rendered } from "hesperia";
-import { client } from "hesperia";
-import { Router } from "hesperia/routing";
-import { api } from "./api";
-
-Object.assign(globalThis, { routingPublicFixture: { beforeLeaveChecks: 0, homeBodies: 0, cachedBodies: 0, blockedBodies: 0, redirectBodies: 0, sharedUpdateDone: false, navigationResults: [], router: undefined } });
-const originalNavigate = Router.prototype.navigate;
-Router.prototype.navigate = function (this: Router, target, options) {
-  (globalThis as unknown as { routingPublicFixture: { router: Router } }).routingPublicFixture.router = this;
-  const result = originalNavigate.call(this, target, options);
-  void result.then(outcome => {
-    (globalThis as unknown as { routingPublicFixture: { navigationResults: unknown[] } }).routingPublicFixture.navigationResults.push(outcome);
-  });
-  return result;
-};
-
-export default function App(props: Component.Props<{ children: Rendered }>) {
-  const shared = api.message("shared");
-  const update = api.update();
-  const fixture = globalThis as unknown as { routingPublicFixture: { sharedUpdateDone: boolean } };
-  return <html><head><title>Public routing flows</title></head><body>
-    <nav>
-      <a id="nav-home" href="/">Home</a>
-      <a id="nav-target" href="/target">Target</a>
-      <a id="nav-blocked" href="/blocked">Blocked</a>
-      <a id="nav-redirect" href="/redirect">Redirect</a>
-      <a id="nav-cached" href="/cached">Cached</a>
-      <a id="nav-user" href="/users/one?tab=first">User</a>
-      <a id="nav-missing" href="/missing">Missing</a>
-      <button id="update-shared" on:click={() => { fixture.routingPublicFixture.sharedUpdateDone = false; void update.run({ id: "shared" }).then(() => { fixture.routingPublicFixture.sharedUpdateDone = true; }); }}>Update shared</button>
-      <output id="shared-shell">{shared.value()?.message ?? ""}</output>
-    </nav>
-    {props.children()}
-  </body></html>;
-}`,
-      "api.ts": `import { affects, createGraph, createMutation, createQuery, defineContract } from "aeolia";
-import { withAeolia } from "hesperia/aeolia";
-const message = createQuery({
-  name: "message",
-  key: (id: string) => id,
-  fetch: async (id, { abortSignal }) => {
-    const response = await fetch("/api/message/" + id, { signal: abortSignal });
-    if (!response.ok) throw new Error(await response.text());
-    return await response.json() as { message: string };
-  },
-});
-const update = createMutation({
-  name: "message.update",
-  run: async (input: { id: string }, { abortSignal }) => {
-    const response = await fetch("/api/update", { method: "POST", body: JSON.stringify(input), signal: abortSignal });
-    if (!response.ok) throw new Error(await response.text());
-    return await response.json() as { ok: true };
-  },
-  affects: [affects(message, { select: (input: { id: string }) => input.id, on: "revalidate" })],
-});
-const contract = defineContract({ namespace: "public-routing", operations: { message, update } });
-const graph = createGraph({ contract });
-export const api = withAeolia(graph, contract);`,
-      "src/routes/+layout.tsx": `import type { Component, Rendered } from "hesperia";
-export default function Layout(props: Component.Props<{ children: Rendered }>) {
-  return <section id="route-layout">{props.children()}</section>;
-}`,
-      "src/routes/+loading.tsx": `export default function Loading() { return <span id="loading">Loading</span>; }`,
-      "src/routes/+not-found.tsx": `export default function NotFound() { return <main id="not-found">Not found</main>; }`,
-      "src/routes/+page.tsx": `import type { Component } from "hesperia";
-import { client } from "hesperia";
-
-function GuardedEditor() {
-  const dirty = client.state(true);
-  client.navigation.beforeLeave(() => {
-    const fixture = globalThis as unknown as { routingPublicFixture: { beforeLeaveChecks: number } };
-    fixture.routingPublicFixture.beforeLeaveChecks += 1;
-    return !dirty();
-  });
-  return <button id="allow-leave" on:click={() => dirty.set(false)}>Allow leave</button>;
-}
-
-export default function Home() {
-  const fixture = globalThis as unknown as { routingPublicFixture: { homeBodies: number } };
-  fixture.routingPublicFixture.homeBodies += 1;
-  const removeGuard = client.state(false);
-  return <main id="home" data-bodies={String(fixture.routingPublicFixture.homeBodies)}>
-    {!removeGuard() ? <GuardedEditor /> : null}
-    <button id="remove-guard" on:click={() => removeGuard.set(true)}>Remove guard</button>
-    {!removeGuard() ? <span id="guard-mounted">guard mounted</span> : <span id="guard-removed">guard removed</span>}
-    <a href="/target" id="home-target">Target</a>
-  </main>;
-}`,
-      "src/routes/cached/+page.tsx": `import { api } from "../../../api";
-import { effect } from "hesperia/client";
-export default async function Cached() {
-  const fixture = globalThis as unknown as { routingPublicFixture: { cachedBodies: number } };
-  fixture.routingPublicFixture.cachedBodies += 1;
-  const message = await api.message("shared");
-  const marker = <span id="cached-effect" data-runs="0" data-cleanups="0" />;
-  effect(() => {
-    marker.dataset.value = message().message;
-    marker.dataset.runs = String(Number(marker.dataset.runs) + 1);
-    return () => { marker.dataset.cleanups = String(Number(marker.dataset.cleanups) + 1); };
-  });
-  return <main id="cached" data-bodies={String(fixture.routingPublicFixture.cachedBodies)}><span id="cached-message">{message().message}</span>{marker}<a id="cached-parking" href="/parking">Parking</a></main>;
-}`,
-      "src/routes/parking/+page.tsx": `export default function Parking() {
-  return <main id="parking">Parking</main>;
-}`,
-      "src/routes/target/+page.tsx": `export default function Target() {
-  return <main id="target">Target<a href="/">Home</a><a id="target-after" href="/after">After</a></main>;
-}`,
-      "src/routes/after/+page.tsx": `export default function After() {
-  return <main id="after">After<a href="/">Home</a><a href="/cached">Cached</a></main>;
-}`,
-      "src/routes/users/[id]/+page.tsx": `import type { Page } from "hesperia";
-export default function User(props: Page.Props<{ queryParams: { tab?: string } }>) {
-  return <main id="user" data-param={props.params.id} data-tab={props.queryParams().get("tab") ?? ""}>
-    User {props.params.id}
-    <a id="user-tab-second" href="/users/one?tab=second">Second tab</a>
-    <a id="user-tab-third" href="/users/one?tab=third">Third tab</a>
-    <a id="user-two" href="/users/two?tab=third">User two</a>
-  </main>;
-}`,
-      "src/routes/blocked/+route.ts": `import { route } from "hesperia/routing";
-const guard = () => false;
-export default route({ guard, load: () => "SERVER_BLOCKED_LOAD" });`,
-      "src/routes/blocked/+page.tsx": `export default function Blocked() {
-  const fixture = globalThis as unknown as { routingPublicFixture: { blockedBodies: number } };
-  fixture.routingPublicFixture.blockedBodies += 1;
-  return <main id="blocked">Blocked</main>;
-}`,
-      "src/routes/redirect/+route.ts": `import { redirect, route } from "hesperia/routing";
-const guard = () => redirect("/after");
-export default route({ guard, load: () => "SERVER_REDIRECT_LOAD" });`,
-      "src/routes/redirect/+page.tsx": `export default function Redirect() {
-  const fixture = globalThis as unknown as { routingPublicFixture: { redirectBodies: number } };
-  fixture.routingPublicFixture.redirectBodies += 1;
-  return <main id="redirect">Redirect</main>;
-}`,
+      "app.config.ts": await readFile(new URL("app.config.ts", fixtureRoot), "utf8"),
+      "app.tsx": await readFile(new URL("app.tsx", fixtureRoot), "utf8"),
+      "api.ts": await readFile(new URL("api.ts", fixtureRoot), "utf8"),
+      "src/routes/+layout.tsx": await readFile(
+        new URL("src/routes/+layout.tsx", fixtureRoot),
+        "utf8",
+      ),
+      "src/routes/+loading.tsx": await readFile(
+        new URL("src/routes/+loading.tsx", fixtureRoot),
+        "utf8",
+      ),
+      "src/routes/+not-found.tsx": await readFile(
+        new URL("src/routes/+not-found.tsx", fixtureRoot),
+        "utf8",
+      ),
+      "src/routes/+page.tsx": await readFile(new URL("src/routes/+page.tsx", fixtureRoot), "utf8"),
+      "src/routes/startup/+page.tsx": await readFile(
+        new URL("src/routes/startup/+page.tsx", fixtureRoot),
+        "utf8",
+      ),
+      "src/routes/cached/+page.tsx": await readFile(
+        new URL("src/routes/cached/+page.tsx", fixtureRoot),
+        "utf8",
+      ),
+      "src/routes/parking/+page.tsx": await readFile(
+        new URL("src/routes/parking/+page.tsx", fixtureRoot),
+        "utf8",
+      ),
+      "src/routes/target/+page.tsx": await readFile(
+        new URL("src/routes/target/+page.tsx", fixtureRoot),
+        "utf8",
+      ),
+      "src/routes/after/+page.tsx": await readFile(
+        new URL("src/routes/after/+page.tsx", fixtureRoot),
+        "utf8",
+      ),
+      "src/routes/broken/+page.tsx": await readFile(
+        new URL("src/routes/broken/+page.tsx", fixtureRoot),
+        "utf8",
+      ),
+      "src/routes/broken/+error.tsx": await readFile(
+        new URL("src/routes/broken/+error.tsx", fixtureRoot),
+        "utf8",
+      ),
+      "src/routes/users/[id]/+page.tsx": await readFile(
+        new URL("src/routes/users/[id]/+page.tsx", fixtureRoot),
+        "utf8",
+      ),
+      "src/routes/blocked/+route.ts": await readFile(
+        new URL("src/routes/blocked/+route.ts", fixtureRoot),
+        "utf8",
+      ),
+      "src/routes/blocked/+page.tsx": await readFile(
+        new URL("src/routes/blocked/+page.tsx", fixtureRoot),
+        "utf8",
+      ),
+      "src/routes/redirect/+route.ts": await readFile(
+        new URL("src/routes/redirect/+route.ts", fixtureRoot),
+        "utf8",
+      ),
+      "src/routes/redirect/+page.tsx": await readFile(
+        new URL("src/routes/redirect/+page.tsx", fixtureRoot),
+        "utf8",
+      ),
     };
+
     for (const [filename, source] of Object.entries(sources)) {
       const target = join(root, filename);
+
       await mkdir(resolve(target, ".."), { recursive: true });
+
       await writeFile(target, source);
     }
 
     let build: Awaited<ReturnType<typeof prepareBuild>>;
+    let capturedBuilds: readonly WorkerCoverageBuildRecord[] = [];
+
     try {
-      build = await prepareBuild(root);
+      if (browserPageCoverage) {
+        const instrumentedBuild = await withCoverageWorkerBuild({
+          buildDirectory: browserPageCoverage.buildDirectory,
+          repoPath: browserPageCoverage.repoPath,
+          projectRoot: root,
+          packageNames: ["tooling", "compiler", "hosting", "hesperia"],
+          outputs: browserPageCoverage.outputs,
+
+          build: () => prepareBuild(root),
+        });
+
+        build = instrumentedBuild.result;
+        capturedBuilds = instrumentedBuild.builds;
+      } else {
+        build = await prepareBuild(root);
+      }
+
       await writeBuild(root, build);
     } catch (error) {
       if (error instanceof ProjectError)
         throw new Error(JSON.stringify(error.diagnostics, null, 2), { cause: error });
+
       throw error;
     }
+
     const javascript = await Promise.all(
       [...build.files.entries()]
         .filter(([filename]) => filename.endsWith(".js"))
         .map(([, file]) => file.text()),
     );
+
     expect(javascript.join("\n")).not.toContain("SERVER_BLOCKED_LOAD");
+
     expect(javascript.join("\n")).not.toContain("SERVER_REDIRECT_LOAD");
 
     server = await previewProject(root, 0);
-    const script = `
-      import assert from "node:assert/strict";
-      import { chromium, firefox, webkit } from ${JSON.stringify(pathToFileURL(resolve(import.meta.dir, "../../node_modules/playwright/index.mjs")).href)};
-      for (const engine of [chromium, firefox, webkit]) {
-        const browser = await engine.launch();
-        try {
-          const page = await browser.newPage();
-          const errors = [];
-          page.on("pageerror", error => errors.push(error.stack ?? error.message));
-          const sharedRequests = [];
-          let resolveInitial;
-          const initialRequest = new Promise(resolve => resolveInitial = resolve);
-          let resolveUpdated;
-          const updatedRequest = new Promise(resolve => resolveUpdated = resolve);
-          let releaseShared = false;
-          const pendingShared = [];
-          let updateRequest;
-          let resolveMutation;
-          const mutationRequest = new Promise(resolve => resolveMutation = resolve);
-          await page.route("**/api/message/**", route => {
-            const name = new URL(route.request().url()).pathname.split("/").pop();
-            if (name === "shared") {
-              sharedRequests.push(route);
-              if (sharedRequests.length === 1) resolveInitial(route);
-              else if (releaseShared) return route.fulfill({ json: { message: "updated while parked" } });
-              else {
-                pendingShared.push(route);
-                if (sharedRequests.length === 2) resolveUpdated(route);
-              }
-              return;
-            }
-            return route.continue();
-          });
-          await page.route("**/api/update", route => {
-            updateRequest = route;
-            resolveMutation(route);
-          });
-          await page.goto(${JSON.stringify(server.url.href)});
-          await page.locator("#home").waitFor();
 
-          assert.equal(await page.locator("#home").getAttribute("data-bodies"), "1", "Home body count");
-          assert.equal(await page.locator("#guard-mounted").count(), 1, "Guard child mounted");
-          await page.locator("#home-target").click();
-          await page.waitForFunction(() => globalThis.routingPublicFixture.beforeLeaveChecks === 1);
-          assert.equal(new URL(page.url()).pathname, "/", "Dirty navigation vetoed");
-          assert.equal(await page.locator("#target").count(), 0, "Vetoed target absent");
-          assert.equal(await page.evaluate(() => globalThis.routingPublicFixture.beforeLeaveChecks), 1, "Veto callback count");
+    const browserCoverageScriptConfig = browserPageCoverage
+      ? {
+          coverageVariable,
+          runId: browserPageCoverage.runId,
+          ownerId: browserPageCoverage.ownerId,
+          platform: process.platform,
+          populationFingerprint: browserPageCoverage.populationFingerprint,
+          builds: capturedBuilds,
+          receiptPath: join(root, "routing-public-flows.browser-coverage.json"),
+        }
+      : undefined;
 
-          await page.locator("#allow-leave").click();
-          await page.locator("#home-target").click();
-          await page.locator("#target").waitFor();
-          assert.equal(await page.evaluate(() => globalThis.routingPublicFixture.beforeLeaveChecks), 2, "Allowed callback count");
-          await page.evaluate(() => history.back());
-          await page.locator("#home").waitFor();
-          const home = await page.locator("#home").elementHandle();
-          if (!home) throw new Error("Cached Home page is missing");
-          await page.locator("#remove-guard").click();
-          await page.locator("#guard-removed").waitFor();
-          await page.locator("#home-target").click();
-          await page.locator("#target").waitFor();
-          assert.equal(await page.evaluate(() => globalThis.routingPublicFixture.beforeLeaveChecks), 2, "Released callback count");
-          await page.locator("#target-after").click();
-          await page.locator("#after").waitFor();
+    const browserRuntimeConfigPath = join(root, "routing-public-flows.browser-config.json");
 
-          await page.locator("#nav-cached").click();
-          const initial = await initialRequest;
-          await initial.fulfill({ json: { message: "initial" } });
-          await page.locator("#cached").waitFor();
-          assert.equal(await page.locator("#cached-message").textContent(), "initial", "Initial shared value");
-          const cached = await page.locator("#cached").elementHandle();
-          if (!cached) throw new Error("Cached page is missing");
-          const bodyCount = await page.locator("#cached").getAttribute("data-bodies");
-          const cachedEffect = await page.locator("#cached-effect").elementHandle();
-          if (!cachedEffect) throw new Error("Cached effect marker is missing");
-          assert.equal(await cachedEffect.getAttribute("data-runs"), "1");
-          assert.equal(await cachedEffect.getAttribute("data-value"), "initial", "Initial effect value");
-          await page.locator("#cached-parking").click();
-          await page.locator("#parking").waitFor();
-          await page.locator("#update-shared").click();
-          await mutationRequest;
-          if (!updateRequest) throw new Error("The shared update request was not observed");
-          await updateRequest.fulfill({ json: { ok: true } });
-          await updatedRequest;
-          releaseShared = true;
-          for (const request of pendingShared.splice(0))
-            await request.fulfill({ json: { message: "updated while parked" } });
-          try {
-            await page.waitForFunction(() => document.querySelector("#shared-shell")?.textContent === "updated while parked", null, { timeout: 3000 });
-          } catch (error) {
-            throw new Error("Shared shell did not refresh: text=" + await page.locator("#shared-shell").textContent() + "; requests=" + sharedRequests.length + "; cached=" + await page.locator("#cached").count(), { cause: error });
-          }
-          await page.waitForFunction(() => globalThis.routingPublicFixture.sharedUpdateDone);
-          assert.equal(await page.evaluate((node) => node.querySelector("#cached-message")?.textContent, cached), "initial", "Parked DOM remained unchanged");
-          assert.equal(await cachedEffect.getAttribute("data-runs"), "1", "Parked effect did not rerun");
-          assert.equal(await cachedEffect.getAttribute("data-value"), "initial", "Parked effect value remained unchanged");
-          assert.equal(await cachedEffect.getAttribute("data-cleanups"), "1", "Parked cleanup count");
-          await page.evaluate(() => history.back());
-          await page.locator("#cached").waitFor();
-          assert.equal(await page.evaluate((node) => node === document.querySelector("#cached"), cached), true, "Cached node identity");
-          assert.equal(await page.locator("#cached").getAttribute("data-bodies"), bodyCount, "Cached body count");
-          assert.equal(await page.locator("#cached-message").textContent(), "updated while parked", "Shared value after restore");
-          assert.equal(await cachedEffect.getAttribute("data-runs"), "2", "Restored effect reran");
-          assert.equal(await cachedEffect.getAttribute("data-value"), "updated while parked", "Restored effect saw current value");
-          assert.equal(await cachedEffect.getAttribute("data-cleanups"), "1", "Restored effect did not duplicate cleanup");
+    await writeFile(
+      browserRuntimeConfigPath,
+      JSON.stringify({
+        playwrightModuleUrl: pathToFileURL(
+          resolve(import.meta.dir, "../../node_modules/playwright/index.mjs"),
+        ).href,
+        browserCoverage: browserCoverageScriptConfig ?? null,
+        serverUrl: server.url.href,
+      }),
+    );
 
-          await page.locator("#nav-blocked").click();
-          await page.waitForFunction(() => globalThis.routingPublicFixture.navigationResults.some(result => result.url.endsWith("/blocked") && result.status === "denied"));
-          assert.equal(new URL(page.url()).pathname, "/cached", "False route guard veto");
-          assert.equal(await page.locator("#blocked").count(), 0, "Blocked page was not prepared");
-          assert.equal(await page.evaluate(() => globalThis.routingPublicFixture.blockedBodies), 0, "Blocked page body did not run");
-          await page.locator("#nav-redirect").click();
-          await page.locator("#after").waitFor();
-          await page.waitForFunction(() => globalThis.routingPublicFixture.navigationResults.some(result => result.url.endsWith("/after") && result.status === "committed"));
-          assert.equal(new URL(page.url()).pathname, "/after", "Redirect guard target");
-          assert.equal(await page.locator("#redirect").count(), 0, "Redirect page was not prepared");
-          assert.equal(await page.evaluate(() => globalThis.routingPublicFixture.redirectBodies), 0, "Redirect page body did not run");
+    const browserScript = join(root, "routing-public-flows.browser.mjs");
 
-          await page.locator("#nav-user").click();
-          await page.locator("#user").waitFor();
-          assert.equal(new URL(page.url()).pathname, "/users/one", "Parameterized route path");
-          assert.equal(await page.locator("#user").getAttribute("data-param"), "one");
-          assert.equal(await page.locator("#user").getAttribute("data-tab"), "first");
-          const userOne = await page.locator("#user").elementHandle();
-          if (!userOne) throw new Error("Parameterized page is missing");
+    await copyFile(browserDriver, browserScript);
 
-          await page.locator("#user-tab-second").click();
-          await page.waitForURL("**/users/one?tab=second");
-          await page.waitForFunction(
-            () => document.querySelector("#user")?.getAttribute("data-tab") === "second",
-          );
-          assert.equal(
-            await page.evaluate((node) => node === document.querySelector("#user"), userOne),
-            true,
-            "Anchor query update retained page identity",
-          );
-
-          await page.evaluate(() => {
-            const fixture = globalThis.routingPublicFixture;
-            fixture.router.updateQuery("tab", "third", { history: "push" });
-          });
-          await page.waitForFunction(
-            () => document.querySelector("#user")?.getAttribute("data-tab") === "third",
-          );
-          assert.equal(new URL(page.url()).pathname, "/users/one", "Query update path");
-          assert.equal(new URL(page.url()).search, "?tab=third", "Query update URL");
-          assert.equal(
-            await page.evaluate((node) => node === document.querySelector("#user"), userOne),
-            true,
-            "Query update retained page identity",
-          );
-
-          await page.locator("#user-two").click();
-          await page.waitForURL("**/users/two?tab=third");
-          await page.waitForFunction(
-            () => document.querySelector("#user")?.getAttribute("data-param") === "two",
-          );
-          assert.equal(new URL(page.url()).pathname, "/users/two", "Changed parameter path");
-          assert.equal(await page.locator("#user").getAttribute("data-param"), "two");
-          assert.equal(await page.locator("#user").getAttribute("data-tab"), "third");
-          assert.equal(
-            await page.evaluate((node) => node !== document.querySelector("#user"), userOne),
-            true,
-            "Changed parameter remounted page",
-          );
-
-          await page.locator("#nav-missing").click();
-          await page.locator("#not-found").waitFor();
-          assert.equal(new URL(page.url()).pathname, "/missing", "Not-found route path");
-          assert.equal(await page.locator("#not-found").textContent(), "Not found");
-          assert.equal(await page.locator("#user").count(), 0, "Not-found replaced page");
-          assert.deepEqual(errors, []);
-          console.log(engine.name() + " public routing flows verified");
-        } catch (error) {
-          throw new Error(engine.name() + " public routing flow failed", { cause: error });
-        } finally { await browser.close(); }
-      }
-    `;
-    const child = Bun.spawn(["node", "--input-type=module", "--eval", script], {
+    const child = Bun.spawn(["node", browserScript, browserRuntimeConfigPath], {
       stdout: "pipe",
       stderr: "pipe",
     });
+
+    const captureDriverPid = child.pid;
+
+    if (browserPageCoverage && (!Number.isSafeInteger(captureDriverPid) || captureDriverPid <= 0)) {
+      throw new Error("Generated browser driver has no positive process identity");
+    }
+
     const [status, output, errors] = await Promise.all([
       child.exited,
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
     ]);
+
     if (status !== 0) throw new Error(`Generated public routing flow failed\n${output}\n${errors}`);
+
     expect(output.trim().split(/\r?\n/u)).toStrictEqual([
-      "chromium public routing flows verified",
-      "firefox public routing flows verified",
-      "webkit public routing flows verified",
+      "chromium public routing flows and authored and browser API reload verified",
+      "firefox public routing flows and authored and browser API reload verified",
+      "webkit public routing flows and authored and browser API reload verified",
     ]);
+
+    if (browserPageCoverage) {
+      const receiptPath = join(root, "routing-public-flows.browser-coverage.json");
+
+      const receipt: unknown = JSON.parse(await readFile(receiptPath, "utf8"));
+
+      const isRecord = (value: unknown): value is Record<string, unknown> =>
+        value !== null && typeof value === "object" && !Array.isArray(value);
+
+      if (
+        !isRecord(receipt) ||
+        receipt.format !== "hesperia-browser-page-coverage-captures" ||
+        receipt.version !== 1 ||
+        receipt.runId !== browserPageCoverage.runId ||
+        receipt.ownerId !== browserPageCoverage.ownerId ||
+        receipt.platform !== process.platform ||
+        receipt.populationFingerprint !== browserPageCoverage.populationFingerprint ||
+        !Array.isArray(receipt.builds) ||
+        JSON.stringify(receipt.builds) !== JSON.stringify(capturedBuilds) ||
+        !Array.isArray(receipt.captures)
+      ) {
+        throw new Error("Browser page capture receipt has foreign or malformed run provenance");
+      }
+
+      const expectedCaptureIds = [];
+
+      for (const engine of ["chromium", "firefox", "webkit"])
+        expectedCaptureIds.push(
+          `${engine}:main:0`,
+          `${engine}:main:1`,
+          `${engine}:main:2`,
+          `${engine}:startup:0`,
+          `${engine}:supersession:0`,
+        );
+
+      const captures = receipt.captures;
+
+      const captureIds = captures.map((capture) =>
+        isRecord(capture) ? capture.captureId : undefined,
+      );
+
+      if (
+        captures.length !== expectedCaptureIds.length ||
+        new Set(captureIds).size !== expectedCaptureIds.length ||
+        JSON.stringify([...captureIds].sort()) !== JSON.stringify(expectedCaptureIds.sort())
+      ) {
+        throw new Error(
+          "Browser page capture receipt is missing or duplicates an engine/document context",
+        );
+      }
+
+      const validatedCaptures: {
+        readonly artifact: ReturnType<typeof createCoverageArtifact>;
+        readonly captureId: string;
+        readonly contextId: string;
+        readonly engine: string;
+        readonly pageRole: string;
+        readonly documentOrdinal: number;
+        readonly timeOrigin: number;
+      }[] = [];
+
+      for (const value of captures) {
+        if (!isRecord(value) || !isRecord(value.coverage)) {
+          throw new Error("Browser page capture contains a malformed counter map");
+        }
+
+        const capture = value;
+
+        const validEngine =
+          typeof capture.engine === "string" &&
+          ["chromium", "firefox", "webkit"].includes(capture.engine);
+
+        const validPageRole =
+          typeof capture.pageRole === "string" &&
+          ["main", "startup", "supersession"].includes(capture.pageRole);
+
+        if (
+          capture.format !== "hesperia-browser-page-coverage" ||
+          capture.runId !== browserPageCoverage.runId ||
+          capture.ownerId !== browserPageCoverage.ownerId ||
+          capture.platform !== process.platform ||
+          capture.populationFingerprint !== browserPageCoverage.populationFingerprint ||
+          !validEngine ||
+          !validPageRole ||
+          typeof capture.documentOrdinal !== "number" ||
+          !Number.isSafeInteger(capture.documentOrdinal) ||
+          (capture.pageRole === "main"
+            ? ![0, 1, 2].includes(capture.documentOrdinal as number)
+            : capture.documentOrdinal !== 0) ||
+          typeof capture.captureId !== "string" ||
+          capture.captureId !==
+            String(capture.engine) +
+              ":" +
+              String(capture.pageRole) +
+              ":" +
+              String(capture.documentOrdinal) ||
+          typeof capture.browserVersion !== "string" ||
+          capture.browserVersion.trim().length === 0 ||
+          typeof capture.href !== "string" ||
+          capture.href.length === 0 ||
+          !Number.isFinite(capture.timeOrigin) ||
+          !Number.isSafeInteger(capture.captureProcessId) ||
+          capture.captureProcessId !== captureDriverPid
+        ) {
+          throw new Error("Browser page capture has malformed document provenance");
+        }
+
+        const engine = capture.engine as string;
+
+        const pageRole = capture.pageRole as string;
+
+        const documentOrdinal = capture.documentOrdinal as number;
+
+        const captureId = capture.captureId as string;
+
+        const timeOrigin = capture.timeOrigin as number;
+
+        const expectedPhase = pageRole === "main" && documentOrdinal < 2 ? "pagehide" : "final";
+
+        if (capture.capturePhase !== expectedPhase) {
+          throw new Error("Browser page capture phase is wrong for " + captureId);
+        }
+
+        if (expectedPhase === "pagehide" && capture.documentTimeOrigin !== timeOrigin) {
+          throw new Error(
+            "Browser pagehide did not retain its old document identity: " + captureId,
+          );
+        }
+
+        const coverage = capture.coverage as Record<string, CoverageFile>;
+
+        if (
+          Object.keys(coverage).length === 0 ||
+          !Object.values(coverage).some(
+            (file) =>
+              Object.values(file.s ?? {}).some((count) => count > 0) ||
+              Object.values(file.f ?? {}).some((count) => count > 0) ||
+              Object.values(file.b ?? {}).some((counts) => counts.some((count) => count > 0)),
+          )
+        ) {
+          throw new Error("Browser page capture has no authentic instrumented hits: " + captureId);
+        }
+
+        const artifact = createCoverageArtifact({
+          repoPath: browserPageCoverage.repoPath,
+          kind: "hits",
+          runId: browserPageCoverage.runId,
+          ownerId: browserPageCoverage.ownerId,
+          populationFingerprint: browserPageCoverage.populationFingerprint,
+          sourcePopulation: browserPageCoverage.sourcePopulation,
+          coverage,
+        });
+
+        validatedCaptures.push({
+          artifact,
+          captureId,
+          contextId: "routing-" + engine + "-" + pageRole + "-document-" + documentOrdinal,
+          engine,
+          pageRole,
+          documentOrdinal,
+          timeOrigin,
+        });
+      }
+
+      for (const engine of ["chromium", "firefox", "webkit"]) {
+        const mainTimeOrigins = new Set(
+          validatedCaptures
+            .filter((item) => item.engine === engine && item.pageRole === "main")
+            .map((item) => item.timeOrigin),
+        );
+
+        if (mainTimeOrigins.size !== 3) {
+          throw new Error(
+            "Browser engine did not produce three distinct main-document identities: " + engine,
+          );
+        }
+      }
+
+      const fragmentReferences: {
+        readonly captureId: string;
+        readonly contextId: string;
+        readonly path: string;
+        readonly sha256: string;
+      }[] = [];
+
+      for (const item of validatedCaptures) {
+        const fragmentPath = writeCoverageFragment({
+          directory: browserPageCoverage.outputDirectory,
+          contextId: item.contextId,
+          pid: process.pid,
+          threadId,
+          repoPath: browserPageCoverage.repoPath,
+          artifact: item.artifact,
+          sourcePopulation: browserPageCoverage.sourcePopulation,
+        });
+
+        const relativeFragmentPath = relative(browserPageCoverage.outputDirectory, fragmentPath);
+
+        if (
+          isAbsolute(relativeFragmentPath) ||
+          relativeFragmentPath === ".." ||
+          relativeFragmentPath.startsWith(".." + sep)
+        ) {
+          throw new Error("Browser page coverage fragment escaped its run directory");
+        }
+
+        const fragmentBytes = await readFile(fragmentPath);
+
+        fragmentReferences.push({
+          captureId: item.captureId,
+          contextId: item.contextId,
+          path: relativeFragmentPath.split(sep).join("/"),
+          sha256: createHash("sha256").update(fragmentBytes).digest("hex"),
+        });
+      }
+
+      await writeFile(
+        join(
+          browserPageCoverage.buildDirectory,
+          "routing-public-flows.browser-capture-evidence.json",
+        ),
+        JSON.stringify({
+          format: "hesperia-browser-page-capture-evidence",
+          version: 1,
+          runId: browserPageCoverage.runId,
+          ownerId: browserPageCoverage.ownerId,
+          platform: process.platform,
+          populationFingerprint: browserPageCoverage.populationFingerprint,
+          workerSeedTemplate: "worker-seed-template.json",
+          workerOutputMap: "worker-output-map.json",
+          builds: capturedBuilds,
+          captures,
+          fragments: fragmentReferences,
+        }),
+      );
+    }
   } finally {
     await server?.close();
+
     await rm(root, { recursive: true, force: true });
   }
 }, 90_000);

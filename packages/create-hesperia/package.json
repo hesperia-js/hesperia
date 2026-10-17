@@ -1,0 +1,21 @@
+{
+  "name": "create-hesperia",
+  "version": "1.0.0-alpha.1",
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hesperia-js/hesperia.git",
+    "directory": "packages/create-hesperia"
+  },
+  "bin": {
+    "create-hesperia": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "templates"
+  ],
+  "type": "module",
+  "scripts": {
+    "build": "bunx tsc -p tsconfig.build.json"
+  }
+}

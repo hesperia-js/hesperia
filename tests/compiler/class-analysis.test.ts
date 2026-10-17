@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { analyzeBrowserCapabilities } from "../../src/compiler/capability-analysis.ts";
-import { analyzeModule } from "../../src/compiler/compilation.ts";
-import { validateComponentBindingReads } from "../../src/compiler/body-validation.ts";
+import { analyzeBrowserCapabilities } from "../../packages/compiler/src/capability-analysis.ts";
+import { analyzeModule } from "../../packages/compiler/src/compilation.ts";
+import { validateComponentBindingReads } from "../../packages/compiler/src/body-validation.ts";
 
 function capabilities(source: string) {
   return analyzeBrowserCapabilities(
@@ -82,7 +82,9 @@ test.each([
     `import { bind } from "hesperia/client"; function App() { const binding = bind(); ${declaration} return <span/>; }`,
     { filename: "class-bindings.tsx" },
   ).result;
+
   expect(analyzed.diagnostics.filter((item) => item.code !== "HES-BIND-BODY")).toStrictEqual([]);
+
   expect(validateComponentBindingReads(analyzed.ir).map((item) => item.code)).toStrictEqual([
     "HES-BIND-BODY",
   ]);
@@ -95,7 +97,9 @@ test.each(["class Value { field = binding(); }", "class Value { method() { retur
       `import { bind } from "hesperia/client"; function App() { const binding = bind(); ${declaration} return <span/>; }`,
       { filename: "class-bindings.tsx" },
     ).result;
+
     expect(analyzed.diagnostics).toStrictEqual([]);
+
     expect(validateComponentBindingReads(analyzed.ir)).toStrictEqual([]);
   },
 );

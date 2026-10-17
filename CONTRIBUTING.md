@@ -87,7 +87,7 @@ adoption, and transitive dependency count and risk. Treat download counts as one
 signal, not a guarantee of quality or maintenance; use judgment rather than a
 numeric cutoff.
 
-Before changing behavior, read the relevant guide in `docs/`, public API
+Before changing behavior, read the relevant root or package guide, public API
 declarations, and owning tests. Keep the documented contract consistent across
 compiler, runtime, types, and tests. Ask the maintainer about conflicting or
 unspecified behavior; a test written around a different behavior does not approve
@@ -126,8 +126,10 @@ Document public functions, types, options, callbacks, and lifecycle behavior
 with TSDoc. Explain what the signature cannot: ownership, timing, cancellation,
 equality, failure, and cleanup. Keep examples small and type-correct.
 
-Keep the README introductory. Put user-facing behavioral detail in `docs/`
-and contributor guidance here. Prefer concrete prose and useful variable names.
+Keep READMEs introductory. Put package-specific behavioral detail in that package's
+`docs/` directory, application guides in the root `docs/`, and contributor guidance
+here. Include package guides in the package's `files` list so they ship in its archive.
+Prefer concrete prose and useful variable names.
 Comments should explain a non-obvious constraint, not repeat the next line.
 
 Repository documentation explains current behavior, setup, usage, APIs, and

@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hesperia golden fixtures</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, sans-serif;
+      }
+      body {
+        max-width: 70rem;
+        margin: 0 auto;
+        padding: 2rem 1rem;
+        line-height: 1.6;
+      }
+      h1,
+      h2 {
+        line-height: 1.2;
+      }
+      h2 {
+        margin-top: 2.5rem;
+      }
+      ul {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+        gap: 1rem;
+        padding: 0;
+        list-style: none;
+      }
+      li {
+        border: 1px solid GrayText;
+        border-radius: 0.5rem;
+        padding: 1rem;
+      }
+      li a {
+        font-size: 1.1rem;
+        font-weight: 600;
+        text-underline-offset: 0.2em;
+      }
+      li p {
+        margin: 0.5rem 0 0;
+      }
+      a:focus-visible {
+        outline: 2px solid currentColor;
+        outline-offset: 4px;
+      }
+      footer {
+        margin-top: 2.5rem;
+        border-top: 1px solid GrayText;
+        padding-top: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Hesperia golden fixtures</h1>
+      <p>
+        Open a fixture to inspect its rendered output and try its controls. Use your browser's Back
+        button to return here.
+      </p>
+
+      <h2>Browse directly</h2>
+      <ul>
+        <li>
+          <a href="/identity">Native element identity</a>
+          <p>Update reactive text while keeping the same button and input elements.</p>
+        </li>
+        <li>
+          <a href="/native-events">Native events</a>
+          <p>
+            Click the event controls. Tests inspect event identity, listener options, and delivery
+            order.
+          </p>
+        </li>
+        <li>
+          <a href="/blob-attributes">Blob attributes</a>
+          <p>
+            Inspect Blob-backed media and responsive image candidates. Tests drive replacement and
+            cleanup.
+          </p>
+        </li>
+        <li>
+          <a href="/embed-security">Embed sandbox</a>
+          <p>Inspect sandboxed frames, permission changes, and wrapper sizing.</p>
+        </li>
+        <li>
+          <a href="/lifecycle?mode=lifecycle">Component lifecycle and bindings</a>
+          <p>Update a component and inspect its native binding and retained input.</p>
+        </li>
+        <li>
+          <a href="/lifecycle?mode=stream">Shared streams</a>
+          <p>Emit values, remove consumers, and remount them to explore shared stream ownership.</p>
+        </li>
+        <li>
+          <a href="/task-cancellation">Task cancellation</a>
+          <p>
+            Start and cancel a task. Its simulated backend stays pending until the test runner
+            completes it.
+          </p>
+        </li>
+        <li>
+          <a href="/optional-styling/development">Styling integrations: development</a>
+          <p>Inspect PostCSS, Tailwind, and reactive StyleX output in a development build.</p>
+        </li>
+        <li>
+          <a href="/optional-styling/production">Styling integrations: production</a>
+          <p>Try the same styling application in a production build.</p>
+        </li>
+        <li>
+          <a href="/public-values">Public configuration values</a>
+          <p>Inspect compiled values, including omitted keys, undefined, and null.</p>
+        </li>
+      </ul>
+
+      <h2>Fixtures with test-runner setup</h2>
+      <p>
+        These pages are also part of the suite, but the automated tests supply their requests or
+        setup. Opening a link alone does not run that setup.
+      </p>
+      <ul>
+        <li>
+          <a href="/checklist">Checklist queries and mutations</a>
+          <p>
+            List and detail pages exercise mutations, cached navigation, and keyed rows. The test
+            runner supplies the mock API; requests fail without it.
+          </p>
+        </li>
+        <li>
+          <a href="/component-css">Component CSS readiness</a>
+          <p>
+            The test runner creates a target frame, mounts styled components into it, and controls
+            stylesheet loading.
+          </p>
+        </li>
+        <li>
+          <a href="/lifecycle?mode=query-success">Async query success</a>
+          <p>The loading view stays visible until the test runner resolves the query.</p>
+        </li>
+        <li>
+          <a href="/lifecycle?mode=query-failure">Async query failure</a>
+          <p>
+            The loading view stays visible until the test runner rejects the query and checks error
+            cleanup.
+          </p>
+        </li>
+      </ul>
+    </main>
+    <footer>
+      Manual exploration complements the golden tests; their assertions also check identity,
+      ordering, and cleanup.
+    </footer>
+  </body>
+</html>

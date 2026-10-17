@@ -1,0 +1,39 @@
+{
+  "name": "@hesperia/stylex",
+  "version": "1.0.0-alpha.1",
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hesperia-js/hesperia.git",
+    "directory": "packages/stylex"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "bunx tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@babel/core": "7.29.7",
+    "@jridgewell/trace-mapping": "0.3.31",
+    "@stylexjs/babel-plugin": "0.19.1",
+    "postcss-value-parser": "4.2.0"
+  },
+  "devDependencies": {
+    "@hesperia/tooling": "workspace:*",
+    "@stylexjs/stylex": "0.19.1",
+    "@types/babel__core": "7.20.5"
+  },
+  "peerDependencies": {
+    "@hesperia/tooling": "1.0.0-alpha.1",
+    "@stylexjs/stylex": "0.19.1"
+  }
+}

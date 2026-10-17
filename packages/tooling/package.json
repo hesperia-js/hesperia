@@ -1,0 +1,52 @@
+{
+  "name": "@hesperia/tooling",
+  "version": "1.0.0-alpha.1",
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hesperia-js/hesperia.git",
+    "directory": "packages/tooling"
+  },
+  "bin": {
+    "hesperia": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "docs"
+  ],
+  "type": "module",
+  "main": "./dist/project-service.js",
+  "types": "./dist/project-service.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/project-service.d.ts",
+      "import": "./dist/project-service.js",
+      "default": "./dist/project-service.js"
+    },
+    "./project-service": {
+      "types": "./dist/project-service.d.ts",
+      "import": "./dist/project-service.js",
+      "default": "./dist/project-service.js"
+    },
+    "./bin": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "bunx tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@federicocarboni/saxe": "0.8.0",
+    "@hesperia/compiler": "workspace:*",
+    "@hesperia/hosting": "workspace:*",
+    "@jridgewell/gen-mapping": "0.3.13",
+    "@jridgewell/remapping": "2.3.5",
+    "@jridgewell/trace-mapping": "0.3.31",
+    "hesperia": "workspace:*",
+    "oxc-parser": "0.149.0",
+    "oxfmt": "0.67.0",
+    "oxlint": "1.82.0",
+    "parse5": "8.0.1"
+  },
+  "peerDependencies": {
+    "typescript": "7.0.2"
+  }
+}

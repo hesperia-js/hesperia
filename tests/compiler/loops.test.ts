@@ -3,16 +3,18 @@ import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { compile } from "../../src/compiler/index.ts";
-import { analyzeModule } from "../../src/compiler/compilation.ts";
+import { compile } from "../../packages/compiler/src/index.ts";
+import { analyzeModule } from "../../packages/compiler/src/compilation.ts";
 import { Window } from "happy-dom";
 import { mount, type Component } from "hesperia";
 
-test("unsupported direct async iteration in a component fails at the authored loop", () => {
+test("unsupported direct async iteration in a component fails at the authored loop", async () => {
   const source =
     "type Value = number;\r\nexport async function App() { for await (const value of []) {} return <span/>; }";
-  const result = compile(source, { filename: "component-iteration.tsx" });
+  const result = await compile(source, { filename: "component-iteration.tsx" });
+
   expect(result.code).toBe("");
+
   expect(result.diagnostics).toContainEqual(
     expect.objectContaining({
       code: "HES-ASYNC-ITERATION",
@@ -23,7 +25,7 @@ test("unsupported direct async iteration in a component fails at the authored lo
 });
 
 test("an async helper declared inside an async component keeps native iteration", async () => {
-  const result = compile(
+  const result = await compile(
     `import { AsyncBoundary } from "hesperia";
     import { effect, state } from "hesperia/client";
     export const mounted = Promise.withResolvers<void>();
@@ -41,7 +43,9 @@ test("an async helper declared inside an async component keeps native iteration"
   `,
     { filename: "nested-async-loop.tsx" },
   );
+
   expect(result.diagnostics).toStrictEqual([]);
+
   const generated = await importGenerated<{
     App: Component<Record<string, never>>;
     mounted: { promise: Promise<void> };
@@ -49,12 +53,16 @@ test("an async helper declared inside an async component keeps native iteration"
   const window = new Window();
   const target = window.document.createElement("div");
   const application = mount(target as unknown as Element, generated.App, {});
+
   try {
     await generated.mounted.promise;
+
     await application.settled();
+
     expect(target.textContent).toBe("5");
   } finally {
     application.dispose();
+
     await window.happyDOM.close();
   }
 });
@@ -68,16 +76,25 @@ test("loop labels have distinct identities and retain meaning when renamed", () 
   }`,
       { filename: "labels.ts" },
     ).result;
+
   const original = analyze("first", "second");
   const renamed = analyze("outer", "another");
+
   expect(original.diagnostics).toStrictEqual([]);
+
   expect(renamed.diagnostics).toStrictEqual([]);
+
   expect(original.semanticHash).toBe(renamed.semanticHash);
+
   const declaration = original.ir.body[0];
+
   if (declaration?.kind !== "export" || declaration.declaration.kind !== "function")
     throw new Error("Expected exported function");
+
   const [first, second] = declaration.declaration.body.body;
+
   if (first?.kind !== "labeled" || second?.kind !== "labeled") throw new Error("Expected labels");
+
   expect(first.bindingId).not.toBe(second.bindingId);
 });
 
@@ -87,8 +104,11 @@ test.each(["of", "in"])(
     const result = analyzeModule(`const values = [1]; for (const values ${operator} values) {}`, {
       filename: "loop-tdz.ts",
     }).result;
+
     expect(result.diagnostics).toStrictEqual([]);
+
     const statement = result.ir.body[1];
+
     if (
       (statement?.kind !== "for-of" && statement?.kind !== "for-in") ||
       statement.left.kind !== "declaration" ||
@@ -96,15 +116,20 @@ test.each(["of", "in"])(
       statement.right.kind !== "identifier"
     )
       throw new Error("Expected lexical loop");
+
     expect(statement.right.referenceId).toBe(statement.left.pattern.bindingId);
   },
 );
 
 async function importGenerated<T extends object>(code: string): Promise<T> {
   const directory = resolve(import.meta.dir, "../../.hesperia");
+
   await mkdir(directory, { recursive: true });
+
   const filename = join(directory, `loops-${randomUUID()}.mjs`);
+
   await writeFile(filename, code);
+
   try {
     return await import(pathToFileURL(filename).href);
   } finally {
@@ -113,7 +138,7 @@ async function importGenerated<T extends object>(code: string): Promise<T> {
 }
 
 test("native loop forms preserve evaluation order and loop control", async () => {
-  const result = compile(
+  const result = await compile(
     `export function evaluate() {
       const events: string[] = [];
       let total = 0;
@@ -134,10 +159,13 @@ test("native loop forms preserve evaluation order and loop control", async () =>
     }`,
     { filename: "loops.ts" },
   );
+
   expect(result.diagnostics).toStrictEqual([]);
+
   const generated = await importGenerated<{
     evaluate: () => [number, string, string];
   }>(result.code);
+
   expect(generated.evaluate()).toStrictEqual([
     3,
     "a,b",
@@ -146,7 +174,7 @@ test("native loop forms preserve evaluation order and loop control", async () =>
 });
 
 test("let loop bindings are per-iteration while var retains one binding", async () => {
-  const result = compile(
+  const result = await compile(
     `export function evaluate() {
       const letReaders: (() => number)[] = [];
       const varReaders: (() => number)[] = [];
@@ -156,10 +184,13 @@ test("let loop bindings are per-iteration while var retains one binding", async 
     }`,
     { filename: "loop-bindings.ts" },
   );
+
   expect(result.diagnostics).toStrictEqual([]);
+
   const generated = await importGenerated<{
     evaluate: () => [number[], number[]];
   }>(result.code);
+
   expect(generated.evaluate()).toStrictEqual([
     [0, 1, 2],
     [3, 3, 3],
@@ -167,7 +198,7 @@ test("let loop bindings are per-iteration while var retains one binding", async 
 });
 
 test("labeled break and continue retain native targets", async () => {
-  const result = compile(
+  const result = await compile(
     `export function evaluate() {
       let value = 0;
       outer: for (let i = 0; i < 3; i++) {
@@ -181,13 +212,16 @@ test("labeled break and continue retain native targets", async () => {
     }`,
     { filename: "loop-labels.ts" },
   );
+
   expect(result.diagnostics).toStrictEqual([]);
+
   const generated = await importGenerated<{ evaluate: () => number }>(result.code);
+
   expect(generated.evaluate()).toBe(3);
 });
 
 test("async functions preserve native for-await-of semantics", async () => {
-  const result = compile(
+  const result = await compile(
     `export async function evaluate(values: AsyncIterable<number>) {
       let total = 0;
       for await (const value of values) total += value;
@@ -195,13 +229,17 @@ test("async functions preserve native for-await-of semantics", async () => {
     }`,
     { filename: "async-loops.ts" },
   );
+
   expect(result.diagnostics).toStrictEqual([]);
+
   const generated = await importGenerated<{
     evaluate: (values: AsyncIterable<number>) => Promise<number>;
   }>(result.code);
+
   async function* values() {
     yield 2;
     yield 5;
   }
+
   await expect(generated.evaluate(values())).resolves.toBe(7);
 });
