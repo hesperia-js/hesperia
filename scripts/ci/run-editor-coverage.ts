@@ -706,6 +706,7 @@ interface LinuxTraceFile {
 
 interface LinuxTraceTopology {
   readonly rootPid: number;
+  readonly retainedReparentedPids: ReadonlySet<number>;
   readonly processParentByPid: ReadonlyMap<number, number>;
   readonly processByTid: ReadonlyMap<number, number>;
   readonly creatorByPid: ReadonlyMap<
@@ -1642,6 +1643,7 @@ function validateLinuxTraceClosure(
   const ownerByTid = new Map<number, Record<string, unknown>>();
   const creatorByLocation = new Map<string, Record<string, unknown>>();
   const eventByPid = new Map<number, Record<string, unknown>>();
+  const retainedReparentedPids = new Set<number>();
   const execClaims = new Map<
     string,
     { readonly pid: number; readonly item: Record<string, unknown> }
@@ -2542,6 +2544,8 @@ function validateLinuxTraceClosure(
             "Linux sampled parent is not proven to follow complete creator-group exit",
           );
         }
+
+        retainedReparentedPids.add(childPid);
       }
     } else if (codeGuiPid !== undefined && !eventByPid.has(rawCreatorPid)) {
       const childParentSample =
@@ -2599,7 +2603,14 @@ function validateLinuxTraceClosure(
 
   for (const tid of traceTids) processByTid.set(tid, groupOf(tid));
 
-  return { rootPid: roots[0]!, processParentByPid, processByTid, creatorByPid, execsByPid };
+  return {
+    rootPid: roots[0]!,
+    retainedReparentedPids,
+    processParentByPid,
+    processByTid,
+    creatorByPid,
+    execsByPid,
+  };
 }
 
 function validateLinuxExecLineage(
@@ -2755,7 +2766,8 @@ function validateLinuxExecLineage(
       !hasCodeProcImage(pid) ||
       parentPid === undefined ||
       topology.processParentByPid.get(pid) !== parentPid ||
-      event.parentPid !== parentPid ||
+      (event.parentPid !== parentPid &&
+        (!topology.retainedReparentedPids.has(pid) || !eventByPid.has(parentPid))) ||
       creator.completionNs >= beforeNs
     ) {
       throw new Error("Linux /proc/self/exe image has no unambiguous retained fork-like creator");

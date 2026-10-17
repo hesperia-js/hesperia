@@ -336,6 +336,16 @@ parent has changed. The full baseline retains both genuine process events; the
 raw-only creator replay removes exactly the helper event. The fixture completes
 before normal deactivation and is absent from both native kill-control sessions.
 
+Linux failure cleanup discovers late traced descendants within the existing
+five-second tracer drain budget. Before signaling a newly retained descendant,
+it checks raw ancestry, kernel generation, and association with the retained
+live tracer. Incomplete identities cannot become admitted process images;
+unresolved cleanup or incomplete raw traces keep the capture rejected.
+For a child first sampled after its creator exits, executable inheritance uses
+the same complete retained-creator adoption proof as process ancestry. The
+capture and independent validator each check that proof before accepting a
+parent mismatch; executable-image and raw execution ordering checks still apply.
+
 The separate capture tools each gather evidence from a specific owner:
 
 - `bun run scripts/ci/run-coverage.ts <test-path>...` captures the selected Bun

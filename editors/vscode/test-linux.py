@@ -549,7 +549,9 @@ def defer_verified_zombie(
     generation.check_exit()
 
 
-def terminate_retained_generation(generation: Generation, forced_pids: list[int]) -> None:
+def terminate_retained_generation(
+    generation: Generation, forced_pids: list[int], *, deadline: float | None = None
+) -> None:
     if generation.check_exit():
         return
 
@@ -587,7 +589,7 @@ def terminate_retained_generation(generation: Generation, forced_pids: list[int]
 
     forced_pids.append(generation.pid)
 
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 5 if deadline is None else deadline
 
     while time.monotonic() < deadline and not generation.check_exit():
         time.sleep(PROCESS_POLL_SECONDS)
@@ -2088,12 +2090,16 @@ def code_image_at(
 
     if (
         generation is None
-        or generation.ppid != parent_pid
         or not any(image["executablePath"] == code_executable for image in generation.executions)
     ):
         chain.remove(path_key)
 
         return None
+
+    if generation.ppid != parent_pid:
+        validate_retained_creator_adoption(
+            generation, creator, parent_pid, trace, tid_groups, generations
+        )
 
     parent_timeline, parent_pending_exec = exec_timeline(parent_pid, trace, tid_groups)
 
@@ -3274,6 +3280,146 @@ def validate_raw_only_creator_proof(
         raise CaptureError("Retained Code GUI generation is not bound to its unique raw lifetime")
 
 
+def validate_retained_creator_adoption(
+    generation: Generation,
+    creator_edge: dict[str, Any],
+    parent_tgid: int,
+    trace: dict[str, Any],
+    tid_groups: dict[int, int],
+    generations: dict[int, Generation],
+) -> None:
+    parent_generation = generations.get(parent_tgid)
+    child_first_parent = generation.parents[0] if generation.parents else None
+    parent_tid = creator_edge["parentTid"]
+
+    parent_first_parent = (
+        parent_generation.parents[0]
+        if parent_generation is not None and parent_generation.parents
+        else None
+    )
+    candidate_tids = (
+        set(tid_groups)
+        | set(trace["files"])
+        | set(trace["exits"])
+        | set(trace["creations"])
+    )
+
+    candidate_tids.update(
+        edge["parentTid"]
+        for edges in trace["creations"].values()
+        for edge in edges
+    )
+
+    parent_members = {parent_tgid}
+
+    parent_members.update(
+        tid
+        for tid in candidate_tids
+        if resolve_tgid(tid, trace["creations"], tid_groups) == parent_tgid
+    )
+
+    parent_exit_tids = {
+        tid
+        for tid in trace["exits"]
+        if resolve_tgid(tid, trace["creations"], tid_groups) == parent_tgid
+    }
+
+    if (
+        parent_generation is None
+        or parent_generation.pid != parent_tgid
+        or parent_generation.start_ticks <= 0
+        or parent_generation.ready_at is None
+        or parent_first_parent is None
+        or child_first_parent is None
+        or parent_members != parent_exit_tids
+        or any(tid not in trace["files"] for tid in parent_members)
+    ):
+        raise CaptureError(f"Cannot prove complete retained creator-group closure for PID {generation.pid}")
+
+    parent_group_exit_ns = max(
+        trace_time_ns(trace["exits"][tid]["line"])
+        for tid in parent_exit_tids
+    )
+    parent_first_sample_ns = utc_time_ns(parent_first_parent["observedAt"])
+    parent_births = trace["creations"].get(parent_tgid, [])
+    child_first_sample_ns = utc_time_ns(child_first_parent["observedAt"])
+
+    if (
+        child_first_parent["pid"] != generation.ppid
+        or utc_time_ns(parent_generation.attached_at) > parent_first_sample_ns
+        or len(parent_births) != 1
+        or parent_births[0]["thread"]
+        or parent_births[0]["startNs"] >= utc_time_ns(parent_generation.attached_at)
+        or parent_first_sample_ns >= parent_group_exit_ns
+        or creator_edge["completionNs"] >= parent_group_exit_ns
+        or parent_group_exit_ns >= child_first_sample_ns
+        or utc_time_ns(parent_generation.ready_at) < parent_group_exit_ns
+        or re.search(r"(?<![A-Z0-9_])CLONE_PARENT(?![A-Z0-9_])", creator_edge["line"])
+    ):
+        detail = f"Raw creator group does not prove reparenting before the first retained /proc parent sample for PID {generation.pid}"
+
+        try:
+            parent_attached_ns = utc_time_ns(parent_generation.attached_at)
+            parent_ready_ns = utc_time_ns(parent_generation.ready_at)
+            clone_parent = bool(re.search(r"(?<![A-Z0-9_])CLONE_PARENT(?![A-Z0-9_])", creator_edge["line"]))
+            flags_match = re.search(r"\bflags=([^,}\s)]+)", creator_edge["line"])
+            detail += "; reparentingDiagnostic=" + json.dumps(
+                {
+                    "operands": {
+                        "childFirstParentMismatch": {"left": child_first_parent["pid"], "right": generation.ppid, "failed": child_first_parent["pid"] != generation.ppid},
+                        "parentAttachedAfterFirstSample": {"left": parent_attached_ns, "right": parent_first_sample_ns, "failed": parent_attached_ns > parent_first_sample_ns},
+                        "parentBirthNotBeforeAttachment": {"left": parent_births[0]["startNs"] if len(parent_births) == 1 else None, "right": parent_attached_ns, "failed": len(parent_births) != 1 or parent_births[0]["thread"] or parent_births[0]["startNs"] >= parent_attached_ns},
+                        "parentFirstSampleAtOrAfterGroupExit": {"left": parent_first_sample_ns, "right": parent_group_exit_ns, "failed": parent_first_sample_ns >= parent_group_exit_ns},
+                        "creationCompletedAtOrAfterParentExit": {"left": creator_edge["completionNs"], "right": parent_group_exit_ns, "failed": creator_edge["completionNs"] >= parent_group_exit_ns},
+                        "parentExitAtOrAfterChildFirstSample": {"left": parent_group_exit_ns, "right": child_first_sample_ns, "failed": parent_group_exit_ns >= child_first_sample_ns},
+                        "parentReadyBeforeGroupExit": {"left": parent_ready_ns, "right": parent_group_exit_ns, "failed": parent_ready_ns < parent_group_exit_ns},
+                        "cloneParentFlag": {"value": clone_parent, "failed": clone_parent},
+                    },
+                    "child": {
+                        "pid": generation.pid,
+                        "initialPpid": generation.ppid,
+                        "procStarttimeTicks": generation.start_ticks,
+                        "pidfdAttachedAt": generation.attached_at,
+                        "pidfdReadyAt": generation.ready_at,
+                        "firstParentSample": child_first_parent,
+                        "firstParentSampleStartedNs": child_first_sample_ns,
+                        "latestRetainedSampleStartedNs": generation.sample_started_ns,
+                        "latestRetainedSampleFinishedNs": generation.sample_finished_ns,
+                        "currentImageComplete": generation.current_image_complete,
+                    },
+                    "creator": {
+                        "parentTid": parent_tid,
+                        "parentPid": parent_tgid,
+                        "trace": creator_edge["trace"],
+                        "rawLine": creator_edge["line"],
+                        "startNs": creator_edge["startNs"],
+                        "completionNs": creator_edge["completionNs"],
+                        "flags": flags_match.group(1) if flags_match else None,
+                    },
+                    "retainedParent": {
+                        "pid": parent_generation.pid,
+                        "initialPpid": parent_generation.ppid,
+                        "procStarttimeTicks": parent_generation.start_ticks,
+                        "pidfdAttachedAt": parent_generation.attached_at,
+                        "pidfdReadyAt": parent_generation.ready_at,
+                        "firstParentSample": parent_first_parent,
+                        "firstParentSampleStartedNs": parent_first_sample_ns,
+                        "latestRetainedSampleStartedNs": parent_generation.sample_started_ns,
+                        "latestRetainedSampleFinishedNs": parent_generation.sample_finished_ns,
+                        "currentImageComplete": parent_generation.current_image_complete,
+                        "memberTids": sorted(parent_members),
+                        "exitTids": sorted(parent_exit_tids),
+                        "latestRawTerminalNs": parent_group_exit_ns,
+                    },
+                },
+                separators=(",", ":"),
+            )
+        except BaseException:
+            pass
+
+        raise CaptureError(detail)
+
+
 def process_event(
     generation: Generation,
     trace: dict[str, Any],
@@ -3337,132 +3483,9 @@ def process_event(
                     code_gui_pid,
                 )
             else:
-                parent_first_parent = (
-                    parent_generation.parents[0]
-                    if parent_generation is not None and parent_generation.parents
-                    else None
+                validate_retained_creator_adoption(
+                    generation, creator_edge, parent_tgid, trace, tid_groups, generations
                 )
-                candidate_tids = (
-                    set(tid_groups)
-                    | set(trace["files"])
-                    | set(trace["exits"])
-                    | set(trace["creations"])
-                )
-
-                candidate_tids.update(
-                    edge["parentTid"]
-                    for edges in trace["creations"].values()
-                    for edge in edges
-                )
-
-                parent_members = {parent_tgid}
-
-                parent_members.update(
-                    tid
-                    for tid in candidate_tids
-                    if resolve_tgid(tid, trace["creations"], tid_groups) == parent_tgid
-                )
-
-                parent_exit_tids = {
-                    tid
-                    for tid in trace["exits"]
-                    if resolve_tgid(tid, trace["creations"], tid_groups) == parent_tgid
-                }
-
-                if (
-                    parent_generation is None
-                    or parent_generation.pid != parent_tgid
-                    or parent_generation.start_ticks <= 0
-                    or parent_generation.ready_at is None
-                    or parent_first_parent is None
-                    or child_first_parent is None
-                    or parent_members != parent_exit_tids
-                    or any(tid not in trace["files"] for tid in parent_members)
-                ):
-                    raise CaptureError(f"Cannot prove complete retained creator-group closure for PID {generation.pid}")
-
-                parent_group_exit_ns = max(
-                    trace_time_ns(trace["exits"][tid]["line"])
-                    for tid in parent_exit_tids
-                )
-                parent_first_sample_ns = utc_time_ns(parent_first_parent["observedAt"])
-                parent_births = trace["creations"].get(parent_tgid, [])
-                child_first_sample_ns = utc_time_ns(child_first_parent["observedAt"])
-
-                if (
-                    child_first_parent["pid"] != generation.ppid
-                    or utc_time_ns(parent_generation.attached_at) > parent_first_sample_ns
-                    or len(parent_births) != 1
-                    or parent_births[0]["thread"]
-                    or parent_births[0]["startNs"] >= utc_time_ns(parent_generation.attached_at)
-                    or parent_first_sample_ns >= parent_group_exit_ns
-                    or creator_edge["completionNs"] >= parent_group_exit_ns
-                    or parent_group_exit_ns >= child_first_sample_ns
-                    or utc_time_ns(parent_generation.ready_at) < parent_group_exit_ns
-                    or re.search(r"(?<![A-Z0-9_])CLONE_PARENT(?![A-Z0-9_])", creator_edge["line"])
-                ):
-                    detail = f"Raw creator group does not prove reparenting before the first retained /proc parent sample for PID {generation.pid}"
-
-                    try:
-                        parent_attached_ns = utc_time_ns(parent_generation.attached_at)
-                        parent_ready_ns = utc_time_ns(parent_generation.ready_at)
-                        clone_parent = bool(re.search(r"(?<![A-Z0-9_])CLONE_PARENT(?![A-Z0-9_])", creator_edge["line"]))
-                        flags_match = re.search(r"\bflags=([^,}\s)]+)", creator_edge["line"])
-                        detail += "; reparentingDiagnostic=" + json.dumps(
-                            {
-                                "operands": {
-                                    "childFirstParentMismatch": {"left": child_first_parent["pid"], "right": generation.ppid, "failed": child_first_parent["pid"] != generation.ppid},
-                                    "parentAttachedAfterFirstSample": {"left": parent_attached_ns, "right": parent_first_sample_ns, "failed": parent_attached_ns > parent_first_sample_ns},
-                                    "parentBirthNotBeforeAttachment": {"left": parent_births[0]["startNs"] if len(parent_births) == 1 else None, "right": parent_attached_ns, "failed": len(parent_births) != 1 or parent_births[0]["thread"] or parent_births[0]["startNs"] >= parent_attached_ns},
-                                    "parentFirstSampleAtOrAfterGroupExit": {"left": parent_first_sample_ns, "right": parent_group_exit_ns, "failed": parent_first_sample_ns >= parent_group_exit_ns},
-                                    "creationCompletedAtOrAfterParentExit": {"left": creator_edge["completionNs"], "right": parent_group_exit_ns, "failed": creator_edge["completionNs"] >= parent_group_exit_ns},
-                                    "parentExitAtOrAfterChildFirstSample": {"left": parent_group_exit_ns, "right": child_first_sample_ns, "failed": parent_group_exit_ns >= child_first_sample_ns},
-                                    "parentReadyBeforeGroupExit": {"left": parent_ready_ns, "right": parent_group_exit_ns, "failed": parent_ready_ns < parent_group_exit_ns},
-                                    "cloneParentFlag": {"value": clone_parent, "failed": clone_parent},
-                                },
-                                "child": {
-                                    "pid": generation.pid,
-                                    "initialPpid": generation.ppid,
-                                    "procStarttimeTicks": generation.start_ticks,
-                                    "pidfdAttachedAt": generation.attached_at,
-                                    "pidfdReadyAt": generation.ready_at,
-                                    "firstParentSample": child_first_parent,
-                                    "firstParentSampleStartedNs": child_first_sample_ns,
-                                    "latestRetainedSampleStartedNs": generation.sample_started_ns,
-                                    "latestRetainedSampleFinishedNs": generation.sample_finished_ns,
-                                    "currentImageComplete": generation.current_image_complete,
-                                },
-                                "creator": {
-                                    "parentTid": parent_tid,
-                                    "parentPid": parent_tgid,
-                                    "trace": creator_edge["trace"],
-                                    "rawLine": creator_edge["line"],
-                                    "startNs": creator_edge["startNs"],
-                                    "completionNs": creator_edge["completionNs"],
-                                    "flags": flags_match.group(1) if flags_match else None,
-                                },
-                                "retainedParent": {
-                                    "pid": parent_generation.pid,
-                                    "initialPpid": parent_generation.ppid,
-                                    "procStarttimeTicks": parent_generation.start_ticks,
-                                    "pidfdAttachedAt": parent_generation.attached_at,
-                                    "pidfdReadyAt": parent_generation.ready_at,
-                                    "firstParentSample": parent_first_parent,
-                                    "firstParentSampleStartedNs": parent_first_sample_ns,
-                                    "latestRetainedSampleStartedNs": parent_generation.sample_started_ns,
-                                    "latestRetainedSampleFinishedNs": parent_generation.sample_finished_ns,
-                                    "currentImageComplete": parent_generation.current_image_complete,
-                                    "memberTids": sorted(parent_members),
-                                    "exitTids": sorted(parent_exit_tids),
-                                    "latestRawTerminalNs": parent_group_exit_ns,
-                                },
-                            },
-                            separators=(",", ":"),
-                        )
-                    except BaseException:
-                        pass
-
-                    raise CaptureError(detail)
         else:
             if parent_tgid not in generations:
                 child_first_parent = generation.parents[0] if generation.parents else None
@@ -3917,6 +3940,198 @@ def signal_retained_process(process: subprocess.Popen[bytes], generation: Genera
         return {"kind": "signal", "signal": signal.Signals(-status).name}
 
     return {"kind": "exit", "status": status}
+
+
+def late_traced_kernel_identity(pid: int, supervisor_generation: Generation) -> dict[str, int | str]:
+    if supervisor_generation.check_exit():
+        raise CaptureError("Late traced process has no live retained tracer")
+
+    tracer = read_proc_kernel_identity(supervisor_generation.pid, "late traced process supervisor")
+
+    validate_retained_generation(
+        tracer, supervisor_generation.pid, supervisor_generation.start_ticks, "late traced process supervisor"
+    )
+
+    before = read_proc_kernel_identity(pid, "late traced process association")
+    status = (pathlib.Path("/proc") / str(pid) / "status").read_text(encoding="utf-8")
+    tracer_ids = [line.partition(":")[2].strip() for line in status.splitlines() if line.startswith("TracerPid:")]
+
+    if tracer_ids != [str(supervisor_generation.pid)]:
+        raise CaptureError(f"Late traced process {pid} does not belong to the retained tracer")
+
+    after = read_proc_kernel_identity(pid, "after late traced process association")
+
+    validate_retained_generation(after, pid, int(before["startTicks"]), "late traced process association")
+
+    if after["ppid"] != before["ppid"] or supervisor_generation.check_exit():
+        raise CaptureError(f"Late traced process {pid} changed association while sampling")
+
+    after["sampledAtNs"] = time.time_ns()
+
+    return after
+
+
+def drain_late_traced_generations(
+    supervisor: subprocess.Popen[bytes],
+    supervisor_generation: Generation,
+    generations: dict[int, Generation],
+    pending_trace_generations: dict[int, PendingTraceGeneration],
+    trace_directory: pathlib.Path,
+    prefix: str,
+    tid_groups: dict[int, int],
+    forced_pids: list[int],
+    cleanup_errors: list[dict[str, Any]],
+) -> float:
+    deadline = time.monotonic() + 5
+    rejected: set[int] = set()
+    late: set[int] = set()
+
+    if supervisor.pid != supervisor_generation.pid:
+        cleanup_errors.append({"pid": supervisor.pid, "error": "Late traced process supervisor does not match its retained generation"})
+
+        return 0.0
+
+    def creator_for(pid: int, trace: dict[str, Any]) -> int | None:
+        visited = {pid}
+        current = pid
+        immediate = None
+
+        while True:
+            if any(item["tid"] == current for item in trace["execveats"]) or any(
+                item["tid"] == current and item["name"] in {"execve", "execveat", "clone", "clone3", "fork", "vfork"}
+                for item in trace["pendingSyscalls"]
+            ):
+                return None
+
+            edges = trace["creations"].get(current, [])
+
+            if not edges:
+                return None
+
+            if len(edges) != 1 or edges[0]["thread"]:
+                raise CaptureError(f"Late traced process {pid} has no unique process ancestry")
+
+            parent = raw_trace_tgid(edges[0]["parentTid"], trace)
+            immediate = parent if immediate is None else immediate
+
+            if parent in visited:
+                raise CaptureError(f"Late traced process {pid} has cyclic process ancestry")
+
+            if parent in generations:
+                return immediate
+
+            visited.add(parent)
+
+            current = parent
+
+    def require_association(pid: int, trace: dict[str, Any], expected_ticks: int | None = None) -> bool:
+        if pid in trace["exits"]:
+            raise CaptureError(f"Late traced process {pid} already has a raw terminal record")
+
+        creator = creator_for(pid, trace)
+
+        if creator is None:
+            return False
+
+        identity = late_traced_kernel_identity(pid, supervisor_generation)
+
+        if expected_ticks is not None:
+            validate_retained_generation(identity, pid, expected_ticks, "late traced process before signal")
+
+        parent = generations.get(creator)
+
+        if identity["ppid"] == creator and parent is not None and not parent.check_exit():
+            current_parent = read_proc_kernel_identity(creator, "late traced process live creator")
+
+            validate_retained_generation(current_parent, creator, parent.start_ticks, "late traced process live creator")
+        else:
+            closure = raw_process_group_if_complete(creator, trace, tid_groups)
+
+            if closure is None or closure[1] >= identity["sampledAtNs"]:
+                return False
+
+        return True
+
+    while time.monotonic() < deadline and not supervisor_generation.check_exit():
+        try:
+            trace = scan_trace(trace_directory, prefix)
+        except BaseException as cleanup_error:
+            cleanup_errors.append({"pid": supervisor.pid, "error": f"Late traced process discovery failed: {cleanup_error}"})
+
+            break
+
+        for pid in trace["files"]:
+            if time.monotonic() >= deadline:
+                break
+
+            if pid in rejected or (pid in generations and pid not in late):
+                continue
+
+            edges = trace["creations"].get(pid, [])
+
+            if len(edges) == 1 and edges[0]["thread"]:
+                continue
+
+            if pid in trace["exits"]:
+                continue
+
+            if any(item["tid"] == pid for item in trace["execveats"]) or any(
+                item["tid"] == pid and item["name"] in {"execve", "execveat", "clone", "clone3", "fork", "vfork"}
+                for item in trace["pendingSyscalls"]
+            ):
+                continue
+
+            try:
+                if not require_association(pid, trace):
+                    continue
+
+                if pid in pending_trace_generations:
+                    retry_pending_trace_generation(pid, pending_trace_generations, generations, trace)
+                elif pid not in generations:
+                    generation = open_generation(pid, pending_trace_generations, trace)
+
+                    if generation is not None:
+                        generations[pid] = generation
+
+                attachment = generations.get(pid) or pending_trace_generations.get(pid)
+
+                if attachment is None:
+                    continue
+
+                late.add(pid)
+
+                if pidfd_ready(attachment.pidfd):
+                    continue
+
+                if not require_association(pid, trace, attachment.start_ticks):
+                    continue
+
+                if time.monotonic() >= deadline:
+                    break
+
+                if isinstance(attachment, Generation):
+                    terminate_retained_generation(attachment, forced_pids, deadline=deadline)
+                else:
+                    signal.pidfd_send_signal(attachment.pidfd, signal.SIGKILL)
+
+                    forced_pids.append(pid)
+
+                    while time.monotonic() < deadline and not pidfd_ready(attachment.pidfd):
+                        time.sleep(PROCESS_POLL_SECONDS)
+
+                    if not pidfd_ready(attachment.pidfd):
+                        raise CaptureError(f"Late pending process {pid} remained live after retained pidfd cleanup")
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            except BaseException as cleanup_error:
+                rejected.add(pid)
+
+                cleanup_errors.append({"pid": pid, "error": f"Late traced process cleanup refused: {cleanup_error}"})
+
+        if not supervisor_generation.check_exit() and time.monotonic() < deadline:
+            time.sleep(min(PROCESS_POLL_SECONDS, max(0, deadline - time.monotonic())))
+
+    return max(0, deadline - time.monotonic())
 
 
 def await_or_signal_retained_process(
@@ -5097,11 +5312,21 @@ def main() -> int:
 
         if supervisor is not None and supervisor_generation is not None:
             try:
+                remaining_drain = 0.0
+
+                try:
+                    remaining_drain = drain_late_traced_generations(
+                        supervisor, supervisor_generation, generations, pending_trace_generations,
+                        trace_directory, prefix, tid_groups, forced_pids, cleanup_errors,
+                    )
+                except BaseException as cleanup_error:
+                    cleanup_errors.append({"pid": supervisor.pid, "error": f"Late traced process drain failed: {cleanup_error}"})
+
                 if not supervisor_generation.check_exit():
                     forced_pids.append(supervisor.pid)
 
                 tracer_outcome = await_or_signal_retained_process(
-                    supervisor, supervisor_generation, 5, signal.SIGKILL
+                    supervisor, supervisor_generation, remaining_drain, signal.SIGKILL
                 )
             except BaseException as cleanup_error:
                 cleanup_errors.append({"pid": supervisor.pid, "error": str(cleanup_error)})

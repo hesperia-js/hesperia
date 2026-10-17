@@ -1064,6 +1064,407 @@ sys.stdin.buffer.read(1)
                     if cleanup_pidfd is not None:
                         os.close(cleanup_pidfd)
 
+    def test_failure_cleanup_drains_late_traced_children_without_signaling_foreign_generations(self) -> None:
+        for authority in ("retained-tracer", "changed-generation", "foreign-tracer"):
+            with self.subTest(authority=authority):
+                self.check_failure_cleanup_late_child(authority)
+
+    def check_failure_cleanup_late_child(self, authority: str) -> None:
+        strace = shutil.which("strace")
+
+        self.assertIsNotNone(strace, "the Linux observer owner requires the prepared strace runtime")
+
+        child_source = r'''import json, os, sys, threading
+print(json.dumps({"phase": "parent", "pid": os.getpid()}), flush=True)
+sys.stdin.buffer.read(1)
+if os.fork() == 0:
+    entered = threading.Event()
+    release = threading.Event()
+    tids = []
+    def worker():
+        tids.append(threading.get_native_id())
+        entered.set()
+        release.wait()
+    threading.Thread(target=worker).start()
+    entered.wait()
+    print(json.dumps({"phase": "child", "pid": os.getpid(), "tid": tids[0]}), flush=True)
+    release.wait()
+else:
+    sys.stdin.buffer.read(1)
+'''
+        with tempfile.TemporaryDirectory(prefix="hesperia-late-traced-cleanup-") as temporary:
+            directory = pathlib.Path(temporary)
+            script = directory / "creator.py"
+
+            script.write_text(child_source, encoding="utf-8")
+
+            trace_directory = directory / "trace"
+
+            trace_directory.mkdir()
+
+            prefix = "native-process-trace"
+            supervisor: subprocess.Popen[bytes] | None = None
+            unrelated: subprocess.Popen[bytes] | None = None
+            child_fd: int | None = None
+            parent_generation: observer.Generation | None = None
+            supervisor_generation: observer.Generation | None = None
+            unrelated_generation: observer.Generation | None = None
+            generations: dict[int, observer.Generation] = {}
+            pending: dict[int, observer.PendingTraceGeneration] = {}
+            pending_popen: dict[int, observer.PendingPopenGeneration] = {}
+            startup_diagnostics: list[str] = []
+            supervisor_ticks: int | None = None
+
+            def receive() -> dict[str, object]:
+                self.assertIsNotNone(supervisor)
+
+                self.assertIsNotNone(supervisor.stdout)
+
+                self.assertTrue(select.select([supervisor.stdout], [], [], 5)[0])
+
+                return json.loads(supervisor.stdout.readline())
+
+            with (directory / "strace-stderr.log").open("wb") as stderr:
+                try:
+                    unrelated = subprocess.Popen(
+                        [sys.executable, "-c", "import sys; print('ready', flush=True); sys.stdin.buffer.read(1)"],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                    )
+
+                    self.assertIsNotNone(unrelated.stdout)
+
+                    self.assertTrue(select.select([unrelated.stdout], [], [], 5)[0])
+
+                    self.assertEqual(unrelated.stdout.readline(), b"ready\n")
+
+                    unrelated_generation = observer.open_popen_generation(
+                        unrelated, "unrelated test child", pending_popen, startup_diagnostics
+                    )
+                    supervisor = subprocess.Popen(
+                        [strace, "-ff", "-ttt", "-v", "-s", "8192", "-e", "trace=%process",
+                         "-o", str(trace_directory / prefix), "--", sys.executable, "-u", str(script)],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=stderr,
+                    )
+                    parent = receive()
+                    supervisor_generation = observer.open_popen_generation(
+                        supervisor, "strace supervisor", pending_popen, startup_diagnostics,
+                        directory / "strace-stderr.log",
+                    )
+                    supervisor_ticks = supervisor_generation.start_ticks
+                    self.assertEqual(parent["phase"], "parent")
+
+                    parent_pid = int(parent["pid"])
+                    parent_generation = observer.open_generation(parent_pid, pending)
+
+                    self.assertIsNotNone(parent_generation)
+
+                    generations[parent_pid] = parent_generation
+                    before = observer.scan_trace(trace_directory, prefix)
+
+                    self.assertIn(parent_pid, before["files"])
+
+                    self.assertFalse(pending)
+
+                    supervisor.stdin.write(b"f")
+
+                    supervisor.stdin.flush()
+
+                    child = receive()
+
+                    self.assertEqual(child["phase"], "child")
+
+                    child_pid = int(child["pid"])
+                    child_tid = int(child["tid"])
+                    child_fd = os.pidfd_open(child_pid, 0)
+                    identity = observer.read_proc_kernel_identity(child_pid, "late cleanup regression")
+
+                    self.assertEqual(identity["ppid"], parent_pid)
+
+                    self.assertNotIn(child_pid, generations)
+
+                    self.assertNotIn(child_pid, pending)
+
+                    self.assertNotIn(child_pid, before["files"])
+
+                    forced: list[int] = []
+                    errors: list[dict[str, object]] = []
+
+                    observer.terminate_retained_generation(parent_generation, forced)
+
+                    selected_supervisor = supervisor
+                    selected_generation = supervisor_generation
+
+                    if authority == "changed-generation":
+                        supervisor_generation.start_ticks += 1
+                    elif authority == "foreign-tracer":
+                        selected_supervisor = unrelated
+                        selected_generation = unrelated_generation
+
+                    remaining = observer.drain_late_traced_generations(
+                        selected_supervisor, selected_generation, generations, pending,
+                        trace_directory, prefix, {}, forced, errors,
+                    )
+
+                    self.assertFalse(unrelated_generation.check_exit())
+
+                    if authority != "retained-tracer":
+                        expected_error = (
+                            "PID generation changed while its pidfd was retained"
+                            if authority == "changed-generation"
+                            else "does not belong to the retained tracer"
+                        )
+
+                        self.assertTrue(any(expected_error in str(error["error"]) for error in errors))
+
+                        self.assertNotIn(child_pid, forced)
+
+                        self.assertFalse(observer.pidfd_ready(child_fd))
+
+                        return
+
+                    self.assertEqual(errors, [])
+
+                    self.assertTrue(observer.pidfd_ready(child_fd))
+
+                    self.assertIn(child_pid, forced)
+
+                    self.assertNotIn(child_tid, forced)
+
+                    supervisor.wait(timeout=remaining)
+
+                    self.assertTrue(supervisor_generation.check_exit())
+
+                    final = observer.scan_trace(trace_directory, prefix, final=True)
+                    manifest, _ = observer.trace_files_manifest(trace_directory, prefix)
+
+                    self.assertIn(child_pid, final["exits"])
+
+                    self.assertIn(child_tid, final["exits"])
+
+                    self.assertTrue(all(item["bytes"] > 0 for item in manifest))
+                finally:
+                    if supervisor_generation is not None and supervisor_ticks is not None:
+                        supervisor_generation.start_ticks = supervisor_ticks
+
+                    if child_fd is not None:
+                        if not observer.pidfd_ready(child_fd):
+                            signal.pidfd_send_signal(child_fd, signal.SIGKILL)
+
+                        self.assertTrue(select.select([child_fd], [], [], 5)[0])
+
+                        os.close(child_fd)
+
+                    if parent_generation is not None and not parent_generation.check_exit():
+                        signal.pidfd_send_signal(parent_generation.pidfd, signal.SIGKILL)
+
+                    for process in (supervisor, unrelated):
+                        if process is not None:
+                            if process.poll() is None:
+                                process.kill()
+
+                            process.wait(timeout=5)
+
+                            for stream in (process.stdin, process.stdout, process.stderr):
+                                if stream is not None:
+                                    stream.close()
+
+                    descriptors = {value.pidfd for value in generations.values()}
+                    descriptors.update(value.pidfd for value in pending.values())
+                    descriptors.update(value.pidfd for value in pending_popen.values())
+
+                    for generation in (parent_generation, supervisor_generation, unrelated_generation):
+                        if generation is not None:
+                            descriptors.add(generation.pidfd)
+
+                    for descriptor in descriptors:
+                        with contextlib.suppress(OSError):
+                            os.close(descriptor)
+
+    def test_adopted_self_exec_retains_ordered_elf_proof_and_rejects_early_creator_readiness(self) -> None:
+        strace = shutil.which("strace")
+
+        self.assertIsNotNone(strace, "the Linux observer owner requires the prepared strace runtime")
+
+        executable = str(pathlib.Path(sys.executable).resolve(strict=True))
+
+        self.assertEqual(observer.verify_code_elf(executable), executable)
+
+        source = r'''import json, os, sys
+if sys.argv[1] == "launcher":
+    pid = os.fork()
+    if pid == 0:
+        os.execv(sys.executable, [sys.executable, "-u", __file__, "parent"])
+    os.waitpid(pid, 0)
+elif sys.argv[1] == "child":
+    print(json.dumps({"phase": "child", "pid": os.getpid()}), flush=True)
+    sys.stdin.buffer.read(1)
+else:
+    print(json.dumps({"phase": "parent", "pid": os.getpid()}), flush=True)
+    sys.stdin.buffer.read(1)
+    if os.fork() == 0:
+        os.execv("/proc/self/exe", [sys.executable, "-u", __file__, "child"])
+    sys.stdin.buffer.read(1)
+'''
+        with tempfile.TemporaryDirectory(prefix="hesperia-adopted-self-exec-") as temporary:
+            directory = pathlib.Path(temporary)
+            script = directory / "fixture.py"
+
+            script.write_text(source, encoding="utf-8")
+
+            trace_directory = directory / "trace"
+
+            trace_directory.mkdir()
+
+            prefix = "native-process-trace"
+            process: subprocess.Popen[bytes] | None = None
+            parent_generation: observer.Generation | None = None
+            child_generation: observer.Generation | None = None
+            child_fd: int | None = None
+            generations: dict[int, observer.Generation] = {}
+            pending: dict[int, observer.PendingTraceGeneration] = {}
+
+            with (directory / "strace-stderr.log").open("wb") as stderr:
+                try:
+                    process = subprocess.Popen(
+                        [strace, "-ff", "-ttt", "-v", "-s", "8192", "-e", "trace=%process",
+                         "-o", str(trace_directory / prefix), "--", executable, "-u", str(script), "launcher"],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=stderr,
+                    )
+
+                    def receive() -> dict[str, object]:
+                        self.assertTrue(select.select([process.stdout], [], [], 5)[0])
+
+                        return json.loads(process.stdout.readline())
+
+                    parent = receive()
+
+                    self.assertEqual(parent["phase"], "parent")
+
+                    parent_pid = int(parent["pid"])
+                    parent_generation = observer.open_generation(parent_pid, pending)
+
+                    self.assertIsNotNone(parent_generation)
+
+                    generations[parent_pid] = parent_generation
+
+                    self.assertEqual(parent_generation.current_proc["executablePath"], executable)
+
+                    process.stdin.write(b"f")
+
+                    process.stdin.flush()
+
+                    child = receive()
+
+                    self.assertEqual(child["phase"], "child")
+
+                    child_pid = int(child["pid"])
+                    child_fd = os.pidfd_open(child_pid, 0)
+                    before = observer.read_proc_kernel_identity(child_pid, "self-exec child before adoption")
+
+                    self.assertEqual(before["ppid"], parent_pid)
+
+                    observer.terminate_retained_generation(parent_generation, [])
+
+                    deadline = time.monotonic() + 5
+
+                    while True:
+                        trace = observer.scan_trace(trace_directory, prefix)
+
+                        if observer.confirm_traced_exit(parent_generation, trace, {}):
+                            break
+
+                        self.assertLess(time.monotonic(), deadline, "creator raw closure timed out")
+
+                        time.sleep(observer.PROCESS_POLL_SECONDS)
+
+                    child_generation = observer.open_generation(child_pid, pending, trace)
+
+                    self.assertIsNotNone(child_generation)
+
+                    generations[child_pid] = child_generation
+
+                    self.assertNotEqual(child_generation.ppid, parent_pid)
+
+                    self.assertEqual(child_generation.current_proc["executablePath"], executable)
+
+                    observer.terminate_retained_generation(child_generation, [])
+
+                    process.wait(timeout=5)
+
+                    trace = observer.scan_trace(trace_directory, prefix, final=True)
+
+                    self.assertTrue(observer.confirm_traced_exit(parent_generation, trace, {}))
+
+                    self.assertTrue(observer.confirm_traced_exit(child_generation, trace, {}))
+
+                    manifest, raw_files = observer.trace_files_manifest(trace_directory, prefix)
+                    trace_hashes = {entry["file"]: entry["sha256"] for entry in manifest}
+                    original_ready = parent_generation.ready_at
+                    terminal_ns = observer.raw_process_group_closure(parent_pid, trace, {})[1]
+                    parent_generation.ready_at = observer.utc_at_ns(terminal_ns - 1)
+
+                    try:
+                        with self.assertRaisesRegex(observer.CaptureError, "does not prove reparenting"):
+                            observer.process_event(
+                                child_generation, trace, {}, raw_files, generations, executable, None
+                            )
+                    finally:
+                        parent_generation.ready_at = original_ready
+
+                    event = observer.process_event(
+                        child_generation, trace, {}, raw_files, generations, executable, None
+                    )
+                    transitions = [item for item in event["execEvents"] if item["path"] == "/proc/self/exe"]
+
+                    self.assertEqual(len(transitions), 1)
+
+                    self.assertEqual(transitions[0]["resolvedPath"], executable)
+
+                    self.assertEqual(event["creator"]["parentPid"], parent_pid)
+
+                    after_manifest, _ = observer.trace_files_manifest(trace_directory, prefix)
+
+                    self.assertEqual(
+                        {entry["file"]: entry["sha256"] for entry in after_manifest}, trace_hashes
+                    )
+                finally:
+                    if child_fd is not None:
+                        if not observer.pidfd_ready(child_fd):
+                            signal.pidfd_send_signal(child_fd, signal.SIGKILL)
+
+                        self.assertTrue(select.select([child_fd], [], [], 5)[0])
+
+                        os.close(child_fd)
+
+                    if parent_generation is not None and not parent_generation.check_exit():
+                        signal.pidfd_send_signal(parent_generation.pidfd, signal.SIGKILL)
+
+                    if process is not None:
+                        if process.poll() is None:
+                            process.kill()
+
+                        process.wait(timeout=5)
+
+                        for stream in (process.stdin, process.stdout, process.stderr):
+                            if stream is not None:
+                                stream.close()
+
+                    descriptors = {generation.pidfd for generation in generations.values()}
+                    descriptors.update(attachment.pidfd for attachment in pending.values())
+
+                    for generation in (parent_generation, child_generation):
+                        if generation is not None:
+                            descriptors.add(generation.pidfd)
+
+                    for descriptor in descriptors:
+                        with contextlib.suppress(OSError):
+                            os.close(descriptor)
+
     def test_raw_only_creator_reparenting_uses_real_pidfd_and_strace_evidence(self) -> None:
         self.check_raw_only_creator_reparenting("fork")
 
