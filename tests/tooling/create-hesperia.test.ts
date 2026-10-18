@@ -105,11 +105,11 @@ test("creates the default Elysia frontend without installing when requested", as
 
     expect(manifest.dependencies).toStrictEqual({
       "@elysia/eden": "1.4.10",
-      "@hesperia/elysia": "1.0.0-alpha.1",
-      "@hesperia/hosting": "1.0.0-alpha.1",
+      "@hesperia/elysia": "1.0.0-alpha.2",
+      "@hesperia/hosting": "1.0.0-alpha.2",
       aeolia: "1.0.0-alpha.1",
       elysia: "1.4.30",
-      hesperia: "1.0.0-alpha.1",
+      hesperia: "1.0.0-alpha.2",
     });
 
     const languageServerManifest = JSON.parse(
@@ -121,7 +121,7 @@ test("creates the default Elysia frontend without installing when requested", as
 
     expect(manifest.devDependencies).toStrictEqual({
       "@hesperia/language-server": languageServerManifest.version,
-      "@hesperia/tooling": "1.0.0-alpha.1",
+      "@hesperia/tooling": "1.0.0-alpha.2",
       "@types/bun": "1.4.2",
       typescript: "7.0.2",
     });
@@ -200,7 +200,7 @@ test("--host elysia creates the Elysia starter without installing", async () => 
       dependencies: Record<string, string>;
     };
 
-    expect(manifest.dependencies["@hesperia/elysia"]).toBe("1.0.0-alpha.1");
+    expect(manifest.dependencies["@hesperia/elysia"]).toBe("1.0.0-alpha.2");
 
     expect(manifest.dependencies["@elysia/eden"]).toBe("1.4.10");
 
@@ -242,7 +242,7 @@ test("--host none creates the frontend-only starter without installing", async (
 
     expect(manifest.dependencies).toStrictEqual({
       aeolia: "1.0.0-alpha.1",
-      hesperia: "1.0.0-alpha.1",
+      hesperia: "1.0.0-alpha.2",
     });
 
     expect(manifest.scripts).toStrictEqual({

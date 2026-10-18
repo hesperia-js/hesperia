@@ -11,15 +11,15 @@
   },
   "dependencies": {
     "@elysia/eden": "1.4.10",
-    "@hesperia/elysia": "1.0.0-alpha.1",
-    "@hesperia/hosting": "1.0.0-alpha.1",
+    "@hesperia/elysia": "1.0.0-alpha.2",
+    "@hesperia/hosting": "1.0.0-alpha.2",
     "aeolia": "1.0.0-alpha.1",
     "elysia": "1.4.30",
-    "hesperia": "1.0.0-alpha.1"
+    "hesperia": "1.0.0-alpha.2"
   },
   "devDependencies": {
-    "@hesperia/language-server": "1.0.0-alpha.1",
-    "@hesperia/tooling": "1.0.0-alpha.1",
+    "@hesperia/language-server": "1.0.0-alpha.2",
+    "@hesperia/tooling": "1.0.0-alpha.2",
     "@types/bun": "1.4.2",
     "typescript": "7.0.2"
   }

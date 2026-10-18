@@ -27,7 +27,8 @@ Hesperia is available for experimental application trials. It is not yet ready
 for general application adoption. The [getting-started guide](docs/getting-started.md) covers the application setup for
 the npm alpha release and for a local framework checkout. For VS Code, install
 the [Hesperia extension](editors/vscode/README.md) and the application's matching
-language-server package. Marketplace publication of the extension is pending.
+language-server package. The extension's `0.1.0` pre-release is available on the
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=hesperia.hesperia-vscode).
 
 To work on Hesperia itself, follow the [contributor guide](CONTRIBUTING.md)
 and [test guide](tests/README.md).

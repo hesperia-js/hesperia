@@ -1,6 +1,6 @@
 {
   "name": "@hesperia/postcss",
-  "version": "1.0.0-alpha.1",
+  "version": "1.0.0-alpha.2",
   "license": "MPL-2.0",
   "repository": {
     "type": "git",
@@ -29,7 +29,7 @@
     "postcss": "8.5.28"
   },
   "peerDependencies": {
-    "@hesperia/tooling": "1.0.0-alpha.1",
+    "@hesperia/tooling": "1.0.0-alpha.2",
     "postcss": "^8.5.16"
   }
 }

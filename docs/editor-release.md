@@ -1,7 +1,8 @@
 # Release the VS Code extension
 
-The extension has its own Marketplace version. The first candidate is
-`hesperia.hesperia-vscode` version `0.1.0`, marked as a pre-release. Hesperia's
+The extension has its own Marketplace version.
+[`hesperia.hesperia-vscode` version `0.1.0`](https://marketplace.visualstudio.com/items?itemName=hesperia.hesperia-vscode)
+is available as a pre-release. Hesperia's
 npm packages use their shared `1.0.0-alpha.*` version. Marketplace requires a
 numeric extension version rather than an `-alpha` suffix.
 
@@ -16,8 +17,14 @@ That process publishes the npm candidates when trusted publishing is enabled,
 or records manual publication instructions otherwise.
 Marketplace publication remains a separate maintainer action after approval.
 No repository workflow publishes the extension automatically.
+The npm `1.0.0-alpha.2` release does not itself require another Marketplace
+upload. A changed extension needs a new numeric version and an approved, tested
+candidate before manual publication.
 
 ## Create the Marketplace publisher
+
+The `hesperia` publisher already exists. These steps document its initial setup.
+Use the existing publisher for future extension releases.
 
 1. Sign in to [Manage publishers and extensions](https://marketplace.visualstudio.com/manage/publishers/)
    with the Microsoft account that will own the extension.
@@ -105,20 +112,23 @@ the language server used in acceptance. Every npm archive includes its package's
 README, distributed guides, and the root license files. The candidate verifier
 checks those README and license bytes before the archives reach publication.
 
-After the maintainer approves the exact candidate:
+For a future extension release, update its numeric version before preparing and
+testing the candidate. Do not upload another `0.1.0` over the published release.
+After the maintainer approves the exact candidate for the new version:
 
 1. Open the `hesperia` publisher in
    [Manage publishers and extensions](https://marketplace.visualstudio.com/manage/publishers/).
-2. Choose **New extension**, then **Visual Studio Code**, and upload the verified
-   `hesperia-vscode-0.1.0.vsix`. For later versions, update the existing extension.
+2. Update the existing `hesperia-vscode` extension with the verified VSIX for
+   the new numeric version.
 3. Confirm the identity, numeric version, and pre-release status, then publish.
 4. Wait for Marketplace processing to finish and check the public listing.
 
 For an already authenticated maintainer CLI, the equivalent command consumes
-the same file without rebuilding:
+the same file without rebuilding. Replace `<version>` with the approved new
+numeric version:
 
 ```sh
-node node_modules/@vscode/vsce/vsce publish --packagePath .hesperia/editor-candidate/hesperia-vscode-0.1.0.vsix --pre-release
+node node_modules/@vscode/vsce/vsce publish --packagePath ".hesperia/editor-candidate/hesperia-vscode-<version>.vsix" --pre-release
 ```
 
 Do not pass a version-bump argument to `vsce publish`; it can modify the manifest
