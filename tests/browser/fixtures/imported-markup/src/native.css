@@ -1,0 +1,8 @@
+@charset "windows-1252";
+@import "./native-nested.css?from=main";
+.markup-panel {
+  border-left: 13px solid rgb(8, 9, 10);
+  border-image-source: url("./assets/native%20pic%20%23%25.png?native=asset#pixel");
+  border-image-slice: 1;
+}
+.markup-panel::before { content: "café"; }

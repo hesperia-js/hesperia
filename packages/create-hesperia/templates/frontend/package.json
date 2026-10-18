@@ -1,0 +1,21 @@
+{
+  "name": "HESPERIA_PROJECT_NAME",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "hesperia dev",
+    "build": "hesperia build",
+    "preview": "hesperia preview",
+    "check": "hesperia check"
+  },
+  "dependencies": {
+    "aeolia": "1.0.0-alpha.1",
+    "hesperia": "1.0.0-alpha.1"
+  },
+  "devDependencies": {
+    "@hesperia/language-server": "1.0.0-alpha.1",
+    "@hesperia/tooling": "1.0.0-alpha.1",
+    "@types/bun": "1.4.2",
+    "typescript": "7.0.2"
+  }
+}

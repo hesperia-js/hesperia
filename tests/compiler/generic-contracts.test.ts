@@ -1,18 +1,21 @@
 import { expect, test } from "bun:test";
-import { checkProjectModules } from "../../src/compiler/checking.ts";
+import { checkProjectModules } from "../../packages/compiler/src/checking.ts";
 
-function diagnostics(source: string) {
-  return checkProjectModules([{ filename: "generic-contract.tsx", source }]).diagnostics;
+async function diagnostics(source: string) {
+  return (await checkProjectModules([{ filename: "generic-contract.tsx", source }])).diagnostics;
 }
 
-function expectComponentCallError(source: string, message: string): void {
-  const result = diagnostics(source);
+async function expectComponentCallError(source: string, message: string): Promise<void> {
+  const result = await diagnostics(source);
+
   expect(result).toHaveLength(1);
+
   expect(result[0]).toMatchObject({ code: "TS2769", severity: "error" });
+
   expect(result[0]?.message).toContain(message);
 }
 
-test("inferred generic value and callback components retain their caller contracts", () => {
+test("inferred generic value and callback components retain their caller contracts", async () => {
   const source = `
     import { type Component } from "hesperia";
     function Echo<T>(props: Component.Props<{ value: T }>) {
@@ -26,11 +29,12 @@ test("inferred generic value and callback components retain their caller contrac
       return <main><Echo value="text" /><Callback done={callback} /></main>;
     }
   `;
-  expect(diagnostics(source)).toStrictEqual([]);
+
+  expect(await diagnostics(source)).toStrictEqual([]);
 });
 
-test("concrete component contracts reject excess properties", () => {
-  expectComponentCallError(
+test("concrete component contracts reject excess properties", async () => {
+  await expectComponentCallError(
     `
       import { type Component } from "hesperia";
       function Child(props: Component.Props<{ value: string }>) {
@@ -44,8 +48,8 @@ test("concrete component contracts reject excess properties", () => {
   );
 });
 
-test("concrete component contracts reject an invalid callback", () => {
-  expectComponentCallError(
+test("concrete component contracts reject an invalid callback", async () => {
+  await expectComponentCallError(
     `
       import { type Component } from "hesperia";
       function Child(props: Component.Props<{ done: () => string }>) {
@@ -59,8 +63,8 @@ test("concrete component contracts reject an invalid callback", () => {
   );
 });
 
-test("concrete component contracts reject an incompatible binding", () => {
-  expectComponentCallError(
+test("concrete component contracts reject an incompatible binding", async () => {
+  await expectComponentCallError(
     `
       import { type Component } from "hesperia";
       import * as client from "hesperia/client";
@@ -77,8 +81,8 @@ test("concrete component contracts reject an incompatible binding", () => {
   );
 });
 
-test("generic component contracts preserve correlated and constrained types", () => {
-  expectComponentCallError(
+test("generic component contracts preserve correlated and constrained types", async () => {
+  await expectComponentCallError(
     `
       import { type Component } from "hesperia";
       function Pair<T>(props: Component.Props<{ value: T; other: T }>) {
@@ -90,7 +94,8 @@ test("generic component contracts preserve correlated and constrained types", ()
     `,
     "other",
   );
-  expectComponentCallError(
+
+  await expectComponentCallError(
     `
       import { type Component } from "hesperia";
       function Text<T extends string>(props: Component.Props<{ value: T }>) {
@@ -104,7 +109,7 @@ test("generic component contracts preserve correlated and constrained types", ()
   );
 });
 
-test("explicit component type arguments constrain caller values", () => {
+test("explicit component type arguments constrain caller values", async () => {
   const prefix = `
     import { type Component } from "hesperia";
     function Echo<T>(props: Component.Props<{ value: T }>) {
@@ -112,6 +117,8 @@ test("explicit component type arguments constrain caller values", () => {
     }
     export function App() {
       return `;
-  expectComponentCallError(`${prefix}<Echo<number> value="wrong" />; }`, "number");
-  expect(diagnostics(`${prefix}<Echo<number> value={1} />; }`)).toStrictEqual([]);
+
+  await expectComponentCallError(`${prefix}<Echo<number> value="wrong" />; }`, "number");
+
+  expect(await diagnostics(`${prefix}<Echo<number> value={1} />; }`)).toStrictEqual([]);
 });

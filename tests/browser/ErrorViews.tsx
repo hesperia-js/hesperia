@@ -2,6 +2,7 @@ import type { Component } from "hesperia";
 import * as client from "hesperia/client";
 
 const events: string[] = [];
+
 export function errorEvents() {
   return events.slice();
 }
@@ -13,10 +14,13 @@ function failErrorView() {
 export function FailingContent() {
   const failed = client.state(false);
   const field = <input id="error-content-field" />;
+
   client.cleanup(() => events.push(`content cleanup:${field.isConnected}`));
+
   client.effect(() => {
     if (failed()) throw new Error("Content failed");
   });
+
   return (
     <section>
       {field}
@@ -30,11 +34,15 @@ export function FailingContent() {
 export function ErrorView(props: Component.Props<{ error: unknown }>) {
   const failed = client.state(false);
   const message = <span id="error-message">{(props.error() as Error).message}</span>;
+
   client.cleanup(() => events.push(`error cleanup:${message.isConnected}`));
+
   client.effect(() => {
     events.push(`error effect:${message.isConnected}`);
+
     if (failed()) failErrorView();
   });
+
   return (
     <section>
       {message}

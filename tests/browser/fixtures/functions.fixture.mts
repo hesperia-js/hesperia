@@ -13,11 +13,15 @@ const application = mount(
   },
 );
 let directCallFault: unknown;
+
 try {
   Tree({ depth: 0, label: "direct" } as never);
 } catch (error) {
   directCallFault = error instanceof Error && "kind" in error ? error.kind : String(error);
 }
+
 Object.assign(globalThis, { functionsFixture: { bodyExecutions, directCallFault } });
+
 await application.settled();
+
 document.documentElement.dataset.ready = "true";

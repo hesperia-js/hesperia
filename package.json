@@ -1,6 +1,7 @@
 {
-  "name": "hesperia",
-  "version": "0.0.0",
+  "name": "hesperia-workspace",
+  "version": "1.0.0-alpha.1",
+  "private": true,
   "description": "Ergonomic Frontend Framework for building reactive web applications",
   "keywords": [
     "framework",
@@ -22,84 +23,58 @@
     "type": "git",
     "url": "https://github.com/hesperia-js/hesperia.git"
   },
-  "bin": {
-    "hesperia": "./dist/tooling/cli.js"
-  },
-  "files": [
-    "dist"
+  "workspaces": [
+    "packages/*",
+    "golden",
+    "editors/vscode"
   ],
   "type": "module",
-  "sideEffects": false,
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
-    },
-    "./compiler": {
-      "types": "./dist/compiler/index.d.ts",
-      "import": "./dist/compiler/index.js",
-      "default": "./dist/compiler/index.js"
-    },
-    "./runtime": {
-      "types": "./dist/runtime/index.d.ts",
-      "import": "./dist/runtime/index.js",
-      "default": "./dist/runtime/index.js"
-    },
-    "./client": {
-      "types": "./dist/client.d.ts",
-      "import": "./dist/client.js",
-      "default": "./dist/client.js"
-    },
-    "./routing": {
-      "types": "./dist/routing/index.d.ts",
-      "import": "./dist/routing/index.js",
-      "default": "./dist/routing/index.js"
-    },
-    "./aeolia": {
-      "types": "./dist/aeolia/index.d.ts",
-      "import": "./dist/aeolia/index.js",
-      "default": "./dist/aeolia/index.js"
-    }
-  },
   "scripts": {
-    "build": "bunx tsc -p tsconfig.build.json",
-    "test": "bun run build && bun test tests/compiler tests/runtime tests/data tests/tooling tests/routing tests/editor",
-    "test:coverage": "bun run build && bun test tests/compiler tests/runtime tests/data tests/tooling tests/routing tests/editor --coverage",
+    "build": "bun run scripts/build-packages.ts",
+    "test": "bun run build && bun test --timeout=45000 tests/compiler tests/runtime tests/data tests/tooling tests/routing tests/editor tests/hosting tests/ci",
+    "test:coverage": "bun run test -- --coverage",
+    "test:coverage:final": "bun run scripts/ci/coverage-owner-launcher.ts scripts/ci/run-final-coverage.ts --",
     "test:browser": "node node_modules/@playwright/test/cli.js test",
-    "test:package": "bun run build && bun test tests/package",
+    "test:package": "bun run build && bun test --timeout=60000 tests/package",
+    "test:golden": "bun run --cwd golden test",
     "test:editor": "bun run build && bun run --cwd editors/vscode typecheck && bun run --cwd editors/vscode build && bun run --cwd editors/vscode build:test && powershell -NoProfile -ExecutionPolicy Bypass -File editors/vscode/test.ps1",
-    "typecheck": "bunx tsc --noEmit -p tsconfig.json",
-    "check": "bun run build && bun run typecheck && bun run lint && bun run fmt:check && bun test tests/compiler tests/runtime tests/data tests/tooling tests/routing tests/editor && bun run test:browser && bun test tests/package && bun run test:editor",
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json && bunx tsc --noEmit -p tests/package/fixtures/tsconfig.json && bunx tsc --noEmit -p tests/tooling/fixtures/drivers/tsconfig.json && bunx tsc --noEmit -p packages/create-hesperia/tsconfig.json",
+    "check": "bun run build && bun run typecheck && bun run lint && bun run fmt:check && bun test --timeout=45000 tests/compiler tests/runtime tests/data tests/tooling tests/routing tests/editor tests/hosting tests/ci && bun run test:browser && bun test --timeout=60000 tests/package && bun run test:golden && bun run test:editor && bun run test:editor:installed",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "lint": "oxlint",
-    "lint:fix": "oxlint --fix"
+    "lint:fix": "oxlint --fix",
+    "package:editor": "bun scripts/ci/editor-package.ts",
+    "test:editor:installed": "bun run build && bun scripts/ci/prepare-release-candidate.ts --candidate-dir .hesperia/release-candidate && bun run package:editor && bun run --cwd editors/vscode build:test && bun scripts/ci/test-editor-package.ts"
   },
-  "dependencies": {
-    "@jridgewell/remapping": "2.3.5",
+  "devDependencies": {
+    "@elysia/eden": "1.4.10",
+    "@hesperia/compiler": "workspace:*",
+    "@hesperia/language-server": "workspace:*",
+    "@hesperia/tooling": "workspace:*",
     "@jridgewell/trace-mapping": "0.3.31",
-    "esrap": "2.3.7",
+    "@playwright/test": "1.63.0",
+    "@types/bun": "1.4.2",
+    "@vscode/vsce": "4.0.0",
+    "aeolia": "1.0.0-alpha.1",
+    "elysia": "1.4.30",
+    "happy-dom": "20.14.3",
+    "hesperia": "workspace:*",
+    "istanbul-lib-coverage": "3.2.2",
+    "istanbul-lib-instrument": "6.0.3",
+    "istanbul-lib-report": "3.0.1",
+    "istanbul-reports": "3.2.0",
     "oxc-parser": "0.149.0",
-    "oxc-transform": "0.149.0",
+    "oxfmt": "0.67.0",
+    "oxlint": "1.82.0",
     "parse5": "8.0.1",
+    "playwright": "1.63.0",
     "typescript": "7.0.2",
     "vscode-languageserver": "10.1.1",
     "vscode-languageserver-textdocument": "1.0.14"
   },
-  "devDependencies": {
-    "@playwright/test": "1.63.0",
-    "@types/bun": "1.4.2",
-    "aeolia": "file:../aeolia",
-    "happy-dom": "20.14.3",
-    "oxfmt": "0.67.0",
-    "oxlint": "1.82.0",
-    "playwright": "1.63.0"
-  },
-  "peerDependencies": {
-    "aeolia": "0.0.0"
+  "overrides": {
+    "aeolia": "1.0.0-alpha.1"
   },
   "packageManager": "bun@1.4.2"
 }

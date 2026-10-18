@@ -5,13 +5,17 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Window } from "happy-dom";
 import { mount, type Component } from "hesperia";
-import { compile, analyzeRouteModule } from "../../src/compiler/index.ts";
+import { compile, analyzeRouteModule } from "../../packages/compiler/src/index.ts";
 
 async function importGenerated<T extends object>(code: string): Promise<T> {
   const directory = resolve(import.meta.dir, "../../.hesperia");
+
   await mkdir(directory, { recursive: true });
+
   const filename = join(directory, `constructors-${randomUUID()}.mjs`);
+
   await writeFile(filename, code);
+
   try {
     return await import(pathToFileURL(filename).href);
   } finally {
@@ -25,14 +29,20 @@ test("constructors preserve native instances and alpha-stable captured lookup", 
     "export function make(message: string) { return new Constructor(message); }",
   ].join("\n");
   const renamed = source.replaceAll("Constructor", "Factory");
-  const result = compile(source, { filename: "constructors.ts" });
-  const renamedResult = compile(renamed, { filename: "constructors-renamed.ts" });
+  const result = await compile(source, { filename: "constructors.ts" });
+  const renamedResult = await compile(renamed, { filename: "constructors-renamed.ts" });
+
   expect(result.diagnostics).toEqual([]);
+
   expect(renamedResult.diagnostics).toEqual([]);
+
   expect(result.semanticHash).toBe(renamedResult.semanticHash);
+
   const generated = await importGenerated<{ make: (message: string) => Error }>(result.code);
   const error = generated.make("constructed");
+
   expect(error).toBeInstanceOf(Error);
+
   expect(error.message).toBe("constructed");
 });
 
@@ -44,16 +54,18 @@ test("route dependency analysis traverses constructor callees and arguments", ()
     "export default route({ guard });",
   ].join("\n");
   const result = analyzeRouteModule(source, { filename: "src/routes/+route.ts" });
+
   expect(result.diagnostics).toContainEqual(
     expect.objectContaining({
       code: "HES-ROUTE-CAPABILITY",
       message: "Route guard imports server capability node:fs.",
     }),
   );
+
   expect(result.artifact).toBeUndefined();
 });
 
-test("constructor arguments cannot hide component binding reads", () => {
+test("constructor arguments cannot hide component binding reads", async () => {
   const source = [
     'import { client } from "hesperia";',
     "export default function App() {",
@@ -61,19 +73,23 @@ test("constructor arguments cannot hide component binding reads", () => {
     "  return <div>{new Error(field().value).message}</div>;",
     "}",
   ].join("\n");
-  const result = compile(source, { filename: "constructor-binding.tsx" });
+  const result = await compile(source, { filename: "constructor-binding.tsx" });
+
   expect(result.code).toBe("");
+
   expect(result.diagnostics).toContainEqual(
     expect.objectContaining({ code: "HES-BIND-BODY", severity: "error" }),
   );
 });
 
-test("unsupported constructor arguments fail closed", () => {
+test("unsupported constructor arguments fail closed", async () => {
   for (const argument of ["<span />", "() => <span />"]) {
-    const result = compile(`const value = new Error(${argument});`, {
+    const result = await compile(`const value = new Error(${argument});`, {
       filename: "constructor-jsx.tsx",
     });
+
     expect(result.code).toBe("");
+
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({ code: "HES-NEW", severity: "error" }),
     );
@@ -81,7 +97,7 @@ test("unsupported constructor arguments fail closed", () => {
 });
 
 test("retained keyed rows re-evaluate constructor arguments in their captured scope", async () => {
-  const result = compile(
+  const result = await compile(
     [
       'import * as client from "hesperia/client";',
       "export default function App() {",
@@ -93,21 +109,32 @@ test("retained keyed rows re-evaluate constructor arguments in their captured sc
     ].join("\n"),
     { filename: "constructor-list.tsx" },
   );
+
   expect(result.diagnostics).toEqual([]);
+
   const generated = await importGenerated<{ default: Component<Record<string, never>> }>(
     result.code,
   );
   const window = new Window();
+
   try {
     const target = window.document.createElement("div") as unknown as Element;
     const application = mount(target, generated.default, {});
+
     await application.settled();
+
     const row = target.querySelector("li")!;
+
     expect(row.textContent).toBe("A:first");
+
     (target.querySelector("#update") as unknown as HTMLButtonElement).click();
+
     await application.settled();
+
     expect(target.querySelector("li")).toBe(row);
+
     expect(row.textContent).toBe("B:second");
+
     application.dispose();
   } finally {
     window.close();

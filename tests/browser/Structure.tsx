@@ -5,9 +5,13 @@ export type RowValue = { id: string; label: string };
 
 export const structureControls: {
   reorder(): void;
+
   updateRow(id: string, label: string): void;
+
   togglePanel(): void;
+
   replaceRaw(): void;
+
   dispose(): void;
 } = {
   reorder: () => undefined,
@@ -45,6 +49,7 @@ function Panel() {
   client.cleanup(() => {
     panelCleanups++;
   });
+
   return <aside id="panel">panel</aside>;
 }
 
@@ -59,6 +64,7 @@ export default function Structure() {
   const fragmentMarkup = client.state(
     '<span data-raw-fragment="one">fragment one</span><span data-raw-fragment="two">fragment two</span>',
   );
+
   Object.assign(structureControls, {
     reorder() {
       rows.set([
@@ -67,6 +73,7 @@ export default function Structure() {
         { id: "b", label: "B" },
       ]);
     },
+
     updateRow(_id: string, label: string) {
       rows.set([
         { id: "c", label: "C" },
@@ -74,15 +81,18 @@ export default function Structure() {
         { id: "b", label },
       ]);
     },
+
     togglePanel() {
       showPanel.update((visible) => !visible);
     },
+
     replaceRaw() {
       hostMarkup.set(
         hostMarkup() === "<strong data-raw-host-content>host one</strong>"
           ? "<em data-raw-host-content>host two</em>"
           : "<strong data-raw-host-content>host three</strong>",
       );
+
       fragmentMarkup.set(
         fragmentMarkup().includes('data-raw-fragment="one"')
           ? '<span data-raw-fragment="three">fragment three</span><span data-raw-fragment="four">fragment four</span>'
@@ -90,6 +100,7 @@ export default function Structure() {
       );
     },
   });
+
   return (
     <main id="structure">
       <section id="keyed-rows">

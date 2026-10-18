@@ -7,7 +7,7 @@ export default defineConfig({
   testDir: "./tests/browser",
   testMatch: "**/*.spec.ts",
   fullyParallel: true,
-  workers: 3,
+  workers: process.env.CI && process.platform === "win32" ? 1 : 3,
   forbidOnly: Boolean(process.env.CI),
   retries: 0,
   reporter: "list",

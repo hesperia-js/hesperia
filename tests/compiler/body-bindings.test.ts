@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { analyzeModule } from "../../src/compiler/compilation.ts";
-import { validateComponentBindingReads } from "../../src/compiler/body-validation.ts";
+import { analyzeModule } from "../../packages/compiler/src/compilation.ts";
+import { validateComponentBindingReads } from "../../packages/compiler/src/body-validation.ts";
 
 function validate(source: string) {
   const analyzed = analyzeModule(source, { filename: "body-bindings.tsx" }).result;
@@ -15,6 +15,7 @@ test.each([
   "switch (1) { case 1: var view = <span/>; }",
 ])("a render value escaping a control-flow block identifies its component: %s", (body) => {
   const source = `import { bind } from "hesperia/client"; function App() { const binding = bind(); binding(); ${body} return view; }`;
+
   expect(validate(source).map((item) => item.code)).toStrictEqual(["HES-BIND-BODY"]);
 });
 
@@ -25,6 +26,7 @@ test.each([
   "const [...[value = binding()]] = [];",
 ])("switch and rest pattern evaluation cannot hide immediate binding reads: %s", (body) => {
   const source = `import { bind } from "hesperia/client"; function App() { const binding = bind(); ${body} return <span/>; }`;
+
   expect(validate(source).map((item) => item.code)).toStrictEqual(["HES-BIND-BODY"]);
 });
 
@@ -37,7 +39,9 @@ test.each([
 ])("immediate binding reads remain forbidden in try and array spread work: %s", (body) => {
   const source = `import { bind } from "hesperia/client"; function App() { const binding = bind(); ${body} return <span/>; }`;
   const analyzed = analyzeModule(source, { filename: "try-binding.tsx" }).result;
+
   expect(analyzed.diagnostics.filter((item) => item.code !== "HES-BIND-BODY")).toStrictEqual([]);
+
   expect(validateComponentBindingReads(analyzed.ir).map((item) => item.code)).toStrictEqual([
     "HES-BIND-BODY",
   ]);
@@ -49,12 +53,14 @@ test.each([
   "try {} finally { return <span/>; }",
 ])("rendered returns in try branches identify the component body: %s", (body) => {
   const source = `import { bind } from "hesperia/client"; function App() { const binding = bind(); binding(); ${body} }`;
+
   expect(validate(source).map((item) => item.code)).toStrictEqual(["HES-BIND-BODY"]);
 });
 
 test("catch binding names do not inherit an outer binding factory result", () => {
   const source =
     'import { bind } from "hesperia/client"; function App() { const binding = bind(); try { throw () => 1; } catch (binding) { binding(); } return <span/>; }';
+
   expect(validate(source)).toStrictEqual([]);
 });
 
@@ -71,20 +77,25 @@ test.each([
 ])("binding reads remain forbidden in immediate loop work: %s", (body) => {
   const source = `import { bind } from "hesperia/client"; function App() { const binding = bind(); ${body} return <span/>; }`;
   const analysis = analyzeModule(source, { filename: "loop-binding.tsx" }).result;
+
   expect(analysis.diagnostics.filter((item) => item.code !== "HES-BIND-BODY")).toStrictEqual([]);
+
   const diagnostics = validateComponentBindingReads(analysis.ir);
+
   expect(diagnostics.map((item) => item.code)).toStrictEqual(["HES-BIND-BODY"]);
 });
 
 test("a component returning inside a loop still checks its immediate binding read", () => {
   const source =
     'import { bind } from "hesperia/client"; function App() { const binding = bind(); for (const item of [1]) { binding(); return <span/>; } }';
+
   expect(validate(source).map((item) => item.code)).toStrictEqual(["HES-BIND-BODY"]);
 });
 
 test("a do-while condition cannot read the binding created by its first iteration", () => {
   const source =
     'import { bind } from "hesperia/client"; function App() { do { var binding = bind(); } while (binding()); return <span/>; }';
+
   expect(validate(source).map((item) => item.code)).toStrictEqual(["HES-BIND-BODY"]);
 });
 
@@ -103,7 +114,9 @@ test("rejects required and unsafe binding reads in a component body after an awa
   `);
 
   expect(diagnostics).toHaveLength(2);
+
   expect(diagnostics.map((item) => item.code)).toStrictEqual(["HES-BIND-BODY", "HES-BIND-BODY"]);
+
   expect(diagnostics.every((item) => item.severity === "error")).toBe(true);
 });
 
@@ -130,6 +143,7 @@ test("rejects an immediate event-expression read while allowing a deferred handl
   `);
 
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]).toMatchObject({ code: "HES-BIND-BODY", severity: "error" });
 });
 
@@ -157,6 +171,7 @@ test("recognizes a direct imported factory call without confusing another module
   `);
 
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]).toMatchObject({ code: "HES-BIND-BODY", severity: "error" });
 });
 
@@ -174,6 +189,7 @@ test("recognizes the root client namespace and respects a shadowing parameter", 
   `);
 
   expect(diagnostics).toHaveLength(1);
+
   expect(diagnostics[0]).toMatchObject({ code: "HES-BIND-BODY", severity: "error" });
 });
 
@@ -207,7 +223,9 @@ test("component classification and binding diagnostics agree for returned local 
     `,
       { filename: "local-handle.tsx" },
     ).result;
+
     expect([...result.semantics.components]).toStrictEqual(["App"]);
+
     expect(result.diagnostics.map((item) => item.code)).toStrictEqual(["HES-BIND-BODY"]);
   }
 });
@@ -222,6 +240,7 @@ test.each([
 function App() { ${body} }`,
     { filename: "default-body.tsx" },
   ).result;
+
   expect(result.diagnostics.map((item) => item.code)).toStrictEqual(["HES-BIND-BODY"]);
 });
 
@@ -235,6 +254,7 @@ test.each([
 ${declaration}`,
     { filename: "default-parameter.tsx" },
   ).result;
+
   expect(result.diagnostics.map((item) => item.code)).toStrictEqual(["HES-BIND-BODY"]);
 });
 
@@ -250,6 +270,7 @@ test.each([
 function App() { ${body} return <div/>; }`,
     { filename: "assignment-body.tsx" },
   ).result;
+
   expect(result.diagnostics.map((item) => item.code)).toStrictEqual(["HES-BIND-BODY"]);
 });
 
@@ -264,5 +285,6 @@ function App() {
 }`,
     { filename: "deferred-default.tsx" },
   ).result;
+
   expect(result.diagnostics).toStrictEqual([]);
 });

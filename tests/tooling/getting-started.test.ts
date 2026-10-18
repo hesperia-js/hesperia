@@ -2,42 +2,56 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { prepareBuild, ProjectError, writeBuild } from "../../src/tooling/project.ts";
-import { previewProject } from "../../src/tooling/server.ts";
+import { prepareBuild, ProjectError, writeBuild } from "../../packages/tooling/src/project.ts";
+import { previewProject } from "../../packages/tooling/src/server.ts";
 
 test("getting-started files build and restore page head content with cached navigation", async () => {
   const guide = await Bun.file(resolve(import.meta.dir, "../../docs/getting-started.md")).text();
   const parent = resolve(import.meta.dir, "../../.hesperia");
+
   await mkdir(parent, { recursive: true });
+
   const root = await mkdtemp(join(parent, "getting-started-"));
   let server: Awaited<ReturnType<typeof previewProject>> | undefined;
+
   try {
     const examples = [...guide.matchAll(/```tsx?\r?\n\/\/ ([^\r\n]+)\r?\n([\s\S]*?)```/gu)];
+
     expect(examples.map((match) => match[1])).toContain("app.tsx");
+
     expect(examples.map((match) => match[1])).toContain("app.config.ts");
+
     for (const match of examples) {
       const filename = join(root, match[1]!);
+
       await mkdir(dirname(filename), { recursive: true });
+
       await writeFile(filename, match[2]!);
     }
+
     const json = [...guide.matchAll(/```json\r?\n([\s\S]*?)```/gu)].map(
       (match) => JSON.parse(match[1]!) as Record<string, unknown>,
     );
+
     await writeFile(
       join(root, "tsconfig.json"),
       JSON.stringify(json.find((value) => "compilerOptions" in value)),
     );
+
     await writeFile(
       join(root, "hesperia.config.json"),
       JSON.stringify(json.find((value) => "allowUnsafeHTML" in value)),
     );
+
     try {
       await writeBuild(root, await prepareBuild(root));
     } catch (error) {
       if (error instanceof ProjectError)
         throw new Error(JSON.stringify(error.diagnostics, null, 2), { cause: error });
+
       throw error;
     }
+
     server = await previewProject(root, 0);
     const script = `
       import assert from "node:assert/strict";
@@ -94,8 +108,10 @@ test("getting-started files build and restore page head content with cached navi
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
     ]);
+
     if (status !== 0)
       throw new Error(`Getting-started browser checks failed\n${output}\n${errors}`);
+
     expect(output.trim().split(/\r?\n/u)).toStrictEqual([
       "chromium getting started verified",
       "firefox getting started verified",
@@ -103,6 +119,7 @@ test("getting-started files build and restore page head content with cached navi
     ]);
   } finally {
     await server?.close();
+
     await rm(root, { recursive: true, force: true });
   }
 }, 60_000);

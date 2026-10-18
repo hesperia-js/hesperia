@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ESNext", "DOM"],
+    "jsx": "preserve",
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "app.tsx",
+    "app.config.ts",
+    "hesperia.config.ts",
+    "api.ts",
+    "consumer.ts",
+    "src",
+    "hesperia.d.ts"
+  ]
+}

@@ -96,3 +96,17 @@ jobs:
               .addLink('Follow the manual publication instructions', instructions)
               .addRaw('\n\nPublish the original verified archives in manifest order. The artifact is retained for 14 days. Configure all ten npm trusted publishers before setting the repository variable NPM_TRUSTED_PUBLISHING to true for later releases.\n')
               .write();
+      - name: Record editor publication handoff
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          COMMIT: ${{ github.event.pull_request.merge_commit_sha }}
+        with:
+          script: |
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            await core.summary
+              .addHeading('Editor candidate ready for approval')
+              .addRaw('The editor-candidate VSIX passed installed-extension acceptance against this release\'s npm archives. Marketplace publication is a separate maintainer action and has not been performed by this workflow.\n\n')
+              .addLink('Download editor-candidate and editor-package-evidence', `https://github.com/${repository}/actions/runs/${context.runId}#artifacts`)
+              .addRaw('\n\n')
+              .addLink('Verify and publish the exact accepted VSIX after approval', `https://github.com/${repository}/blob/${process.env.COMMIT}/docs/editor-release.md`)
+              .write();

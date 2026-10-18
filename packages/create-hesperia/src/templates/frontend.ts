@@ -1,0 +1,15 @@
+export const frontendTemplate = [
+  ["package.json", "package.json"],
+  ["tsconfig.json", "tsconfig.json"],
+  ["app.tsx", "app.tsx"],
+  ["app.config.ts", "app.config.ts"],
+  ["hesperia.config.ts", "hesperia.config.ts"],
+  ["src/routes/+page.tsx", "src/routes/+page.tsx"],
+  ["src/routes/+loading.tsx", "src/routes/+loading.tsx"],
+  ["src/styles.css", "src/styles.css"],
+  ["src/styles.d.ts", "src/styles.d.ts"],
+  ["hesperia.d.ts", "hesperia.d.ts"],
+  [".vscode/extensions.json", ".vscode/extensions.json"],
+  [".gitignore", "gitignore"],
+  ["README.md", "README.md"],
+] as const;

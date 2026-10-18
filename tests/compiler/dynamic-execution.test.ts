@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { analyzeBrowserCapabilities } from "../../src/compiler/capability-analysis.ts";
+import { analyzeBrowserCapabilities } from "../../packages/compiler/src/capability-analysis.ts";
 
 function check(source: string) {
   return analyzeBrowserCapabilities(
@@ -34,6 +34,7 @@ test.each([
   'export const value = (() => {}).constructor("return 1")();',
 ])("browser bindings reject native dynamic execution: %s", (source) => {
   const diagnostics = check(source);
+
   expect(diagnostics).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
@@ -43,6 +44,7 @@ test.each([
       }),
     ]),
   );
+
   expect(diagnostics.some((item) => item.message.includes("app.tsx -> ./api.ts"))).toBe(true);
 });
 
@@ -74,6 +76,7 @@ test("explicit generated entries receive capability checks and missing sources f
       ["generated-runtime.js"],
     ).map((item) => item.code),
   ).toStrictEqual(["HES-CAPABILITY"]);
+
   expect(
     analyzeBrowserCapabilities([], ".", undefined, ["missing-runtime.js"]).map((item) => item.code),
   ).toStrictEqual(["HES-CAPABILITY-RESOLVE"]);

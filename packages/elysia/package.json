@@ -1,0 +1,55 @@
+{
+  "name": "@hesperia/elysia",
+  "version": "1.0.0-alpha.1",
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hesperia-js/hesperia.git",
+    "directory": "packages/elysia"
+  },
+  "files": [
+    "dist",
+    "docs"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js",
+      "default": "./dist/client.js"
+    },
+    "./effects": {
+      "types": "./dist/effects.d.ts",
+      "import": "./dist/effects.js",
+      "default": "./dist/effects.js"
+    }
+  },
+  "scripts": {
+    "build": "bunx tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@jridgewell/remapping": "2.3.5",
+    "@jridgewell/trace-mapping": "0.3.31"
+  },
+  "devDependencies": {
+    "@hesperia/compiler": "workspace:*",
+    "@hesperia/tooling": "workspace:*",
+    "hesperia": "workspace:*"
+  },
+  "peerDependencies": {
+    "@elysia/eden": "1.4.10",
+    "@hesperia/compiler": "workspace:*",
+    "@hesperia/tooling": "workspace:*",
+    "aeolia": "1.0.0-alpha.1",
+    "hesperia": "workspace:*",
+    "typescript": "7.0.2"
+  }
+}

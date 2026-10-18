@@ -47,7 +47,8 @@ runs:
         $expectedSha256 = $env:CODE_SHA256
         $archive = Join-Path $env:RUNNER_TEMP "vscode-$version.zip"
         $destination = Join-Path $env:RUNNER_TEMP "vscode-$version"
-        Invoke-WebRequest -Uri $env:CODE_URL -OutFile $archive
+        curl.exe --fail --silent --show-error --location --retry 3 --retry-all-errors --remove-on-error --output $archive $env:CODE_URL
+        if ($LASTEXITCODE -ne 0) { throw "VS Code archive download failed with curl exit code $LASTEXITCODE." }
         $actualSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($actualSha256 -ne $expectedSha256) { throw "VS Code $version archive SHA-256 mismatch: expected $expectedSha256, received $actualSha256." }
         Expand-Archive -LiteralPath $archive -DestinationPath $destination

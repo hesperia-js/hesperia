@@ -20,6 +20,7 @@ const factory = (
 const policy = trusted
   ? factory?.createPolicy("hesperia-test", { createHTML: (value) => value })
   : undefined;
+
 if (policy) article.set(policy.createHTML("<p>Trusted</p>"));
 
 const App = defineComponent((owner) => {
@@ -29,7 +30,9 @@ const App = defineComponent((owner) => {
     () => article.get(),
     (child) => element(child, "article", { "data-host": "" }, []),
   );
+
   if (trusted) return hostRegion;
+
   const rows = rawHTML(owner, "rows", () => table.get(), null, "tbody");
   const options = rawHTML(owner, "options", () => choices.get(), null, "select");
   return element(owner, "main", {}, [
@@ -48,26 +51,35 @@ const app = mount(
     development: true,
   },
 );
+
 Object.assign(globalThis, {
   rawFixture: {
     errors,
     warnings,
     supportsTrustedTypes: Boolean(factory),
+
     replace() {
       article.set("<p>Second</p>");
+
       table.set("<tr><td>two</td></tr><tr><td>three</td></tr>");
+
       choices.set('<option value="two">Two</option>');
     },
+
     untrusted() {
       article.set("<p>Rejected</p>");
     },
+
     trusted() {
       article.set(policy!.createHTML("<p>Accepted</p>"));
     },
+
     dispose() {
       app.dispose();
     },
   },
 });
+
 await app.settled();
+
 document.documentElement.dataset.ready = "true";

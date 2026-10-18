@@ -1,0 +1,31 @@
+{
+  "name": "@hesperia/hosting",
+  "version": "1.0.0-alpha.1",
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hesperia-js/hesperia.git",
+    "directory": "packages/hosting"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./internal": {
+      "types": "./dist/internal/mount.d.ts",
+      "import": "./dist/internal/mount.js",
+      "default": "./dist/internal/mount.js"
+    }
+  },
+  "scripts": {
+    "build": "bunx tsc -p tsconfig.build.json"
+  }
+}

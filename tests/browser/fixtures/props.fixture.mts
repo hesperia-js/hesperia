@@ -12,6 +12,9 @@ const application = mount(
     },
   },
 );
+
 Object.assign(globalThis, { propsFixture: { childBodies } });
+
 await application.settled();
+
 document.documentElement.dataset.ready = "true";

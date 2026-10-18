@@ -1,0 +1,31 @@
+{
+  "name": "@hesperia/golden",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "bun run server.ts",
+    "verify:packages": "bun run verify-packages.ts",
+    "test": "playwright test",
+    "test:chromium": "playwright test --project=chromium",
+    "test:firefox": "playwright test --project=firefox",
+    "test:webkit": "playwright test --project=webkit",
+    "install:browsers": "playwright install chromium firefox webkit"
+  },
+  "dependencies": {
+    "@hesperia/compiler": "workspace:*",
+    "@hesperia/hosting": "workspace:*",
+    "@hesperia/postcss": "workspace:*",
+    "@hesperia/stylex": "workspace:*",
+    "@hesperia/tailwind": "workspace:*",
+    "@hesperia/tooling": "workspace:*",
+    "@stylexjs/stylex": "0.19.1",
+    "aeolia": "1.0.0-alpha.1",
+    "hesperia": "workspace:*",
+    "postcss": "8.5.28",
+    "tailwindcss": "4.3.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  },
+  "packageManager": "bun@1.4.2"
+}
