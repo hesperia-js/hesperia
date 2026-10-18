@@ -78,13 +78,16 @@ through Bun. The candidate and evidence directory options are
 
 ## Select the release artifacts
 
-Use one successful full verification run for the exact release commit. For a
-release PR, prefer the **Release** workflow's post-merge verification, which
-also gates npm publication. Wait for every selected check, including
-**Installed Windows VS Code extension**, **Verification result**, and the npm
-publication job. For ordinary CI, **Required** must also succeed.
+Use the successful main **CI** run for the exact merged release commit. The
+**Release** summary links this source run. Release consumes its accepted npm
+candidate and does not repeat verification or create another editor candidate.
+Wait for every selected CI check, including **Installed Windows VS Code
+extension**, **Verification result**, and **Required**. Check the separate Release
+publication job and confirm the matching npm packages are published before
+Marketplace publication.
 
-Download these artifacts from that same run:
+Download these artifacts from that same source CI run. Replace `<run-id>` with
+the linked CI run ID, rather than the Release run ID:
 
 ```sh
 gh run download <run-id> --repo hesperia-js/hesperia --name editor-candidate --dir .hesperia/editor-candidate

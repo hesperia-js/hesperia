@@ -8,8 +8,6 @@ on:
       - opened
       - synchronize
       - reopened
-      - ready_for_review
-      - edited
   push:
     branches:
       - main
@@ -19,7 +17,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ${{ format('ci-{0}', github.event.pull_request.number || github.ref) }}
+  group: ${{ format('ci-{0}', github.event.pull_request.number || (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha) || github.ref) }}
   cancel-in-progress: true
 jobs:
   verify:

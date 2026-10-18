@@ -12,8 +12,16 @@ The `CI` workflow runs for pull requests targeting `main` or `release/*`, pushes
 to `main`, version tags, and manual dispatch. It calls the reusable `Verify`
 workflow with one checkout revision for every job. Main pushes, version tags,
 manual runs, and same-repository `release/*` pull requests into `main` request
-full verification. Other pull requests select affected suites. The release
-workflow repeats full verification at the exact merged release commit.
+full verification. Other pull requests select affected suites. Pull request
+verification runs when a PR opens, receives new commits, or reopens. Changes to
+the title, description, draft status, or target branch do not start another run.
+After retargeting a PR, a new source commit or a reopen event refreshes its
+base-dependent verification.
+
+The push to `main` provides full verification of each merged release commit.
+The release workflow waits for that exact commit's successful main CI run and
+publishes its tested archives. Later main pushes do not cancel an earlier
+commit's verification.
 
 For same-repository pull requests, CI accepts `feature/<name>`, `fix/<name>`,
 and `release/<VERSION>` source branches. Release branches must name a supported
@@ -297,9 +305,26 @@ The [release workflow](../.github/workflows/release.yml) runs only after a
 same-repository `release/<VERSION>` pull request merges into `main`. All ten
 publishable packages share the authored workspace version. The release PR checks
 that this version advances beyond its base and is not already published. The
-merged commit receives full verification before the publication job starts.
+merged commit receives full verification in the `CI` workflow's main push run.
+The release workflow selects that successful run by its exact merge commit and
+consumes its original candidate archives. Release does not repeat the build or
+verification suites.
 Before registry preflight or tag creation, the publication job also requires the
 authored version to advance beyond the merge commit's first-parent version.
+
+Release checks for the matching main push run every 30 seconds for up to
+180 minutes. It rejects multiple matching runs and stops if the selected run
+finishes without success. The current attempt must have successful **Required**
+and **Verification result** checks and one unexpired
+`release-candidate` artifact from its current attempt's successful upload step.
+Release pins that run, attempt, and artifact ID, then checks the source attempt
+again before download and publication. A changed attempt, missing or ambiguous
+candidate, or expired artifact fails the release. A timeout also fails the
+release without starting another verification run.
+
+The Release summary links the accepted main CI run. Use that link to inspect
+verification and retrieve artifacts. A retry must pass the same source-run and
+candidate checks before publication can continue.
 
 For each release, update the root and public package versions, internal package
 pins, and the versions emitted by the creator and tooling application templates.
@@ -318,14 +343,17 @@ workflow runs. Its first successful publication activates each new configuration
 
 If the packages have never been published, bootstrap them with manual
 publication. Leave `NPM_TRUSTED_PUBLISHING` unset or `false` for that release.
-The workflow verifies the exact merge commit, preflights the candidate, and
-creates `v<VERSION>`. Its job summary links the candidate artifact and states
-that manual npm publication is required. The same manual path is available when
-automatic publication is disabled for an existing package release.
+The workflow waits for main CI to verify the exact merge commit, preflights its
+candidate, and creates `v<VERSION>`. Its job summary links the source CI run and
+states that manual npm publication is required. The same manual path is
+available when automatic publication is disabled for an existing package release.
 
 For manual publication after the merge, download the original
-`release-candidate` artifact from that successful workflow run. Check out its
-merge commit and extract the artifact into `.hesperia/release-candidate`. Verify the archives and registry retry state:
+`release-candidate` artifact from the successful main CI run linked by the
+Release summary. Use the linked source run ID, rather than the Release run ID,
+when downloading the artifact. Check out its merge commit and extract the
+artifact into `.hesperia/release-candidate`. Verify the archives and registry
+retry state:
 
 ```powershell
 bun scripts/ci/verify-release-candidate.ts --candidate-dir .hesperia/release-candidate
@@ -368,17 +396,22 @@ automatic npm publication. npm requires each package to exist before its
 trusted publisher can be configured. See
 [npm's trusted publisher prerequisites](https://docs.npmjs.com/cli/v11/commands/npm-trust/#prerequisites).
 
-Publication consumes the same candidate archives tested on Windows and Linux.
-It creates `v<VERSION>` at the verified merge commit and publishes in workspace
-dependency order. Stable releases use the `latest` dist-tag; prereleases use
+Publication consumes the source main CI run's exact candidate archives tested
+on Windows and Linux. Release pins the selected source run and artifact identity
+before download. A successful CI run establishes verification and candidate
+acceptance. The Release publication job must also succeed to establish automatic
+npm publication. Release creates `v<VERSION>` at the verified merge commit and
+publishes in workspace dependency order. Stable releases use the `latest`
+dist-tag; prereleases use
 `alpha`, `beta`, or `rc` according to their version. A retry may reuse an existing
 version only when its archive integrity matches the tested candidate and its
 release tag identifies the same commit. Changed archives, conflicting tags, and
 dist-tag rollback fail before another package is published. Keep the original
 candidate artifact available when recovering an interrupted publication.
-GitHub retains that original artifact for 14 days. Download and preserve the
-manifest and every archive before expiry if recovery may take longer. After
-expiry, automatic recovery cannot retrieve the original artifact. A rebuild
+GitHub retains that original artifact for 14 days from its upload in the source
+CI run. Download and preserve the manifest and every archive before expiry if
+recovery may take longer. After expiry, automatic recovery cannot retrieve the
+original artifact. A rebuild
 is usable only if it reproduces every original archive byte and hash; otherwise
 it cannot replace the tested candidate or retry a partially published version.
 
