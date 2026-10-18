@@ -1,6 +1,6 @@
 {
   "name": "@hesperia/stylex",
-  "version": "1.0.0-alpha.1",
+  "version": "1.0.0-alpha.2",
   "license": "MPL-2.0",
   "repository": {
     "type": "git",
@@ -33,7 +33,7 @@
     "@types/babel__core": "7.20.5"
   },
   "peerDependencies": {
-    "@hesperia/tooling": "1.0.0-alpha.1",
+    "@hesperia/tooling": "1.0.0-alpha.2",
     "@stylexjs/stylex": "0.19.1"
   }
 }

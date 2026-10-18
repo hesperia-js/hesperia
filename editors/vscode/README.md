@@ -5,8 +5,9 @@ Outline for Hesperia applications. The extension uses your application's
 `@hesperia/language-server`, which shares the authored-source checking view of
 `hesperia check`.
 
-Install `hesperia.hesperia-vscode` from the Marketplace pre-release channel when
-a release is available. Before publication, use a locally packaged VSIX.
+Install `hesperia.hesperia-vscode` version `0.1.0` from the
+[Marketplace pre-release channel](https://marketplace.visualstudio.com/items?itemName=hesperia.hesperia-vscode).
+For local framework development, use a locally packaged VSIX.
 
 ## Install and open an application
 
@@ -18,17 +19,17 @@ bundle Bun, the compiler, or the language server.
    or install dependencies in an existing application with `bun install`.
    The Hesperia starter includes `@hesperia/language-server`.
 2. If your application does not include the server, install the version that
-   matches your other Hesperia packages. For an application using `1.0.0-alpha.1`:
+   matches your other Hesperia packages. For an application using `1.0.0-alpha.2`:
 
    ```sh
-   bun add --dev @hesperia/language-server@1.0.0-alpha.1
+   bun add --dev @hesperia/language-server@1.0.0-alpha.2
    ```
 
    Use the same version for the runtime, tooling, and language server. To try
    framework changes newer than the published npm release, follow the
    [local framework checkout instructions](https://github.com/hesperia-js/hesperia/blob/main/docs/getting-started.md#use-a-local-framework-checkout).
 
-3. Install the Marketplace pre-release if it is available:
+3. Install the Marketplace pre-release:
 
    ```sh
    code --install-extension hesperia.hesperia-vscode --pre-release

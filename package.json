@@ -1,6 +1,6 @@
 {
   "name": "hesperia-workspace",
-  "version": "1.0.0-alpha.1",
+  "version": "1.0.0-alpha.2",
   "private": true,
   "description": "Ergonomic Frontend Framework for building reactive web applications",
   "keywords": [
