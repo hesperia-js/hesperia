@@ -31,6 +31,7 @@ test("generated async routes wait for public query data and restore the cached n
     const sourceFiles = [
       "app.tsx",
       "api.ts",
+      "router-diagnostics.ts",
       "src/routes/+layout.tsx",
       "src/routes/+error.tsx",
       "src/routes/+page.tsx",

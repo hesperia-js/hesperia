@@ -11,10 +11,89 @@ concurrency:
 jobs:
   verify:
     if: github.event.pull_request.merged == true && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'release/')
-    uses: ./.github/workflows/verify.yml
-    with:
-      ref: ${{ github.event.pull_request.merge_commit_sha }}
-      full: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 185
+    permissions:
+      actions: read
+    outputs:
+      run-id: ${{ steps.ci.outputs.run-id }}
+      run-attempt: ${{ steps.ci.outputs.run-attempt }}
+      artifact-id: ${{ steps.ci.outputs.artifact-id }}
+    steps:
+      - name: Wait for the exact main CI candidate
+        id: ci
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const sha = context.payload.pull_request.merge_commit_sha;
+            const repository = `${owner}/${repo}`;
+            const { data: workflow } = await github.rest.actions.getWorkflow({ owner, repo, workflow_id: 'ci.yml' });
+            const deadline = Date.now() + 180 * 60 * 1000;
+
+            while (Date.now() < deadline) {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner, repo, workflow_id: workflow.id, event: 'push', branch: 'main', head_sha: sha, per_page: 100,
+              });
+
+              if (runs.length > 1) throw new Error('Ambiguous main CI runs for the merge commit');
+
+              if (runs.length === 1) {
+                const { data: run } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: runs[0].id });
+
+                if (run.workflow_id !== workflow.id || run.path !== '.github/workflows/ci.yml' ||
+                    run.event !== 'push' || run.head_branch !== 'main' || run.head_sha !== sha ||
+                    run.repository.full_name !== repository || run.head_repository?.full_name !== repository)
+                  throw new Error('Main CI run identity differs from the merged release');
+
+                if (run.status === 'completed') {
+                  if (run.conclusion !== 'success') throw new Error(`Main CI did not succeed: ${run.conclusion}`);
+
+                  const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
+                    owner, repo, run_id: run.id, attempt_number: run.run_attempt, per_page: 100,
+                  });
+
+                  for (const name of ['Required', 'verify / Verification result']) {
+                    const gates = jobs.filter((job) => job.name === name);
+
+                    if (gates.length !== 1 || gates[0].status !== 'completed' || gates[0].conclusion !== 'success')
+                      throw new Error(`Current CI attempt has no unique successful ${name} gate`);
+                  }
+
+                  const uploads = jobs.flatMap((job) =>
+                    job.name === 'verify / Build, types, lint and format' && job.conclusion === 'success'
+                      ? (job.steps ?? []).filter((step) => step.name === 'Save the package candidate' && step.conclusion === 'success')
+                      : []);
+
+                  if (uploads.length !== 1) throw new Error('Current CI attempt has no unique successful candidate upload');
+
+                  const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                    owner, repo, run_id: run.id, per_page: 100,
+                  });
+                  const candidates = artifacts.filter((artifact) => artifact.name === 'release-candidate' &&
+                    !artifact.expired && artifact.workflow_run?.id === run.id && artifact.workflow_run?.head_sha === sha &&
+                    Date.parse(artifact.created_at) >= Date.parse(uploads[0].started_at) &&
+                    Date.parse(artifact.created_at) < Date.parse(uploads[0].completed_at) + 1000);
+
+                  if (candidates.length !== 1) throw new Error('Current CI attempt has no unique unexpired package candidate');
+
+                  const { data: current } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: run.id });
+
+                  if (current.run_attempt !== run.run_attempt || current.status !== 'completed' || current.conclusion !== 'success')
+                    throw new Error('CI attempt changed during candidate selection');
+
+                  core.setOutput('run-id', String(run.id));
+                  core.setOutput('run-attempt', String(run.run_attempt));
+                  core.setOutput('artifact-id', String(candidates[0].id));
+                  await core.summary.addLink('Verified main CI candidate', run.html_url).write();
+                  return;
+                }
+              }
+
+              await new Promise((resolve) => setTimeout(resolve, 30_000));
+            }
+
+            throw new Error('Timed out waiting for the exact main CI run');
   publish:
     name: Tag and publish verified archives
     needs: verify
@@ -22,6 +101,7 @@ jobs:
     timeout-minutes: 20
     environment: npm
     permissions:
+      actions: read
       contents: write
       id-token: write
     steps:
@@ -36,9 +116,28 @@ jobs:
       - name: Set up trusted publishing client
         if: vars.NPM_TRUSTED_PUBLISHING == 'true'
         run: npm install --global npm@11.19.0 --ignore-scripts
+      - name: Recheck the accepted CI attempt
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          CI_RUN_ID: ${{ needs.verify.outputs.run-id }}
+          CI_RUN_ATTEMPT: ${{ needs.verify.outputs.run-attempt }}
+        with:
+          script: |
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              ...context.repo, run_id: Number(process.env.CI_RUN_ID),
+            });
+
+            if (run.run_attempt !== Number(process.env.CI_RUN_ATTEMPT) || run.status !== 'completed' ||
+                run.conclusion !== 'success' || run.head_sha !== context.payload.pull_request.merge_commit_sha ||
+                run.event !== 'push' || run.head_branch !== 'main' || run.path !== '.github/workflows/ci.yml' ||
+                run.repository.full_name !== `${context.repo.owner}/${context.repo.repo}`)
+              throw new Error('Accepted main CI attempt is no longer current and successful');
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: release-candidate
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.verify.outputs.run-id }}
+          artifact-ids: ${{ needs.verify.outputs.artifact-id }}
+          merge-multiple: true
           path: .hesperia/release-candidate
       - name: Preflight every candidate and publication retry
         id: release
@@ -72,6 +171,30 @@ jobs:
             if (existing.type !== 'commit' || existing.sha !== process.env.COMMIT) {
               throw new Error('Existing release tag points to a different commit');
             }
+      - name: Recheck provenance before publication
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          CI_RUN_ID: ${{ needs.verify.outputs.run-id }}
+          CI_RUN_ATTEMPT: ${{ needs.verify.outputs.run-attempt }}
+          CI_ARTIFACT_ID: ${{ needs.verify.outputs.artifact-id }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const sha = context.payload.pull_request.merge_commit_sha;
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              owner, repo, run_id: Number(process.env.CI_RUN_ID),
+            });
+            const { data: artifact } = await github.rest.actions.getArtifact({
+              owner, repo, artifact_id: Number(process.env.CI_ARTIFACT_ID),
+            });
+
+            if (run.run_attempt !== Number(process.env.CI_RUN_ATTEMPT) || run.status !== 'completed' ||
+                run.conclusion !== 'success' || run.head_sha !== sha || run.event !== 'push' ||
+                run.head_branch !== 'main' || run.path !== '.github/workflows/ci.yml' ||
+                run.repository.full_name !== `${owner}/${repo}` || run.head_repository?.full_name !== `${owner}/${repo}` ||
+                artifact.name !== 'release-candidate' || artifact.expired ||
+                artifact.workflow_run?.id !== run.id || artifact.workflow_run?.head_sha !== sha)
+              throw new Error('Source CI attempt or candidate provenance changed before publication');
       - name: Publish the tested archives in dependency order
         if: steps.release.outputs.published == 'false' && vars.NPM_TRUSTED_PUBLISHING == 'true'
         env:
@@ -81,12 +204,13 @@ jobs:
         if: steps.release.outputs.published == 'false' && vars.NPM_TRUSTED_PUBLISHING != 'true'
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
+          CI_RUN_ID: ${{ needs.verify.outputs.run-id }}
           VERSION: ${{ steps.release.outputs.version }}
           COMMIT: ${{ github.event.pull_request.merge_commit_sha }}
         with:
           script: |
             const repository = `${context.repo.owner}/${context.repo.repo}`;
-            const artifacts = `https://github.com/${repository}/actions/runs/${context.runId}#artifacts`;
+            const artifacts = `https://github.com/${repository}/actions/runs/${process.env.CI_RUN_ID}#artifacts`;
             const instructions = `https://github.com/${repository}/blob/${process.env.COMMIT}/docs/ci.md#npm-release-setup`;
             await core.summary
               .addHeading('Manual npm publication required')
@@ -99,6 +223,7 @@ jobs:
       - name: Record editor publication handoff
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
+          CI_RUN_ID: ${{ needs.verify.outputs.run-id }}
           COMMIT: ${{ github.event.pull_request.merge_commit_sha }}
         with:
           script: |
@@ -106,7 +231,7 @@ jobs:
             await core.summary
               .addHeading('Editor candidate ready for approval')
               .addRaw('The editor-candidate VSIX passed installed-extension acceptance against this release\'s npm archives. Marketplace publication is a separate maintainer action and has not been performed by this workflow.\n\n')
-              .addLink('Download editor-candidate and editor-package-evidence', `https://github.com/${repository}/actions/runs/${context.runId}#artifacts`)
+              .addLink('Download editor-candidate and editor-package-evidence', `https://github.com/${repository}/actions/runs/${process.env.CI_RUN_ID}#artifacts`)
               .addRaw('\n\n')
               .addLink('Verify and publish the exact accepted VSIX after approval', `https://github.com/${repository}/blob/${process.env.COMMIT}/docs/editor-release.md`)
               .write();

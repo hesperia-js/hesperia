@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { installApplicationRoutingDiagnostics } from "./application-routing-diagnostics.mjs";
 import { startBrowserDiagnostics } from "./browser-diagnostics.mjs";
 import { startProcessDiagnostics } from "./process-diagnostics.mjs";
 
@@ -87,6 +88,8 @@ for (const engine of [chromium, firefox, webkit]) {
 
       return;
     });
+
+    await installApplicationRoutingDiagnostics(page, diagnostics);
 
     await page.goto(applicationUrl);
 
