@@ -1,5 +1,6 @@
 import type { Component, Rendered } from "hesperia";
 import { effect, cleanup } from "hesperia/client";
+import "./router-diagnostics";
 
 export default function App(props: Component.Props<{ children: Rendered }>) {
   const marker = <span id="shell-effects" data-runs="0" />;
