@@ -227,8 +227,8 @@ export interface PluginStyleArtifact {
 export interface PluginStyleAssetReference {
   /** Canonical absolute asset path resolved before generated CSS hashing. */
   readonly filename: string;
-  /** Authored source span that supplied the URL. */
-  readonly origin: PluginOrigin;
+  /** Authored URL span, or contributing filename when its source location is unavailable. */
+  readonly origin: PluginDiagnosticOrigin;
 }
 
 /** CSS at one configured transform stage. */

@@ -5,7 +5,7 @@ import {
   type PreparedMarkupNativeStyle,
   type PluginPipeline,
 } from "./plugin-pipeline.ts";
-import type { PluginOrigin, PluginStyleArtifact } from "./plugins.ts";
+import type { PluginDiagnosticOrigin, PluginStyleArtifact } from "./plugins.ts";
 
 /** One independent logical CSS root after Bun has bundled its dependencies. */
 export interface BundledCssRoot {
@@ -49,9 +49,11 @@ export class CssBundleError extends TypeError {
   constructor(
     readonly source: string,
     detail: string,
-    readonly origin?: PluginOrigin,
+    readonly origin?: PluginDiagnosticOrigin,
   ) {
-    super(`CSS bundling failed for ${source}: ${detail}`);
+    super(
+      `CSS bundling failed for ${source}: ${detail}${origin && origin.start === undefined ? " (Original source location is unavailable after plugin transform.)" : ""}`,
+    );
   }
 }
 
@@ -72,7 +74,7 @@ export async function bundleCssRoots(
       id: string;
       imported?: boolean;
       css?: string;
-      assetOrigins?: ReadonlyMap<string, PluginOrigin>;
+      assetOrigins?: ReadonlyMap<string, PluginDiagnosticOrigin>;
       native?: PreparedMarkupNativeStyle;
     }
   >();
@@ -94,7 +96,7 @@ export async function bundleCssRoots(
 
     if (inputs.has(path)) throw new TypeError(`Generated stylesheet path collision: ${path}`);
 
-    const assetOrigins = new Map<string, PluginOrigin>();
+    const assetOrigins = new Map<string, PluginDiagnosticOrigin>();
 
     for (const reference of style.assetReferences ?? []) {
       if (!isAbsolute(reference.filename))
@@ -207,7 +209,7 @@ export async function bundleCssRoots(
     let loadFailure: CssBundleError | undefined;
     const importedCssPaths = new Set<string>();
     const dependencies = new Set<string>();
-    const generatedAssetOrigins = input.assetOrigins ?? new Map<string, PluginOrigin>();
+    const generatedAssetOrigins = input.assetOrigins ?? new Map<string, PluginDiagnosticOrigin>();
     const result = await Bun.build({
       entrypoints: [source],
       root: projectRoot,

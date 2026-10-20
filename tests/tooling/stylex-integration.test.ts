@@ -522,6 +522,81 @@ const styles = stylex.create({
   expect(source.slice(reference.origin.start, reference.origin.end)).toContain("url(");
 });
 
+test.each(["mapped", "unmapped"] as const)(
+  "a missing StyleX asset in %s upstream output keeps honest diagnostic provenance",
+  async (mapping) => {
+    const root = await mkdtemp(join(tmpdir(), "hesperia-stylex-partial-map-"));
+
+    roots.push(root);
+
+    await linkStylexRuntime(root);
+
+    const filename = join(root, "src", "Card.ts");
+
+    const declaration =
+      "export const styles = stylex.create({ root: { backgroundImage: 'url(\"./absent.svg\")' } });\n";
+
+    const prefix = 'import * as stylex from "@stylexjs/stylex";\nexport const original = 1;\n';
+
+    const source = mapping === "mapped" ? prefix + declaration : prefix;
+
+    const generated = "// unmapped inserted line\n".repeat(8) + declaration;
+
+    await mkdir(dirname(filename), { recursive: true });
+
+    await writeFile(filename, source);
+
+    const diagnostics = await checkSources(new Map([[filename, source]]), root, {
+      allowUnsafeHTML: false,
+      mountURL: "/",
+      resolutionOverrides: { browser: {} },
+      plugins: [
+        {
+          name: "partial-source-map",
+
+          transformSource(input) {
+            if (input.filename !== filename) return;
+
+            return {
+              code: mapping === "mapped" ? input.current : input.current + generated,
+              map: {
+                version: 3,
+                sources: [filename],
+                sourcesContent: [source],
+                names: [],
+                mappings:
+                  mapping === "mapped" ? identityMappings(source) : "AAAA;AACA" + ";".repeat(12),
+              },
+            };
+          },
+        },
+        stylex(),
+      ],
+    });
+
+    const cssError = diagnostics.find((item) => item.code === "HES-CSS");
+
+    expect(cssError).toMatchObject({ severity: "error", filename });
+
+    expect(cssError?.message).toContain(join(root, "src", "absent.svg"));
+
+    expect(cssError?.message).toContain("ENOENT");
+
+    if (mapping === "mapped") {
+      const literal = "'url(\"./absent.svg\")'";
+
+      expect(cssError?.span).toStrictEqual({
+        start: source.indexOf(literal),
+        end: source.indexOf(literal) + literal.length,
+      });
+    } else {
+      expect(cssError?.span).toBeUndefined();
+
+      expect(cssError?.message).toContain("source location is unavailable");
+    }
+  },
+);
+
 test("StyleX attrs work with static and reactive native class and style strings", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-stylex-native-attrs-"));
 

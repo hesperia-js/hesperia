@@ -117,6 +117,27 @@ screenshot, and trace when capture completes. Synchronous process journals start
 before browser launch and remain active through cleanup, so an outer test timeout
 can leave useful checkpoints even when final capture never runs.
 
+The route-table driver also records browser-native document timing at init,
+DOMContentLoaded, and load, with a separate Node receipt timestamp. It matches the
+exact `/dashboard/` navigation entry even if the page changes its history URL.
+Setup, capture errors, and the 12-event limit have distinct records. A successful
+setup does not guarantee delivery: missing samples remain missing evidence, and
+zero or provisional timing fields do not establish body completion. In the real
+held-body control, Firefox exposes a nonzero `responseEnd` before the final bytes
+are sent, and that value can remain unchanged at load after all bytes arrive.
+It therefore does not establish the actual body-completion timestamp, even in a
+final sample. Native body-size fields can also remain zero after `requestfinished`.
+Interpret these fields with request completion and any independent body evidence;
+the actual route's measured byte counts have no independent expected-body-size assertion.
+The held-parser control completes the document response while an external script
+blocks DOMContentLoaded. These controls also check History API correlation and
+ignore unrelated documents. Console delivery and synchronous journaling can
+perturb timing; native timestamps help distinguish browser progress from later
+protocol receipt but do not measure browser CPU or explain missing capture.
+Browser and Node time origins are separate clocks. Their raw origins and monotonic
+samples are retained; small absolute epoch differences are not calibrated protocol
+latency measurements. Prefer phase deltas within the same clock.
+
 Each `bun-parent-*.jsonl`, `node-driver-*.jsonl`, or `bun-driver-*.jsonl` file records
 UTC and monotonic timestamps, process identity, and lifecycle checkpoints. An
 unreferenced 100 ms timer records gaps above 250 ms; heartbeats at least one second
