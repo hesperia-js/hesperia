@@ -17,9 +17,113 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ${{ format('ci-{0}', github.event.pull_request.number || (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha) || github.ref) }}
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && format('ci-main-{0}', github.run_id) || format('ci-{0}', github.event.pull_request.number || github.ref) }}
   cancel-in-progress: true
 jobs:
+  cancel-stale-main:
+    name: Retire superseded ordinary main CI
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Cancel superseded ordinary main CI
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            if (context.eventName !== 'push' || context.ref !== 'refs/heads/main') return;
+
+            const { owner, repo } = context.repo;
+            const repository = `${owner}/${repo}`;
+            const active = new Set(['queued', 'in_progress', 'waiting', 'pending', 'requested']);
+            const sha = (value) => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
+            const positive = (value) => Number.isSafeInteger(value) && value > 0;
+            const instant = (value) => typeof value === 'string' ? Date.parse(value) : NaN;
+            const own = (value) => value?.full_name === repository;
+            const mainRun = (run, workflow) => positive(run.id) && positive(run.run_number) &&
+              positive(run.run_attempt) && sha(run.head_sha) && Number.isFinite(instant(run.created_at)) &&
+              run.workflow_id === workflow && run.path === '.github/workflows/ci.yml' &&
+              run.event === 'push' && run.head_branch === 'main' && own(run.repository) && own(run.head_repository);
+
+            async function ordinaryMerge(run) {
+              const pulls = await github.paginate(github.rest.repos.listPullRequestsAssociatedWithCommit, {
+                owner, repo, commit_sha: run.head_sha, per_page: 100,
+              });
+
+              if (pulls.length !== 1 || !positive(pulls[0].number)) return false;
+
+              const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: pulls[0].number });
+              const merged = instant(pull.merged_at);
+
+              return pull.number === pulls[0].number && pull.state === 'closed' && pull.merged === true &&
+                Number.isFinite(merged) && merged <= instant(run.created_at) && pull.merge_commit_sha === run.head_sha &&
+                pull.base?.ref === 'main' && own(pull.base?.repo) && own(pull.head?.repo) &&
+                typeof pull.head?.ref === 'string' && /^(fix|feature)\/.+/.test(pull.head.ref);
+            }
+
+            async function atCurrentMain(run) {
+              const { data: branch } = await github.rest.repos.getBranch({ owner, repo, branch: 'main' });
+
+              return branch.commit?.sha === run.head_sha;
+            }
+
+            try {
+              const { data: current } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: context.runId });
+
+              if (!positive(current.workflow_id) || !mainRun(current, current.workflow_id) ||
+                  current.id !== context.runId || current.head_sha !== context.sha ||
+                  current.run_attempt !== Number(process.env.GITHUB_RUN_ATTEMPT) || !active.has(current.status) ||
+                  !(await atCurrentMain(current)) || !(await ordinaryMerge(current))) {
+                core.info('Retaining runs: this invocation is not a confirmed current ordinary main merge.');
+                return;
+              }
+
+              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner, repo, workflow_id: current.workflow_id, branch: 'main', event: 'push', per_page: 100,
+              });
+              const older = (run) => mainRun(run, current.workflow_id) && run.id !== current.id &&
+                run.run_number < current.run_number && run.head_sha !== current.head_sha && active.has(run.status);
+
+              for (const listed of runs.filter(older)) {
+                try {
+                  const { data: candidate } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: listed.id });
+
+                  if (!older(candidate) || candidate.id !== listed.id || candidate.head_sha !== listed.head_sha ||
+                      candidate.run_number !== listed.run_number || candidate.run_attempt !== listed.run_attempt ||
+                      !(await ordinaryMerge(candidate))) {
+                    core.info(`Retaining CI ${listed.id}: no current, unambiguous ordinary merge proof.`);
+                    continue;
+                  }
+
+                  const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
+                    owner, repo, basehead: `${candidate.head_sha}...${current.head_sha}`,
+                  });
+
+                  if (comparison.status !== 'ahead' || comparison.merge_base_commit?.sha !== candidate.head_sha ||
+                      !positive(comparison.ahead_by) || comparison.behind_by !== 0) continue;
+
+                  const { data: fresh } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: candidate.id });
+
+                  if (!older(fresh) || fresh.id !== candidate.id || fresh.head_sha !== candidate.head_sha ||
+                      fresh.run_number !== candidate.run_number || fresh.run_attempt !== candidate.run_attempt) continue;
+
+                  if (!(await atCurrentMain(current))) {
+                    core.info('Retaining remaining runs: main advanced during cleanup.');
+                    return;
+                  }
+
+                  await github.rest.actions.cancelWorkflowRun({ owner, repo, run_id: candidate.id });
+                  core.info(`Requested cancellation of superseded ordinary main CI ${candidate.id}.`);
+                } catch (error) {
+                  core.warning(`Retaining CI ${listed.id}: cleanup could not establish or cancel a safe target (${error.message}).`);
+                }
+              }
+            } catch (error) {
+              core.warning(`Retaining CI runs: cleanup lookup failed (${error.message}).`);
+            }
   verify:
     uses: ./.github/workflows/verify.yml
     with:

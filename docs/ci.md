@@ -18,8 +18,20 @@ PR checks run on opening, new commits, and reopening. Metadata edits and draft
 status changes do not rerun CI. After changing the target branch, push a commit
 or reopen the PR to check against the new base.
 
-Each push to `main` has its own CI run. Later pushes do not cancel it. Release
-uses that run's tested archives. See [npm release setup](#npm-release-setup).
+Each push to `main` starts full verification in its own concurrency group, even
+when another run has the same SHA. A separate cleanup job can cancel
+older ordinary main runs when a newer ordinary PR merge is still current. It
+requires an exact, unambiguous merged `fix/*` or `feature/*` PR from this repository
+into `main`, checks that the older SHA is an ancestor, and rechecks the run and
+current branch before requesting cancellation. Workflow run numbers establish
+order; rerunning an older revision does not make it current.
+
+Release verification keeps its own run and tested archives. The cleanup job
+retains `release/*` merges, direct pushes, ambiguous or missing PR associations,
+and failed lookups. It does not cancel PR, tag, manual, or Release workflow runs.
+Verification and its required checks do not depend on cleanup, so an unavailable
+lookup can leave older runs active. Release runs and runs whose provenance is
+uncertain can overlap newer ordinary runs. See [npm release setup](#npm-release-setup).
 
 For same-repository pull requests, CI accepts `feature/<name>`, `fix/<name>`,
 and `release/<VERSION>` source branches. Release branches must name a supported
