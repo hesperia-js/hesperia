@@ -54,6 +54,7 @@ interface BabelNode {
   readonly right?: BabelNode;
   readonly declarations?: readonly BabelNode[];
   readonly init?: BabelNode | null;
+  readonly body?: BabelNode;
 }
 
 interface BabelImportBinding {
@@ -348,7 +349,7 @@ function createAssetRebasePlugin(context: AssetRebaseContext): unknown {
 
         if (!definitions) return;
 
-        visitStyleValues(definitions, (literal) => {
+        visitStyleDefinitions(definitions, (literal) => {
           if (typeof literal.value !== "string" || literal.start == null || literal.end == null)
             return;
 
@@ -398,6 +399,24 @@ function isNamedCreateImport(binding: BabelImportBinding | undefined): boolean {
 function importedFromStylex(binding: BabelImportBinding | undefined): boolean {
   const parent = binding?.path.parentPath?.node;
   return parent?.type === "ImportDeclaration" && parent.source?.value === "@stylexjs/stylex";
+}
+
+function visitStyleDefinitions(node: BabelNode, visit: (literal: BabelNode) => void): void {
+  if (node.type !== "ObjectExpression") {
+    visitStyleValues(node, visit);
+
+    return;
+  }
+
+  for (const definition of node.properties ?? []) {
+    if (!definition || definition.type !== "ObjectProperty") continue;
+
+    const value = definition.value as BabelNode | undefined;
+
+    if (value?.type === "ArrowFunctionExpression" && value.body?.type === "ObjectExpression")
+      visitStyleValues(value.body, visit);
+    else visitStyleValues(definition, visit);
+  }
 }
 
 function visitStyleValues(node: BabelNode, visit: (literal: BabelNode) => void): void {

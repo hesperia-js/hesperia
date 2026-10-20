@@ -281,6 +281,106 @@ export const styles = stylex.create({ root: { backgroundImage: 'url("./gone.svg"
   );
 });
 
+test.each(["static", "dynamic"] as const)(
+  "%s StyleX return objects resolve literal URL assets from each contributing directory",
+  async (variant) => {
+    const root = await mkdtemp(join(tmpdir(), "hesperia-stylex-return-assets-"));
+
+    try {
+      await linkFrameworkPackages(root);
+
+      await linkStylexPackages(root);
+
+      const source = await readFile(join(fixtureRoot, `dynamic-assets/${variant}.tsx`), "utf8");
+      const appFilename = join(root, "app.tsx");
+      const app = await readFile(join(fixtureRoot, "dynamic-assets/app.tsx"), "utf8");
+      const files = new Map([[appFilename, app]]);
+      const images = new Map<string, string>();
+
+      await writeFile(appFilename, app);
+
+      await copyFile(
+        join(fixtureRoot, "development/shared/hesperia.config.ts"),
+        join(root, "hesperia.config.ts"),
+      );
+
+      for (const name of ["alpha", "beta"]) {
+        const directory = join(root, "src", name);
+        const filename = join(directory, "Card.tsx");
+        const image = join(directory, "images", "icon.svg");
+        const bytes = `<svg><metadata>${name.repeat(32 * 1024)}</metadata></svg>`;
+
+        await mkdir(dirname(image), { recursive: true });
+
+        await writeFile(filename, source);
+
+        await writeFile(image, bytes);
+
+        files.set(filename, source);
+
+        images.set(image, bytes);
+      }
+
+      const diagnostics = await checkSources(files, root, {
+        allowUnsafeHTML: false,
+        mountURL: "/",
+        resolutionOverrides: { browser: {} },
+        plugins: [stylex()],
+      });
+
+      expect(diagnostics).toStrictEqual([]);
+
+      const built = await prepareBuild(root, true);
+      const style = built.styles!.find((item) => item.id === "stylex:application")!;
+      const references = style.assetReferences!;
+
+      expect(built.diagnostics).toStrictEqual([]);
+
+      expect(references.map((item) => item.filename).sort()).toStrictEqual(
+        [...images.keys()].flatMap((filename) => [filename, filename]).sort(),
+      );
+
+      for (const reference of references) {
+        expect(reference.origin.filename).toBe(
+          join(dirname(dirname(reference.filename)), "Card.tsx"),
+        );
+
+        expect(source.slice(reference.origin.start, reference.origin.end)).toBe(
+          "'url(\"./images/icon.svg?mode=small#symbol\")'",
+        );
+      }
+
+      const outputs = await Promise.all([...built.files.values()].map((file) => file.text()));
+
+      for (const [filename, bytes] of images) {
+        expect(built.watch).toContainEqual({ kind: "file", file: filename });
+
+        expect(outputs).toContain(bytes);
+      }
+
+      const selector = (name: string): string => {
+        const url = `../src/${name}/images/icon.svg?mode=small#symbol`;
+        const start = style.css.indexOf(url);
+
+        expect(start).toBeGreaterThanOrEqual(0);
+
+        return style.css.slice(
+          style.css.lastIndexOf("}", start) + 1,
+          style.css.lastIndexOf("{", start),
+        );
+      };
+
+      expect(selector("alpha")).not.toBe(selector("beta"));
+    } finally {
+      await unlinkStylexPackages(root);
+
+      await unlinkFrameworkPackages(root);
+
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
 test("a StyleX image-only development edit publishes a CSS revision", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-stylex-development-"));
 
@@ -886,6 +986,11 @@ export const styles = makeStyles({
     maskImage: 'url("data:image/svg+xml,%3Csvg%3E")',
     borderImageSource: 'url("https://example.test/image.svg")',
   },
+  runtimeURL: (image: string) => ({ backgroundImage: 'url("' + image + '")' }),
+  parameterURL: (image: 'url("./parameter.svg")') => ({ backgroundImage: image }),
+  callbackURL: (render: (make: () => string) => string) => ({
+    backgroundImage: render(() => 'url("./callback.svg")'),
+  }),
 });
 export { text };
 `;
