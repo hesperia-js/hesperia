@@ -1176,7 +1176,7 @@ function markupProjection(
   const root = single && renderedRoots[0]?.kind === "element" ? renderedRoots[0] : undefined;
   const rootType = root ? markupElementType(root, type) : undefined;
   const props = rootType
-    ? `HesperiaNativeProperties<${rootType}> & HesperiaEventAttributes<${rootType}> & HesperiaSourceAttributes<${rootType}> & { readonly [name: string]: unknown; readonly bind?: ${rootType}; readonly key?: string | number; readonly children?: never }`
+    ? `Omit<HesperiaNativeProperties<${rootType}>, "src" | "poster" | "srcset"> & HesperiaEventAttributes<${rootType}> & HesperiaSourceAttributes<${rootType}> & { readonly [name: string]: unknown; readonly bind?: ${rootType}; readonly key?: string | number; readonly children?: never }`
     : `{ readonly [name: string]: never; readonly bind?: never; readonly children?: never }`;
   const declarations = `import type { Component } from "hesperia";\ntype MarkupProps = ${props};\ndeclare const value: Component<MarkupProps>;\nexport default value;`;
   const rootProps = root ? "__callerProps" : "{}";
