@@ -416,6 +416,7 @@
     {
       "id": "checklist-cached-page-restoration",
       "paths": [
+        "golden/tests/navigation-mode.ts",
         "packages/hesperia/src/routing/browser-history.ts",
         "packages/hesperia/src/routing/history.ts",
         "packages/hesperia/src/routing/navigation-api.ts",
@@ -636,7 +637,7 @@
     },
     {
       "id": "checklist-cached-page-restoration",
-      "title": "cached checklist pages restore controls and revalidate data changed on the detail route",
+      "title": "cached checklist pages restore controls and revalidate data changed on the detail route [fallback]",
       "suite": "tests/checklist.spec.ts",
       "behaviors": [
         "checklist-fixture",
@@ -645,6 +646,24 @@
         "checklist-component-cleanup",
         "checklist-cached-page-restoration"
       ]
+    },
+    {
+      "id": "checklist-cached-page-restoration-native",
+      "title": "cached checklist pages restore controls and revalidate data changed on the detail route [native]",
+      "suite": "tests/checklist.spec.ts",
+      "behaviors": [
+        "checklist-fixture",
+        "checklist-aeolia-adaptation",
+        "checklist-live-list-detail-mutations",
+        "checklist-component-cleanup",
+        "checklist-cached-page-restoration"
+      ]
+    },
+    {
+      "id": "checklist-navigation-mode-controls",
+      "title": "navigation mode acceptance rejects missing observation and incorrect selection",
+      "suite": "tests/checklist.spec.ts",
+      "behaviors": ["checklist-fixture", "checklist-cached-page-restoration"]
     },
     {
       "id": "checklist-seeded-model-keyed-rows",
