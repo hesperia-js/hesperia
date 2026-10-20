@@ -190,6 +190,8 @@ export default function App(props: Component.Props<{ children: Rendered }>) {
 
 The shell supplies one `<html>` element with `<head>` and `<body>`. Put default titles, metadata, and other document-wide head content here. Page and layout components supply content inside the shell; they do not return another document. Generated startup installs the shell and starts routing, so you do not add a manual `mount(...)` call or import every page into `app.tsx`.
 
+When the shell imports CSS, startup keeps its body hidden and defers its effects until that CSS is ready in the installed head. Initial routing then begins. A required shell stylesheet failure rejects startup, releases the application resources, and leaves its effects unrun.
+
 ## Pages: `+page.tsx`
 
 ```tsx

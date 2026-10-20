@@ -1135,6 +1135,30 @@ function startDocumentStyles(
   return startup.promise;
 }
 
+/** Install a styled Document shell and commit its owners only after installed-head readiness. */
+export function installStyledDocument(
+  prepared: PreparedTree,
+  document: Document,
+  runtime: InternalStyleRuntime,
+  selection: { readonly compositionId: StyleCompositionId } | { readonly entryId: StyleEntryId },
+): Promise<void> {
+  const shell = documentShell(prepared.fragment);
+  const restoreBody = installHiddenDocument(document, shell);
+
+  if ("compositionId" in selection)
+    return startDocumentStyles(prepared.owner, runtime, selection.compositionId, restoreBody);
+
+  const preparation = runtime.prepareDirectTarget(selection.entryId, shell.head);
+  return startDirectStyles(
+    prepared.owner,
+    runtime,
+    selection.entryId,
+    restoreBody,
+    shell.head,
+    preparation,
+  );
+}
+
 /**
  * Install a compiled browser application into an Element or whole Document.
  *
@@ -1181,18 +1205,12 @@ export function mount<P>(
     }
 
     if (container.nodeType === 9) {
-      const document = container as Document;
-      const shell = documentShell(prepared.fragment);
-      const restoreBody = installHiddenDocument(document, shell);
       return mountedHandle(
         owner,
         context,
-        startDocumentStyles(
-          owner,
-          styleBinding.runtime,
-          styleBinding.documentCompositionId!,
-          restoreBody,
-        ),
+        installStyledDocument(prepared, container as Document, styleBinding.runtime, {
+          compositionId: styleBinding.documentCompositionId!,
+        }),
       );
     }
 
