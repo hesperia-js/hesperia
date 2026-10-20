@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,6 +14,7 @@ import {
 } from "../../packages/tooling/src/project.ts";
 import { devProject, previewProject } from "../../packages/tooling/src/server.ts";
 import { createHost, readBuild } from "../../packages/hosting/src/index.ts";
+import { startProcessDiagnostics } from "./fixtures/drivers/process-diagnostics.mjs";
 import { captureRejection } from "./capture-rejection.ts";
 import { linkFrameworkPackages, unlinkFrameworkPackages } from "./fixture-dependencies.ts";
 import { identityMappings, pluginSourceMap } from "./plugin-source-map-fixture.ts";
@@ -756,130 +758,237 @@ describe("project commands", () => {
   });
 
   test("development reload follows a successful rebuild and warnings reach its console", async () => {
-    const root = await temporaryProject();
-
-    await mkdir(join(root, "src"));
-
-    await writeFile(
-      join(root, "tsconfig.json"),
-      JSON.stringify({ compilerOptions: { strict: true, noEmit: true }, include: ["src"] }),
+    const tryDiagnostics = <T>(run: () => T): T | undefined => {
+      try {
+        return run();
+      } catch {
+        return undefined;
+      }
+    };
+    const diagnostics = tryDiagnostics(() =>
+      startProcessDiagnostics({
+        directory: resolve(
+          import.meta.dir,
+          "../../.hesperia/browser-diagnostics",
+          `project-development-reload-${randomUUID()}`,
+        ),
+        label: "bun-parent",
+      }),
     );
 
-    await writeFile(
-      join(root, "app.tsx"),
-      'document.body.setAttribute("data-version", "first"); export default function App() { return <html><head></head><body></body></html>; }',
-    );
+    const mark = (phase: string, detail?: unknown): void => {
+      tryDiagnostics(() => diagnostics?.mark(phase, detail));
+    };
 
-    const reports: string[] = [];
-    const server = await devProject(root, { port: 0, report: (message) => reports.push(message) });
-    const abort = new AbortController();
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    mark("case-start");
 
     try {
-      const events = await fetch(new URL("/_hesperia/events", server.url), {
-        signal: AbortSignal.any([abort.signal, AbortSignal.timeout(15_000)]),
+      mark("fixture-start");
+
+      const root = await temporaryProject();
+
+      await mkdir(join(root, "src"));
+
+      await writeFile(
+        join(root, "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { strict: true, noEmit: true }, include: ["src"] }),
+      );
+
+      await writeFile(
+        join(root, "app.tsx"),
+        'document.body.setAttribute("data-version", "first"); export default function App() { return <html><head></head><body></body></html>; }',
+      );
+
+      mark("fixture-complete");
+
+      const reports: string[] = [];
+
+      mark("initial-build-start");
+
+      const server = await devProject(root, {
+        port: 0,
+        report: (message) => reports.push(message),
       });
-      reader = events.body!.getReader();
+      mark("initial-build-complete");
 
-      expect(new TextDecoder().decode((await reader.read()).value)).toContain(": connected");
+      const abort = new AbortController();
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
-      const waitForEvent = async (message: string) => {
-        let received = "";
+      try {
+        mark("events-connect-start");
 
-        while (!received.includes(message)) {
-          const next = await reader!.read();
-
-          if (next.done) throw new Error("Reload stream ended before rebuild");
-
-          received += new TextDecoder().decode(next.value);
-        }
-      };
-
-      await writeFile(
-        join(root, "app.tsx"),
-        'document.body.setAttribute("data-version", "second"); export default function App() { return <html><head></head><body></body></html>; }',
-      );
-
-      await waitForEvent('data: "reload"');
-
-      const html = await (await fetch(server.url, { headers: { accept: "text/html" } })).text();
-
-      expect(html.indexOf("/_hesperia/client.js")).toBeLessThan(
-        html.indexOf("/_hesperia/startup.js"),
-      );
-
-      const path = html.match(/src="(\/_hesperia\/startup\.js)"/)![1]!;
-      const urls = new Set([new URL(path, server.url).href]);
-      const scripts = new Map<string, string>();
-      const scanner = new Bun.Transpiler({ loader: "js" });
-
-      for (const url of urls) {
-        const response = await fetch(url);
-
-        expect(response.status).toBe(200);
-
-        const source = await response.text();
-
-        scripts.set(url, source);
-
-        for (const dependency of scanner.scanImports(source)) {
-          const target = new URL(dependency.path, url);
-
-          expect(target.origin).toBe(server.url.origin);
-
-          urls.add(target.href);
-        }
-      }
-
-      const shell = [...scripts].find(([, source]) =>
-        source.includes('setAttribute("data-version", "second")'),
-      );
-
-      expect(shell).toBeDefined();
-
-      if (!shell) throw new Error("The rebuilt shell was absent from the served module graph");
-
-      expect(
-        (
-          await fetch(new URL("/_hesperia/warnings", server.url), {
-            method: "POST",
-            headers: { origin: server.url.origin },
-            body: "unsafeBind was used",
-          })
-        ).status,
-      ).toBe(204);
-
-      expect(reports).toStrictEqual(["unsafeBind was used"]);
-
-      await writeFile(
-        join(root, "app.tsx"),
-        "export default function App() { return <html><body>missing head</body></html>; }",
-      );
-
-      await waitForEvent("Hesperia checking failed");
-
-      expect(await (await fetch(shell[0])).text()).toBe(shell[1]);
-
-      await writeFile(
-        join(root, "app.tsx"),
-        "export default function App() { return <html><head><title>App</title></head><body>ready</body></html>; }",
-      );
-
-      await waitForEvent('data: "reload"');
-
-      for (const path of ["/hesperia-build.json", "/src/app.tsx", "/package.json"]) {
-        const response = await fetch(new URL(path, server.url), {
-          headers: { accept: "application/json" },
+        const events = await fetch(new URL("/_hesperia/events", server.url), {
+          signal: AbortSignal.any([abort.signal, AbortSignal.timeout(15_000)]),
         });
 
-        expect(response.status).toBe(404);
+        mark("events-connect-complete");
+
+        reader = events.body!.getReader();
+
+        mark("connected-read-start");
+
+        expect(new TextDecoder().decode((await reader.read()).value)).toContain(": connected");
+
+        mark("connected-read-complete");
+
+        const waitForEvent = async (message: string) => {
+          mark("event-wait-start", { message });
+
+          let received = "";
+
+          while (!received.includes(message)) {
+            mark("event-read-start", { message });
+
+            const next = await reader!.read();
+
+            mark("event-read-complete", { message, done: next.done, bytes: next.value?.length });
+
+            if (next.done) throw new Error("Reload stream ended before rebuild");
+
+            received += new TextDecoder().decode(next.value);
+          }
+
+          mark("event-wait-complete", { message });
+        };
+
+        mark("edit-second-start");
+
+        await writeFile(
+          join(root, "app.tsx"),
+          'document.body.setAttribute("data-version", "second"); export default function App() { return <html><head></head><body></body></html>; }',
+        );
+
+        mark("edit-second-complete");
+
+        await waitForEvent('data: "reload"');
+
+        mark("html-fetch-start");
+
+        const html = await (await fetch(server.url, { headers: { accept: "text/html" } })).text();
+
+        mark("html-fetch-complete");
+
+        expect(html.indexOf("/_hesperia/client.js")).toBeLessThan(
+          html.indexOf("/_hesperia/startup.js"),
+        );
+
+        const path = html.match(/src="(\/_hesperia\/startup\.js)"/)![1]!;
+        const urls = new Set([new URL(path, server.url).href]);
+        const scripts = new Map<string, string>();
+        const scanner = new Bun.Transpiler({ loader: "js" });
+
+        for (const url of urls) {
+          mark("module-fetch-start", { url });
+
+          const response = await fetch(url);
+
+          expect(response.status).toBe(200);
+
+          const source = await response.text();
+
+          mark("module-fetch-complete", { url });
+
+          scripts.set(url, source);
+
+          for (const dependency of scanner.scanImports(source)) {
+            const target = new URL(dependency.path, url);
+
+            expect(target.origin).toBe(server.url.origin);
+
+            urls.add(target.href);
+          }
+        }
+
+        const shell = [...scripts].find(([, source]) =>
+          source.includes('setAttribute("data-version", "second")'),
+        );
+
+        expect(shell).toBeDefined();
+
+        if (!shell) throw new Error("The rebuilt shell was absent from the served module graph");
+
+        mark("warnings-post-start");
+
+        expect(
+          (
+            await fetch(new URL("/_hesperia/warnings", server.url), {
+              method: "POST",
+              headers: { origin: server.url.origin },
+              body: "unsafeBind was used",
+            })
+          ).status,
+        ).toBe(204);
+
+        mark("warnings-post-complete");
+
+        expect(reports).toStrictEqual(["unsafeBind was used"]);
+
+        mark("edit-invalid-start");
+
+        await writeFile(
+          join(root, "app.tsx"),
+          "export default function App() { return <html><body>missing head</body></html>; }",
+        );
+
+        mark("edit-invalid-complete");
+
+        await waitForEvent("Hesperia checking failed");
+
+        mark("retained-module-fetch-start");
+
+        expect(await (await fetch(shell[0])).text()).toBe(shell[1]);
+
+        mark("retained-module-fetch-complete");
+
+        mark("edit-ready-start");
+
+        await writeFile(
+          join(root, "app.tsx"),
+          "export default function App() { return <html><head><title>App</title></head><body>ready</body></html>; }",
+        );
+
+        mark("edit-ready-complete");
+
+        await waitForEvent('data: "reload"');
+
+        for (const path of ["/hesperia-build.json", "/src/app.tsx", "/package.json"]) {
+          mark("private-path-fetch-start", { path });
+
+          const response = await fetch(new URL(path, server.url), {
+            headers: { accept: "application/json" },
+          });
+
+          expect(response.status).toBe(404);
+
+          mark("private-path-fetch-complete", { path });
+        }
+      } finally {
+        mark("reader-cancel-start");
+
+        await reader?.cancel();
+
+        mark("reader-cancel-complete");
+
+        mark("abort-start");
+
+        abort.abort();
+
+        mark("abort-complete");
+
+        mark("server-close-start");
+
+        await server.close();
+
+        mark("server-close-complete");
       }
+
+      mark("case-complete");
+    } catch (error) {
+      mark("case-failed", { error });
+
+      throw error;
     } finally {
-      await reader?.cancel();
-
-      abort.abort();
-
-      await server.close();
+      tryDiagnostics(() => diagnostics?.dispose());
     }
   }, 20_000);
 
