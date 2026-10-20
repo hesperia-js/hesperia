@@ -1,4 +1,4 @@
-import { Fault, project, signal, subscribe, type Projection } from "aeolia";
+import { Fault, project, signal, subscribe, type Projection, type Readable } from "aeolia";
 import type { AccumulatePolicy, ReducePolicy, StreamStore, StreamStatus } from "aeolia";
 import { RenderFault, type Owner, reportFault } from "../runtime/owner.ts";
 import { isNonNullObject } from "../utils.ts";
@@ -27,19 +27,26 @@ export function resumeFeeds(owner: Owner): void {
 }
 
 /** Create a dormant, owner-bound view over a shared Aeolia stream session. */
-export function createFeed<T>(owner: Owner, source: FeedSource<T>): Feed<T>;
+export function createFeed<T>(
+  owner: Owner,
+  source: FeedSource<T>,
+  policy?: undefined,
+  resetVersion?: Readable<number>,
+): Feed<T>;
 
 /** Create a dormant, owner-bound view with an Aeolia-backed projection policy. */
 export function createFeed<T, V>(
   owner: Owner,
   source: FeedSource<T>,
   policy: FeedPolicy<T, V>,
+  resetVersion?: Readable<number>,
 ): FeedProjection<T, V>;
 
 export function createFeed<T, V = T>(
   owner: Owner,
   sourceOrFactory: FeedSource<T>,
   policy?: FeedPolicy<T, V>,
+  resetVersion?: Readable<number>,
 ): Feed<T> | FeedProjection<T, V> {
   owner.assertActive();
 
@@ -60,6 +67,7 @@ export function createFeed<T, V = T>(
       : signal<{ readonly error: unknown } | undefined>(undefined, { label: "feed:error" });
   let projection: Projection<V> | undefined;
   let stopProjection: (() => void) | undefined;
+  let projectionClosed = false;
   let released = false;
 
   const setSource = (candidate: StreamStore<T>): void => {
@@ -76,7 +84,12 @@ export function createFeed<T, V = T>(
     },
 
     resume() {
-      if (released || failure.peek() !== undefined || projectionFailure?.get() !== undefined)
+      if (
+        released ||
+        projectionClosed ||
+        failure.peek() !== undefined ||
+        projectionFailure?.get() !== undefined
+      )
         return;
 
       try {
@@ -159,6 +172,7 @@ export function createFeed<T, V = T>(
       const stopValue = subscribe(projection, (value) => projectedValue!.set(value));
       const stopStatus = subscribe(projection.status, (status) => {
         if (status === "failed") failProjection(projection!.error.get());
+        else if (status === "closed") projectionClosed = true;
       });
       stopProjection = () => {
         stopValue();
@@ -202,6 +216,28 @@ export function createFeed<T, V = T>(
 
     ownerLifecycles.delete(lifecycle);
   });
+
+  if (policy !== undefined && resetVersion !== undefined) {
+    let observedVersion = resetVersion.get();
+    const stopReset = subscribe(resetVersion, (version) => {
+      if (version === observedVersion || released) return;
+
+      observedVersion = version;
+      const connected = stopProjection !== undefined;
+
+      lifecycle.suspend();
+
+      projectedValue!.set(policy.kind === "reduce" ? policy.initial : ([] as unknown as V));
+
+      if (failure.peek() !== undefined) failure.set({ error: undefined });
+
+      if (projectionFailure!.peek() !== undefined) projectionFailure!.set({ error: undefined });
+
+      if (connected) lifecycle.resume();
+    });
+
+    owner.onRelease(stopReset);
+  }
 
   const read = <R>(run: () => R): R => {
     owner.assertReadable();
@@ -266,7 +302,10 @@ export function createFeed<T, V = T>(
     function projectFeed<Next>(nextPolicy: ReducePolicy<T, Next>): FeedProjection<T, Next>;
 
     function projectFeed<Next>(nextPolicy: FeedPolicy<T, Next>): FeedProjection<T, Next> {
-      return createFeed(owner, sourceOrFactory, nextPolicy) as FeedProjection<T, Next>;
+      return createFeed(owner, sourceOrFactory, nextPolicy, resetVersion) as FeedProjection<
+        T,
+        Next
+      >;
     }
 
     Object.defineProperty(state, "value", {
