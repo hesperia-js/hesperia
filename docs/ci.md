@@ -11,8 +11,8 @@ describes the individual suites and their evidence.
 The `CI` workflow runs for pull requests targeting `main` or `release/*`, pushes
 to `main`, version tags, and manual dispatch. It calls the reusable `Verify`
 workflow with the same checkout for every job. Main pushes, version tags,
-manual runs, and same-repository `release/*` pull requests into `main` run every
-gate. Other pull requests select affected suites.
+manual runs, pull requests targeting `release/*`, and same-repository `release/*`
+pull requests into `main` run every gate. Other pull requests select affected suites.
 
 PR checks run on opening, new commits, and reopening. Metadata edits and draft
 status changes do not rerun CI. After changing the target branch, push a commit
@@ -66,14 +66,40 @@ to reduce contention between browser processes. Linux CI and local runs use thre
 workers. Separate matrix jobs still run in parallel, with the same test selection,
 assertions, timeouts, and retry policy.
 
-`dorny/paths-filter` uses local Git with no API token to select ordinary suites.
-Missing history, failed detection, missing outputs, an empty comparison, or an
-unknown path requests full verification. CI, manifest, lockfile, configuration,
-and shared test-support changes also request full verification. Known production
-source changes run every ordinary test root and the browser, package, and editor
-gates. A known test-only change can select its owning root. Known documentation
-changes can skip runtime gates; distributed documentation still selects package
-consumers. Partial runs do not create or combine whole-project coverage receipts.
+The [verification selector](../scripts/ci/select-verification.ts) reads the compared
+source revisions and selects ordinary test roots from their owners and consumers.
+It retains dependencies from both revisions, so deleted files and removed imports
+still reach their previous consumers. New production files retain a package or
+subsystem owner even before another tracked module imports them.
+
+The selector also accounts for opaque consumers, including dynamic loaders, file
+readers, and subprocess harnesses. Their target may lack an import edge, so their
+known owning test roots remain selected conservatively. Fixture directories seed
+an owner but do not exclude consumers in another root. Unknown ownership or an
+untrustworthy dependency graph requests full verification.
+
+Missing history, failed selection, missing outputs, an empty comparison, or an
+unknown path also requests full verification. CI, manifest, lockfile, configuration,
+policy, and shared test-support changes retain that fallback. A selector or policy
+change therefore runs full CI itself. Its successful CI run does not demonstrate
+that a later source-only change receives a partial plan.
+
+Known production changes keep the browser, package, editor, and golden gates
+selected. Their ordinary test roots follow conservative ownership and dependency
+selection instead of a single source flag selecting every root. Opaque consumers
+can still require several or all ordinary roots. Distributed documentation selects
+package consumers and can also select conservative file-reader owners. A partial
+plan describes the selected gates, not a promise that few tests run. Partial runs
+do not create or combine whole-project coverage receipts.
+
+Golden selection has a narrower supported boundary. The current harness permits
+partial plans only for inputs within reviewed golden fixture domains, with each
+domain selecting its complete suite. Product changes retain full golden coverage.
+Reviewed readers must match their LF-normalized source hashes in both revisions;
+new, changed, unknown, or stale readers require full selection. The existing
+unknown-path guard also keeps unmapped fixture additions conservative. See the
+[selection guide](ci-selection.md) for the supported domains and limitations.
+
 The standalone editor gate installs the candidate VSIX on Windows. The Linux native editor proof runs
 inside full platform coverage; a partial run does not claim that proof.
 

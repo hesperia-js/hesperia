@@ -86,6 +86,335 @@ async function removeRepoFile(repo: string, path: string): Promise<void> {
   await rm(join(repo, path), { force: true });
 }
 
+test("selects a known narrow fixture change using the complete real repository graph", async () => {
+  const repo = await mkdtemp(join(tmpdir(), "hesperia-ci-real-selector-"));
+  const workspace = resolve(import.meta.dir, "../..");
+
+  try {
+    git(repo, ["clone", "--quiet", "--shared", "--no-checkout", workspace, "."]);
+
+    git(repo, ["checkout", "--quiet", "--detach", git(workspace, ["rev-parse", "HEAD"])]);
+
+    git(repo, ["config", "user.name", "Hesperia CI fixture"]);
+
+    git(repo, ["config", "user.email", "ci-fixture@example.invalid"]);
+
+    const base = git(repo, ["rev-parse", "HEAD"]);
+    const path = "golden/fixtures/native-identity/Counter.tsx";
+    const source = await readFile(join(repo, path), "utf8");
+
+    await writeRepoFile(repo, path, source.replace("Count: {count()}", "Counter: {count()}"));
+
+    const head = commit(repo, "change the real native identity fixture label");
+    const result = selectGoldenCases({
+      repoPath: repo,
+      base,
+      head,
+      catalogPath: "golden/catalog.json",
+      graphPath: "golden/dependency-graph.json",
+      releaseCandidate: false,
+    });
+
+    expect(result.fullSuite, JSON.stringify(result.fallbackReasons, null, 2)).toBe(false);
+
+    expect(result.selectedCaseIds).toStrictEqual([
+      "native-identity-witness",
+      "native-update-retains-elements",
+    ]);
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test("configuration target domains include case-folded filenames on supported filesystems", async () => {
+  const repo = await initializeRepo();
+
+  try {
+    await writeJson(repo, CATALOG_PATH, standardCatalog);
+    await writeJson(repo, GRAPH_PATH, { version: 1, nodes: [], dependencies: [] });
+    await writeRepoFile(
+      repo,
+      "src/consumer.ts",
+      'import { pathToFileURL } from "node:url"; import { resolve } from "node:path"; export const load = async (root: string) => { const tsFile = resolve(root, "hesperia.config.ts"); return import(pathToFileURL(tsFile).href); };\n',
+    );
+    await writeRepoFile(
+      repo,
+      "app/Hesperia.config.ts",
+      'export { value } from "../src/changed";\n',
+    );
+    await writeRepoFile(repo, "other/hesperia.config.ts", "export default {};\n");
+    await writeRepoFile(repo, "src/changed.ts", "export const value = 1;\n");
+    await writeRepoFile(repo, "src/unrelated.ts", "export const unrelated = true;\n");
+    const base = commit(repo, "case-folded configuration input");
+    await writeRepoFile(repo, "src/changed.ts", "export const value = 2;\n");
+    const result = selection(
+      repo,
+      base,
+      commit(repo, "change mixed-case configuration dependency"),
+    );
+
+    expect(result.fullSuite).toBe(false);
+    expect(result.selectedCaseIds).toStrictEqual(["changed-case", "consumer-case", "related-case"]);
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  "known build",
+  "ambiguous output",
+  "unrecognized build",
+  "missing module",
+  "inherited files",
+] as const)(
+  "resolves relative emitted workspace imports only with a unique package build identity: %s",
+  async (variant) => {
+    const repo = await initializeRepo();
+
+    try {
+      await writeJson(repo, CATALOG_PATH, {
+        version: 1,
+        behaviors: [
+          { id: "browser", paths: ["tests/browser/helpers/Consumer.ts"] },
+          { id: "other", paths: ["src/other.ts"] },
+        ],
+        cases: [
+          { id: "browser-case", suite: "browser", behaviors: ["browser"] },
+          { id: "other-case", suite: "other", behaviors: ["other"] },
+        ],
+      });
+
+      await writeJson(repo, GRAPH_PATH, { version: 1, nodes: [], dependencies: [] });
+
+      await writeJson(repo, "packages/demo/package.json", {
+        name: "@fixture/demo",
+        scripts: {
+          build:
+            variant === "unrecognized build" ? "node build.mjs" : "bunx tsc -p tsconfig.build.json",
+        },
+      });
+
+      if (variant === "inherited files") {
+        await writeJson(repo, "packages/demo/tsconfig.parent.json", {
+          compilerOptions: {},
+          files: ["src/runtime/dom.ts"],
+        });
+      }
+
+      await writeJson(repo, "packages/demo/tsconfig.build.json", {
+        ...(variant === "inherited files" ? { extends: "./tsconfig.parent.json" } : {}),
+        compilerOptions: { rootDir: "./src", outDir: "./dist", noEmit: false, jsx: "react-jsx" },
+        include: ["src/**/*.ts", "src/**/*.tsx"],
+        exclude: [],
+      });
+
+      await writeRepoFile(repo, "packages/demo/src/runtime/dom.ts", "export const value = 1;\n");
+
+      if (variant === "ambiguous output")
+        await writeRepoFile(repo, "packages/demo/src/runtime/dom.tsx", "export const value = 1;\n");
+
+      await writeRepoFile(
+        repo,
+        "tests/browser/helpers/Consumer.ts",
+        `export { value } from "../../../packages/demo/dist/runtime/${variant === "missing module" ? "missing" : "dom"}.js";\n`,
+      );
+
+      await writeRepoFile(repo, "src/other.ts", "export const other = 1;\n");
+
+      const base = commit(repo, "browser consumer of a package build");
+
+      await writeRepoFile(repo, "packages/demo/src/runtime/dom.ts", "export const value = 2;\n");
+
+      const result = selection(repo, base, commit(repo, "change emitted dependency source"));
+
+      expect(result.fullSuite).toBe(variant !== "known build");
+
+      expect(result.selectedCaseIds).toStrictEqual(
+        variant === "known build" ? ["browser-case"] : ["browser-case", "other-case"],
+      );
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  },
+);
+
+test.each([
+  ["aliased module loader", "const load = factory(import.meta.url); return load(root);", true],
+  ["inline module loader", "return factory(import.meta.url)(root);", true],
+  [
+    "destructured target",
+    'const [tsFile] = locate(root, "hesperia.config.ts"); return import(toURL(tsFile).href);',
+    true,
+  ],
+  [
+    "immutable imported aliases",
+    'const tsFile = locate(root, "hesperia.config.ts"); return import(toURL(tsFile).href);',
+    false,
+  ],
+  [
+    "shadowed URL binding",
+    'const tsFile = locate(root, "hesperia.config.ts"); { const toURL = (value: string) => value; return import(toURL(tsFile).href); }',
+    true,
+  ],
+  [
+    "shadowed path binding",
+    'const locate = (base: string, suffix: string) => suffix; const tsFile = locate(root, "hesperia.config.ts"); return import(toURL(tsFile).href);',
+    true,
+  ],
+  [
+    "mutable target",
+    'let tsFile = locate(root, "hesperia.config.ts"); return import(toURL(tsFile).href);',
+    true,
+  ],
+  [
+    "reassigned const",
+    'const tsFile = locate(root, "hesperia.config.ts"); tsFile = root; return import(toURL(tsFile).href);',
+    true,
+  ],
+  [
+    "renamed suffix",
+    'const tsFile = locate(root, "other.config.ts"); return import(toURL(tsFile).href);',
+    true,
+  ],
+  [
+    "nonliteral suffix",
+    "const tsFile = locate(root, root); return import(toURL(tsFile).href);",
+    true,
+  ],
+  [
+    "cachebuster expression",
+    'const tsFile = locate(root, "hesperia.config.ts"); return import(toURL(tsFile).href + "?v");',
+    true,
+  ],
+  [
+    "mutable member target",
+    'const target = { path: locate(root, "hesperia.config.ts") }; return import(toURL(target.path).href);',
+    true,
+  ],
+  [
+    "unproven function alias",
+    'const tsFile = locate(root, "hesperia.config.ts"); const convert = toURL; return import(convert(tsFile).href);',
+    true,
+  ],
+  [
+    "additional unconstrained import",
+    'const tsFile = locate(root, "hesperia.config.ts"); await import(root); return import(toURL(tsFile).href);',
+    true,
+  ],
+] as const)(
+  "configuration target proof preserves unknown-impact fallback: %s",
+  async (_name, body, full) => {
+    const repo = await initializeRepo();
+
+    try {
+      await writeJson(repo, CATALOG_PATH, {
+        version: 1,
+        behaviors: [
+          { id: "loader", paths: ["src/loader.ts"] },
+          { id: "narrow", paths: ["src/narrow.ts"] },
+        ],
+        cases: [
+          { id: "loader-case", suite: "loader", behaviors: ["loader"] },
+          { id: "narrow-case", suite: "narrow", behaviors: ["narrow"] },
+        ],
+      });
+
+      await writeJson(repo, GRAPH_PATH, { version: 1, nodes: [], dependencies: [] });
+
+      await writeRepoFile(
+        repo,
+        "src/loader.ts",
+        `import { pathToFileURL as toURL } from "node:url";
+import { resolve as locate } from "node:path";
+${body.includes("factory") ? 'import { createRequire as factory } from "node:module";' : ""}
+export async function load(root: string) { ${body} }\n`,
+      );
+
+      await writeRepoFile(repo, "app/hesperia.config.ts", "export default {};\n");
+
+      await writeRepoFile(repo, "app/other.config.ts", "export default {};\n");
+
+      await writeRepoFile(repo, "src/narrow.ts", "export const value = 1;\n");
+
+      const base = commit(repo, "configuration loader and independent source");
+
+      await writeRepoFile(repo, "src/narrow.ts", "export const value = 2;\n");
+
+      const result = selection(repo, base, commit(repo, "change independent source"));
+
+      expect(result.fullSuite).toBe(full);
+
+      expect(result.selectedCaseIds).toStrictEqual(
+        full ? ["loader-case", "narrow-case"] : ["narrow-case"],
+      );
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  },
+);
+
+test.each(["deleted base configuration", "unresolved configuration import"] as const)(
+  "configuration target edges retain conservative impact: %s",
+  async (variant) => {
+    const repo = await initializeRepo();
+
+    try {
+      await writeJson(repo, CATALOG_PATH, {
+        version: 1,
+        behaviors: [
+          { id: "loader", paths: ["src/loader.ts"] },
+          { id: "unrelated", paths: ["src/unrelated.ts"] },
+        ],
+        cases: [
+          { id: "loader-case", suite: "loader", behaviors: ["loader"] },
+          { id: "unrelated-case", suite: "other", behaviors: ["unrelated"] },
+        ],
+      });
+
+      await writeJson(repo, GRAPH_PATH, { version: 1, nodes: [], dependencies: [] });
+
+      await writeRepoFile(
+        repo,
+        "src/loader.ts",
+        'import { pathToFileURL } from "node:url"; import { join } from "node:path"; export async function load(root: string) { const tsFile = join(root, "hesperia.config.ts"); return import(pathToFileURL(tsFile).href); }\n',
+      );
+
+      await writeRepoFile(
+        repo,
+        "app/hesperia.config.ts",
+        variant === "unresolved configuration import"
+          ? 'export { value } from "../src/missing";\n'
+          : 'export { value } from "../src/dependency";\n',
+      );
+
+      await writeRepoFile(repo, "other/hesperia.config.ts", "export default {};\n");
+
+      await writeRepoFile(repo, "src/dependency.ts", "export const value = 1;\n");
+
+      await writeRepoFile(repo, "src/unrelated.ts", "export const unrelated = 1;\n");
+
+      const base = commit(repo, "configuration inputs");
+
+      if (variant === "deleted base configuration")
+        await removeRepoFile(repo, "app/hesperia.config.ts");
+
+      await writeRepoFile(repo, "src/dependency.ts", "export const value = 2;\n");
+
+      const result = selection(repo, base, commit(repo, "change configuration dependency"));
+
+      expect(result.fullSuite).toBe(variant === "unresolved configuration import");
+
+      expect(result.selectedCaseIds).toStrictEqual(
+        variant === "unresolved configuration import"
+          ? ["loader-case", "unrelated-case"]
+          : ["loader-case"],
+      );
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  },
+);
+
 test(
   "selects checklist cases from their source, fixture, and spec paths",
   async () => {

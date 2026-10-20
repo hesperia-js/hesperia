@@ -76,7 +76,7 @@ function requestsFull(outcome: string, outputs: Record<string, string>, full = f
 }
 
 describe("verification scope fallback", () => {
-  const known = { all_count: "1", full: "false", policy: "false" };
+  const known = { all_count: "1", full: "false", policy: "false", scope_complete: "true" };
 
   test("retains partial verification only after a nonempty known comparison", () => {
     expect(requestsFull("success", known)).toBe(false);
@@ -94,6 +94,8 @@ describe("verification scope fallback", () => {
       { ...known, full: "" },
       { ...known, full: "true" },
       { ...known, policy: "true" },
+      { ...known, scope_complete: "" },
+      { ...known, scope_complete: "false" },
     ]) {
       expect(requestsFull("success", outputs)).toBe(true);
     }
