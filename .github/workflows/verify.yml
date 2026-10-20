@@ -26,16 +26,16 @@ jobs:
     timeout-minutes: 20
     outputs:
       revision: ${{ steps.revision.outputs.sha }}
-      compiler: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.compiler == 'true' }}
-      runtime: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.runtime == 'true' }}
-      data: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.data == 'true' }}
-      tooling: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.tooling == 'true' }}
-      routing: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.routing == 'true' }}
-      editor: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.editor == 'true' }}
-      hosting: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.hosting == 'true' }}
-      ci: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.ci == 'true' }}
+      compiler: ${{ steps.scope.outputs.compiler }}
+      runtime: ${{ steps.scope.outputs.runtime }}
+      data: ${{ steps.scope.outputs.data }}
+      tooling: ${{ steps.scope.outputs.tooling }}
+      routing: ${{ steps.scope.outputs.routing }}
+      editor: ${{ steps.scope.outputs.editor }}
+      hosting: ${{ steps.scope.outputs.hosting }}
+      ci: ${{ steps.scope.outputs.ci }}
       full: ${{ steps.scope.outputs.full }}
-      behavior: ${{ steps.scope.outputs.full == 'true' || steps.paths.outputs.source == 'true' || steps.paths.outputs.compiler == 'true' || steps.paths.outputs.runtime == 'true' || steps.paths.outputs.data == 'true' || steps.paths.outputs.tooling == 'true' || steps.paths.outputs.routing == 'true' || steps.paths.outputs.editor == 'true' || steps.paths.outputs.hosting == 'true' || steps.paths.outputs.ci == 'true' }}
+      behavior: ${{ steps.scope.outputs.full == 'true' || steps.scope.outputs.compiler == 'true' || steps.scope.outputs.runtime == 'true' || steps.scope.outputs.data == 'true' || steps.scope.outputs.tooling == 'true' || steps.scope.outputs.routing == 'true' || steps.scope.outputs.editor == 'true' || steps.scope.outputs.hosting == 'true' || steps.scope.outputs.ci == 'true' }}
       browser: ${{ steps.scope.outputs.browser }}
       package: ${{ steps.scope.outputs.package }}
       vscode: ${{ steps.scope.outputs.vscode }}
@@ -68,28 +68,37 @@ jobs:
                 "The release branch version must match package.json");
             }
           '
-      - name: "Find changed paths"
+      - name: "Select verification owners and consumers"
         id: paths
-        if: ${{ !inputs.full && inputs.base != '' && inputs.head != '' }}
         continue-on-error: true
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
-        with:
-          token: ""
-          base: ${{ inputs.base }}
-          ref: ${{ inputs.head }}
-          filters: .github/filters.yml
-          predicate-quantifier: some-with-excludes
+        shell: bash
+        env:
+          VERIFICATION_BASE: ${{ inputs.base }}
+          VERIFICATION_HEAD: ${{ inputs.ref }}
+          VERIFICATION_FULL: ${{ inputs.full }}
+        run: |
+          args=(--base "$VERIFICATION_BASE" --head "$VERIFICATION_HEAD")
+          if [ "$VERIFICATION_FULL" = true ]; then args+=(--full); fi
+          bun scripts/ci/select-verification.ts "${args[@]}"
       - name: "Resolve verification scope"
         id: scope
         shell: bash
         env:
-          FULL: ${{ inputs.full || steps.paths.outcome != 'success' || steps.paths.outputs.all_count == '' || steps.paths.outputs.all_count == '0' || steps.paths.outputs.full != 'false' || steps.paths.outputs.policy == 'true' }}
-          BROWSER: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.browser == 'true' }}
-          PACKAGE: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.package == 'true' }}
-          VSCODE: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.vscode == 'true' }}
-          GOLDEN: ${{ steps.paths.outputs.source == 'true' || steps.paths.outputs.golden == 'true' }}
+          FULL: ${{ inputs.full || steps.paths.outcome != 'success' || steps.paths.outputs.all_count == '' || steps.paths.outputs.all_count == '0' || steps.paths.outputs.full != 'false' || steps.paths.outputs.policy == 'true' || steps.paths.outputs.scope_complete != 'true' }}
+          COMPILER: ${{ steps.paths.outputs.compiler == 'true' }}
+          RUNTIME: ${{ steps.paths.outputs.runtime == 'true' }}
+          DATA: ${{ steps.paths.outputs.data == 'true' }}
+          TOOLING: ${{ steps.paths.outputs.tooling == 'true' }}
+          ROUTING: ${{ steps.paths.outputs.routing == 'true' }}
+          EDITOR: ${{ steps.paths.outputs.editor == 'true' }}
+          HOSTING: ${{ steps.paths.outputs.hosting == 'true' }}
+          CI: ${{ steps.paths.outputs.ci == 'true' }}
+          BROWSER: ${{ steps.paths.outputs.browser == 'true' }}
+          PACKAGE: ${{ steps.paths.outputs.package == 'true' }}
+          VSCODE: ${{ steps.paths.outputs.vscode == 'true' }}
+          GOLDEN: ${{ steps.paths.outputs.golden == 'true' }}
         run: |
-          for scope in FULL BROWSER PACKAGE VSCODE GOLDEN; do
+          for scope in FULL COMPILER RUNTIME DATA TOOLING ROUTING EDITOR HOSTING CI BROWSER PACKAGE VSCODE GOLDEN; do
             value="${!scope}"
             if [ "$FULL" = true ]; then value=true; fi
             printf '%s=%s\n' "${scope,,}" "$value" >> "$GITHUB_OUTPUT"
