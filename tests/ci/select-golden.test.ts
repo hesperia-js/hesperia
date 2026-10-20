@@ -133,6 +133,7 @@ test(
 
       expect(sourceResult.selectedCaseIds).toEqual([
         "checklist-cached-page-restoration",
+        "checklist-cached-page-restoration-native",
         "checklist-crud-live-queries-cleanup",
         "checklist-seeded-model-keyed-rows",
         "lifecycle-query-boundary-success",
@@ -163,8 +164,10 @@ test(
 
       expect(fixtureResult.selectedCaseIds).toEqual([
         "checklist-cached-page-restoration",
+        "checklist-cached-page-restoration-native",
         "checklist-crud-live-queries-cleanup",
         "checklist-latest-run-suppression",
+        "checklist-navigation-mode-controls",
         "checklist-seeded-model-keyed-rows",
       ]);
 
@@ -183,8 +186,10 @@ test(
 
       expect(specResult.selectedCaseIds).toEqual([
         "checklist-cached-page-restoration",
+        "checklist-cached-page-restoration-native",
         "checklist-crud-live-queries-cleanup",
         "checklist-latest-run-suppression",
+        "checklist-navigation-mode-controls",
         "checklist-seeded-model-keyed-rows",
       ]);
     } finally {
