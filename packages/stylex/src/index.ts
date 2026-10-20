@@ -1,6 +1,12 @@
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { transformAsync, types as babelTypes, type PluginItem, type PluginObj } from "@babel/core";
+import {
+  transformAsync,
+  types as babelTypes,
+  type NodePath,
+  type PluginItem,
+  type PluginObj,
+} from "@babel/core";
 import stylexBabelPlugin from "@stylexjs/babel-plugin";
 import { originalPositionFor, TraceMap, type SourceMapInput } from "@jridgewell/trace-mapping";
 import valueParser from "postcss-value-parser";
@@ -224,6 +230,8 @@ function compiledStyleTypesPlugin(): PluginObj {
     visitor: {
       Program: {
         exit(programPath) {
+          programPath.scope.crawl();
+
           programPath.traverse({
             ObjectExpression(path) {
               if (!isCompiledStyleObject(path.node)) return;
@@ -234,9 +242,24 @@ function compiledStyleTypesPlugin(): PluginObj {
             },
 
             ArrayExpression(path) {
-              if (!isCompiledStyleTuple(path.node)) return;
+              if (!hasCompiledStyleTupleTail(path)) return;
 
-              path.replaceWith(typeAssert(path.node, compiledStyleTupleType()));
+              const prefixLength = path.node.elements.length - 2;
+              const tuple = typeAssert(
+                prefixLength === 0
+                  ? path.node
+                  : babelTypes.arrayExpression(path.node.elements.slice(prefixLength)),
+                compiledStyleTupleType(),
+              );
+
+              path.replaceWith(
+                prefixLength === 0
+                  ? tuple
+                  : babelTypes.arrayExpression([
+                      ...path.node.elements.slice(0, prefixLength),
+                      tuple,
+                    ]),
+              );
 
               path.skip();
             },
@@ -258,10 +281,22 @@ function isCompiledStyleObject(node: babelTypes.ObjectExpression): boolean {
   );
 }
 
-function isCompiledStyleTuple(node: babelTypes.ArrayExpression): boolean {
-  const [styles, inline] = node.elements;
+function hasCompiledStyleTupleTail(path: NodePath<babelTypes.ArrayExpression>): boolean {
+  let styles = path.node.elements.at(-2);
+  const inline = path.node.elements.at(-1);
+
+  if (babelTypes.isIdentifier(styles)) {
+    const binding = path.scope.getBinding(styles.name);
+
+    if (!binding?.constant || !binding.path.isVariableDeclarator()) return false;
+
+    styles = binding.path.node.init;
+
+    while (babelTypes.isTSAsExpression(styles)) styles = styles.expression;
+  }
+
   return (
-    node.elements.length === 2 &&
+    path.node.elements.length >= 2 &&
     babelTypes.isObjectExpression(styles) &&
     isCompiledStyleObject(styles) &&
     babelTypes.isObjectExpression(inline)
