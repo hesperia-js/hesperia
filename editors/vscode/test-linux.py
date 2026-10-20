@@ -421,6 +421,7 @@ class Generation:
     sample_started_ns: int | None = None
     sample_finished_ns: int | None = None
     current_proc: dict[str, Any] | None = None
+    _terminal_sample: tuple[dict[str, Any], int, int] | None = None
 
     def observe(
         self,
@@ -456,12 +457,31 @@ class Generation:
         self.sample_started_ns = sample_started_ns
         self.sample_finished_ns = sample_finished_ns
         self.current_image_complete = True
+        self._terminal_sample = None
+
+    def _complete_sample(self) -> tuple[dict[str, Any], int, int] | None:
+        if (
+            not self.current_image_complete
+            or self.current_proc is None
+            or self.sample_started_ns is None
+            or self.sample_finished_ns is None
+            or self.sample_started_ns < 0
+            or self.sample_finished_ns < self.sample_started_ns
+        ):
+            return None
+
+        return (
+            {**self.current_proc, "argv": list(self.current_proc["argv"])},
+            self.sample_started_ns,
+            self.sample_finished_ns,
+        )
 
     def mark_image_incomplete(self) -> None:
         self.current_proc = None
         self.sample_started_ns = None
         self.sample_finished_ns = None
         self.current_image_complete = False
+        self._terminal_sample = None
 
     def qualify_after_exec(self, transition: dict[str, Any]) -> bool:
         if (
@@ -526,15 +546,23 @@ def defer_verified_zombie(
     if observed["ppid"] != reference["ppid"]:
         raise CaptureError(f"Retained process parent changed during zombie verification: {generation.pid} ({stage})")
 
+    # A verified zombie invalidates live image reads, but its last complete sample can
+    # still identify the exited image once raw exec/terminal order and pidfd readiness agree.
+    terminal_sample = generation._complete_sample() or generation._terminal_sample
+
     generation.mark_image_incomplete()
 
     if generation.check_exit():
+        generation._terminal_sample = terminal_sample
+
         return
 
     try:
         after = read_proc_kernel_identity(generation.pid, f"after {stage}", allow_zombie=True)
     except (FileNotFoundError, ProcessLookupError) as error:
         if generation.check_exit():
+            generation._terminal_sample = terminal_sample
+
             return
 
         raise CaptureError(
@@ -547,6 +575,8 @@ def defer_verified_zombie(
         raise CaptureError(f"Retained process identity changed during zombie verification: {generation.pid} ({stage})")
 
     generation.check_exit()
+
+    generation._terminal_sample = terminal_sample
 
 
 def terminate_retained_generation(
@@ -2434,6 +2464,56 @@ def confirm_traced_exit(
     return True
 
 
+def terminal_image_after_exec(
+    generation: Generation,
+    transition: dict[str, Any],
+    trace: dict[str, Any],
+    tid_groups: dict[int, int],
+) -> dict[str, Any] | None:
+    sample = generation._complete_sample() or generation._terminal_sample
+
+    if sample is None or not generation.executions:
+        return None
+
+    proc, started_ns, finished_ns = sample
+    latest = generation.executions[-1]
+
+    if (
+        proc["pid"] != generation.pid
+        or proc["tgid"] != generation.pid
+        or proc["startTicks"] != generation.start_ticks
+        or proc["ppid"] != generation.ppid
+        or started_ns <= transition["completionNs"]
+        or finished_ns < started_ns
+        or proc["executablePath"] != transition["resolvedPath"]
+        or latest["executablePath"] != proc["executablePath"]
+        or latest["argv"] != proc["argv"]
+        or utc_time_ns(latest["observedAt"]) > started_ns
+    ):
+        return None
+
+    closure = raw_process_group_if_complete(generation.pid, trace, tid_groups)
+    leader = trace["exits"].get(generation.pid)
+
+    if (
+        closure is None
+        or leader is None
+        or finished_ns >= trace_time_ns(leader["line"])
+        or any(trace["exits"][tid]["outcome"] != {"kind": "exit", "status": 0} for tid in closure[0])
+        or not confirm_traced_exit(generation, trace, tid_groups)
+    ):
+        return None
+
+    if utc_time_ns(latest["observedAt"]) <= transition["completionNs"]:
+        generation.executions.append({
+            "executablePath": proc["executablePath"],
+            "argv": list(proc["argv"]),
+            "observedAt": utc_at_ns(started_ns),
+        })
+
+    return generation.executions[-1]
+
+
 def create_raw_creator_fixture(temporary_root: pathlib.Path) -> RawCreatorFixture:
     directory = temporary_root / "raw-creator-fixture"
 
@@ -3759,7 +3839,9 @@ def native_ack(
     if not host_generation.qualify_after_exec(host_exec):
         raise CaptureError("Extension Host has no complete current /proc sample after its latest successful exec")
 
-    if not server_generation.qualify_after_exec(server_exec):
+    server_proc_image = terminal_image_after_exec(server_generation, server_exec, trace, tid_groups)
+
+    if server_proc_image is None:
         raise CaptureError("Language server has no complete /proc sample after its latest successful exec")
 
     if not has_node_service_proc_history(host_generation, host_path, host_exec):
@@ -3788,7 +3870,6 @@ def native_ack(
 
     gui_proc_image = acknowledgement_proc_images[gui.pid]
     host_proc_image = acknowledgement_proc_images[host_generation.pid]
-    server_proc_image = server_generation.executions[-1]
 
     if (
         gui_image["executablePath"] != code_path
