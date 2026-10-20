@@ -9,10 +9,12 @@ import {
   createConnection,
   createProtocolConnection,
   HoverRequest,
+  DefinitionRequest,
   InitializeRequest,
   PublishDiagnosticsNotification,
   StreamMessageReader,
   StreamMessageWriter,
+  type PublishDiagnosticsParams,
 } from "vscode-languageserver/node";
 import { startLanguageServer } from "../../packages/language-server/src/server.ts";
 import { linkFrameworkPackages, unlinkFrameworkPackages } from "../tooling/fixture-dependencies.ts";
@@ -231,5 +233,158 @@ test("language server reloads TypeScript configuration without restart", async (
     await unlinkFrameworkPackages(root);
 
     await rm(root, { recursive: true, force: true });
+  }
+}, 20_000);
+
+test("an open configuration keeps semantic errors alongside fallback editor service until repaired", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia editor %config-"));
+  const clientToServer = new PassThrough();
+  const serverToClient = new PassThrough();
+  const client = createProtocolConnection(serverToClient, clientToServer);
+  const server = createConnection(
+    new StreamMessageReader(clientToServer),
+    new StreamMessageWriter(serverToClient),
+  );
+  const diagnostics: PublishDiagnosticsParams[] = [];
+  const filename = join(root, "app.tsx");
+  const configFilename = join(root, "hesperia.config.ts");
+  const definitionFilename = join(root, "src", "label.ts");
+  const uri = pathToFileURL(filename).href;
+  const configURI = pathToFileURL(configFilename).href.replace(
+    "hesperia.config.ts",
+    "hesperia%2Econfig.ts",
+  );
+  const source =
+    'import { LABEL } from "hesperia/config/public"; import { formatLabel } from "./src/label.ts"; export default function App() { return <html><head></head><body>{formatLabel(LABEL)}</body></html>; }';
+  const config = (label: string, mountURL = "/") =>
+    `export default { mountURL: ${JSON.stringify(mountURL)}, public: { LABEL: ${JSON.stringify(label)} } };`;
+  const request = {
+    textDocument: { uri },
+    position: { line: 0, character: source.indexOf("LABEL") + 2 },
+  };
+  let initialized = false;
+
+  client.onNotification(PublishDiagnosticsNotification.type, (event) => {
+    diagnostics.push(event);
+  });
+
+  try {
+    await linkFrameworkPackages(root);
+
+    await mkdir(join(root, "src"));
+
+    await writeFile(filename, source);
+
+    await writeFile(
+      definitionFilename,
+      "export function formatLabel(value: string): string { return value; }",
+    );
+
+    await writeFile(configFilename, config("first"));
+
+    startLanguageServer(server);
+
+    client.listen();
+
+    await client.sendRequest(InitializeRequest.type, {
+      processId: process.pid,
+      rootUri: pathToFileURL(root).href,
+      capabilities: {},
+    });
+
+    initialized = true;
+
+    await client.sendNotification("initialized", {});
+
+    await client.sendNotification("textDocument/didOpen", {
+      textDocument: { uri: configURI, languageId: "typescript", version: 1, text: config("first") },
+    });
+
+    await client.sendNotification("textDocument/didOpen", {
+      textDocument: { uri, languageId: "hesperia-tsx", version: 1, text: source },
+    });
+
+    expect(JSON.stringify(await client.sendRequest(HoverRequest.type, request))).toContain("first");
+
+    expect(diagnostics.filter((event) => event.uri === configURI).at(-1)).toMatchObject({
+      version: 1,
+      diagnostics: [],
+    });
+
+    const invalid = config("invalid", "https://example.invalid");
+
+    await writeFile(configFilename, invalid);
+
+    await client.sendNotification("textDocument/didChange", {
+      textDocument: { uri: configURI, version: 2 },
+      contentChanges: [{ text: invalid }],
+    });
+
+    await client.sendNotification("textDocument/didSave", { textDocument: { uri: configURI } });
+
+    const fallback = await client.sendRequest(HoverRequest.type, request);
+
+    expect(JSON.stringify(fallback)).toContain("first");
+
+    expect(JSON.stringify(fallback)).not.toContain("invalid");
+
+    const published = diagnostics.filter((event) => event.uri === configURI).at(-1);
+
+    expect(published?.version).toBe(2);
+
+    expect(published?.diagnostics.filter((item) => item.code === "HES-CONFIG")).toEqual([
+      expect.objectContaining({ severity: 1, message: expect.stringContaining("mountURL") }),
+    ]);
+
+    expect(published?.diagnostics[0]?.message).toContain("last valid project snapshot");
+
+    const definitions = await client.sendRequest(DefinitionRequest.type, {
+      textDocument: { uri },
+      position: { line: 0, character: source.lastIndexOf("formatLabel") + 2 },
+    });
+
+    expect(definitions).toContainEqual(
+      expect.objectContaining({ uri: pathToFileURL(definitionFilename).href }),
+    );
+
+    expect(diagnostics.filter((event) => event.uri === configURI).at(-1)).toEqual(published);
+
+    await writeFile(configFilename, config("repaired"));
+
+    await client.sendNotification("textDocument/didChange", {
+      textDocument: { uri: configURI, version: 3 },
+      contentChanges: [{ text: config("repaired") }],
+    });
+
+    await client.sendNotification("textDocument/didSave", { textDocument: { uri: configURI } });
+
+    expect(JSON.stringify(await client.sendRequest(HoverRequest.type, request))).toContain(
+      "repaired",
+    );
+
+    expect(diagnostics.filter((event) => event.uri === configURI).at(-1)).toMatchObject({
+      version: 3,
+      diagnostics: [],
+    });
+
+    expect(diagnostics.some((event) => event.uri === pathToFileURL(configFilename).href)).toBe(
+      false,
+    );
+  } finally {
+    try {
+      if (initialized) {
+        await client.sendRequest("shutdown");
+
+        await client.sendNotification("exit");
+      }
+    } finally {
+      client.dispose();
+
+      server.dispose();
+
+      await unlinkFrameworkPackages(root);
+
+      await rm(root, { recursive: true, force: true });
+    }
   }
 }, 20_000);
