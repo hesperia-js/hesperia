@@ -40,6 +40,7 @@ import {
   PluginPipeline,
   generatedStyleFilename,
   hasBuiltinAssetImports,
+  normalizeSourceMap,
   type PluginImportProjection,
   type PreparedMarkupStyleImport,
   type PreparedMarkupNativeStyle,
@@ -51,6 +52,7 @@ import type {
   CapturedProjectSource,
   PluginCheckingSource,
   PluginProjectInput,
+  PluginSourceMap,
   PluginStyleArtifact,
   PluginWatch,
   ProjectTypeQueries,
@@ -1037,11 +1039,14 @@ export async function prepareBuildLocal(root: string, development = false): Prom
             : source;
         const origin = generatedSourceOrigins.get(sourceKey(filename));
 
-        if (origin)
-          return compiledMaps.get(origin) ?? compiledMaps.get(origin.replaceAll("/", "\\"));
+        const candidate = origin ?? resolve(filename);
+        const compiled =
+          compiledMaps.get(candidate) ?? compiledMaps.get(candidate.replaceAll("/", "\\"));
 
-        const candidate = resolve(filename);
-        return compiledMaps.get(candidate) ?? compiledMaps.get(candidate.replaceAll("/", "\\"));
+        // Compiled sources already have their owning map's base; Bun's loader namespace is not that base.
+        if (compiled) context.source = "";
+
+        return compiled;
       },
       { excludeContent: false },
     );
@@ -2940,22 +2945,12 @@ function recordCompiledMap(
   input: SourceMapInput,
   compiledMaps: Map<string, SourceMapInput>,
 ): void {
-  const map = input as unknown as {
-    readonly sources?: readonly string[];
-    readonly [key: string]: unknown;
-  };
-
   // Bun's plugin loader emits a bundle map for the returned JS but does not consume an inline map
   // in onLoad contents. Keep the compiled map for explicit composition after bundling.
-  compiledMaps.set(filename, {
-    ...map,
-    sources: map.sources?.map((source) => {
-      if (!source) return source;
-
-      const absolute = resolve(resolve(filename, ".."), source);
-      return absolute.replaceAll("\\", "/");
-    }),
-  } as SourceMapInput);
+  compiledMaps.set(
+    filename,
+    normalizeSourceMap(input as PluginSourceMap, filename) as SourceMapInput,
+  );
 }
 
 function digestJson(value: unknown): string {

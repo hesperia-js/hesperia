@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { Window } from "happy-dom";
 import { mount, type Component } from "hesperia";
 import { compile } from "../../packages/compiler/src/index.ts";
+import { startProcessDiagnostics } from "../tooling/fixtures/drivers/process-diagnostics.mjs";
 
 async function importGenerated<T extends object>(code: string): Promise<T> {
   const directory = resolve(import.meta.dir, "../../.hesperia", `conventional-${randomUUID()}`);
@@ -24,43 +25,107 @@ async function importGenerated<T extends object>(code: string): Promise<T> {
 }
 
 test("conventional default route functions are components even when they throw", async () => {
-  const result = await compile(
-    `export default function Broken() {
+  const tryDiagnostics = <T>(run: () => T): T | undefined => {
+    try {
+      return run();
+    } catch {
+      return undefined;
+    }
+  };
+  const diagnostics = tryDiagnostics(() =>
+    startProcessDiagnostics({
+      directory: resolve(
+        import.meta.dir,
+        "../../.hesperia/browser-diagnostics",
+        `conventional-components-${randomUUID()}`,
+      ),
+      label: "bun-parent",
+    }),
+  );
+
+  const mark = (phase: string, detail?: unknown): void => {
+    tryDiagnostics(() => diagnostics?.mark(phase, detail));
+  };
+
+  mark("case-start");
+
+  try {
+    mark("compile-start");
+
+    const result = await compile(
+      `export default function Broken() {
       throw new Error("route failed");
     }
     export function helper() { return "ordinary"; }`,
-    { filename: "src/routes/+error.tsx" },
-  );
+      { filename: "src/routes/+error.tsx" },
+    );
 
-  expect(result.diagnostics).toStrictEqual([]);
+    mark("compile-complete");
 
-  expect([...result.semantics.components]).toStrictEqual(["Broken"]);
+    expect(result.diagnostics).toStrictEqual([]);
 
-  const generated = await importGenerated<{
-    default: Component;
-    helper: () => string;
-  }>(result.code);
+    expect([...result.semantics.components]).toStrictEqual(["Broken"]);
 
-  expect(generated.helper()).toBe("ordinary");
+    mark("generated-import-start");
 
-  const window = new Window();
-  const errors: Error[] = [];
-  const application = mount(
-    window.document.body as unknown as Element,
-    generated.default,
-    {},
-    {
-      onError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
-    },
-  );
+    const generated = await importGenerated<{
+      default: Component;
+      helper: () => string;
+    }>(result.code);
 
-  await application.settled();
+    mark("generated-import-complete");
 
-  expect(errors[0]?.message).toBe("route failed");
+    expect(generated.helper()).toBe("ordinary");
 
-  application.dispose();
+    mark("window-create-start");
 
-  await window.happyDOM.close();
+    const window = new Window();
+
+    mark("window-create-complete");
+
+    const errors: Error[] = [];
+
+    mark("mount-start");
+
+    const application = mount(
+      window.document.body as unknown as Element,
+      generated.default,
+      {},
+      {
+        onError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+      },
+    );
+
+    mark("mount-complete");
+
+    mark("settled-start");
+
+    await application.settled();
+
+    mark("settled-complete");
+
+    expect(errors[0]?.message).toBe("route failed");
+
+    mark("application-dispose-start");
+
+    application.dispose();
+
+    mark("application-dispose-complete");
+
+    mark("window-close-start");
+
+    await window.happyDOM.close();
+
+    mark("window-close-complete");
+
+    mark("case-complete");
+  } catch (error) {
+    mark("case-failed", { error });
+
+    throw error;
+  } finally {
+    tryDiagnostics(() => diagnostics?.dispose());
+  }
 });
 
 test("conventional default aliases are components while ordinary helpers stay ordinary", async () => {
