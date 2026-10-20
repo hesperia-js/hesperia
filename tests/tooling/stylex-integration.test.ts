@@ -537,6 +537,22 @@ test("StyleX attrs work with static and reactive native class and style strings"
 
   const source = await readFile(join(fixtureRoot, "native-attrs/src/Card.tsx"), "utf8");
 
+  const authoredDiagnostics = await checkSources(
+    new Map([
+      [filename, source],
+      [appFilename, appSource],
+    ]),
+    root,
+    {
+      allowUnsafeHTML: false,
+      mountURL: "/",
+      allowUnsafeEmbed: false,
+      resolutionOverrides: { browser: {} },
+    },
+  );
+
+  expect(authoredDiagnostics.filter((item) => item.severity === "error")).toStrictEqual([]);
+
   const transformed = await stylex().transformSource!({
     projectRoot: root,
     filename,
@@ -579,10 +595,12 @@ test("StyleX attrs style must be passed as a string-valued native attribute", as
 
   const source = `import * as stylex from "@stylexjs/stylex";
 const styles = stylex.create({ root: { color: "red" } });
+const mixedStyles = stylex.create({ root: (color: string) => ({ color, padding: 4 }) });
 export function Card() {
   const attrs = () => stylex.attrs(styles.root);
   const invalidAttrs = stylex.attrs(styles.root, 42);
   void invalidAttrs;
+  void mixedStyles.root(42);
   return <button class={attrs().class ?? ""} style={() => attrs().style ?? ""} />;
 }
 `;
@@ -602,6 +620,14 @@ export function Card() {
   expect(styleError?.message).toContain("not assignable to type 'string'");
 
   expect(attrsError?.message).toContain("not assignable to parameter of type");
+
+  expect(diagnostics.filter((item) => item.code === "TS2345")).toHaveLength(2);
+
+  expect(
+    diagnostics.find(
+      (item) => item.code === "TS2345" && item.message.includes("parameter of type 'string'"),
+    )?.message,
+  ).toContain("Argument of type 'number'");
 });
 
 test("StyleX attrs produce static classes and reactive inline style strings at runtime", async () => {
@@ -633,6 +659,12 @@ test("StyleX attrs produce static classes and reactive inline style strings at r
   expect(attrs.activeAttrs.class).toEqual(expect.any(String));
 
   expect(attrs.activeAttrs.style).toBe("--x-color:rebeccapurple");
+
+  expect(attrs.mixedAttrs.class.split(" ")).toHaveLength(2);
+
+  expect(attrs.mixedAttrs.class.split(" ")).not.toContain(attrs.staticAttrs.class);
+
+  expect(attrs.mixedAttrs.style).toBe("--x-color:rebeccapurple");
 
   expect(attrs.inactiveAttrs.class).toEqual(expect.any(String));
 
