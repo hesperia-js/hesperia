@@ -178,6 +178,10 @@ interface FeedState<T, V> {
  *
  * Its value accessor is initialized before the source opens: accumulation
  * starts with an empty readonly array and reduction starts with `initial`.
+ * A graph reset restores that initial value, including while the owner is
+ * parked in the history cache. Ordinary cache restoration keeps its continuation.
+ * Reset clears projection errors. Failed or completed projections remain terminal
+ * and do not consume later stream emissions.
  */
 export type FeedProjection<T, V> = FeedState<T, V>;
 

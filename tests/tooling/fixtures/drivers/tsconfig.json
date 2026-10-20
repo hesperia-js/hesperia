@@ -23,6 +23,7 @@
     "document-navigation-diagnostics.mjs",
     "document-navigation-controls.mjs",
     "routing-page-task-browser.mjs",
+    "routing-feed-reset-browser.mjs",
     "routing-public-flows-browser.mjs",
     "shell-style-readiness-browser.mjs",
     "routing-public-flows.d.mts",

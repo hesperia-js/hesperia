@@ -348,8 +348,13 @@ method.
 When the router parks a page in its history cache, Hesperia suspends that
 page's feed listeners and keeps each current projected value. Restoring the
 page reconnects the listeners and resumes each projection without running the
-component body again. A source factory lets the restored view reacquire the
-keyed source after Aeolia collects an unobserved session. Releasing the owner
+component body again. A graph reset clears accumulated history and restores
+each reducer's authored `initial` value, including while the page is parked.
+Live projections build on that fresh state after reset. Reset also clears
+projection errors, but failed or completed projections remain terminal and
+ignore later stream emissions. A source factory lets the
+restored view reacquire the keyed source after Aeolia collects an unobserved
+session. Releasing the owner
 removes the feed listeners and drops the views' source references. The shared
 stream's continued lifetime and collection are governed by Aeolia's stream
 policy: other owners can keep it alive, and the source may be collected after

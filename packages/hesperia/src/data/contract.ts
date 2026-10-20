@@ -310,7 +310,12 @@ function buildTree(
       if (typeof member !== "function") throw malformedMember(property);
 
       result[property] = (input: unknown, options?: ValueOptions<unknown>) =>
-        createFeed(owner, () => member(input, options) as StreamStore<unknown>);
+        createFeed(
+          owner,
+          () => member(input, options) as StreamStore<unknown>,
+          undefined,
+          graph.resetVersion,
+        );
     } else if (isOperationTree(declaration)) {
       result[property] = buildTree(owner, graph, member, declaration);
     } else {
