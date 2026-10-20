@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prepareBuild } from "../../packages/tooling/src/project.ts";
@@ -7,12 +7,71 @@ import { linkFrameworkPackages, unlinkFrameworkPackages } from "./fixture-depend
 
 const roots: string[] = [];
 
+const dependencyCases = [
+  { name: "no dependency", clause: "", runtime: false },
+  {
+    name: "whole type import",
+    clause: 'import type { Marker } from "./src/helper.ts";',
+    runtime: false,
+  },
+  {
+    name: "whole type export",
+    clause: 'export type { Marker } from "./src/helper.ts";',
+    runtime: false,
+  },
+  { name: "value import", clause: 'import { marker } from "./src/helper.ts";', runtime: true },
+  { name: "side-effect import", clause: 'import "./src/helper.ts";', runtime: true },
+  { name: "empty import", clause: 'import {} from "./src/helper.ts";', runtime: true },
+  {
+    name: "type specifier with retained import",
+    clause: 'import { type Marker } from "./src/helper.ts";',
+    runtime: true,
+  },
+];
+
 afterEach(async () => {
   for (const root of roots.splice(0)) {
     await unlinkFrameworkPackages(root);
 
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test.each(dependencyCases)("built CSS ownership follows $name runtime semantics", async (entry) => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-type-only-css-"));
+
+  roots.push(root);
+
+  await cp(join(import.meta.dir, "fixtures/applications/type-only-css"), root, {
+    recursive: true,
+  });
+
+  await linkFrameworkPackages(root);
+
+  const filename = join(root, "app.tsx");
+  const authored = await readFile(filename, "utf8");
+
+  await writeFile(filename, authored.replace("// dependency", entry.clause));
+
+  const built = await prepareBuild(root, true);
+  const plan = built.styleRevision!.plan;
+  const expected = entry.runtime
+    ? ["css:before.css", "css:src/dormant.css", "css:after.css"]
+    : ["css:before.css", "css:after.css"];
+
+  expect(built.diagnostics).toStrictEqual([]);
+
+  expect(plan.assets.some((asset) => asset.id === "css:src/dormant.css")).toBe(true);
+
+  expect(plan.entries.find((item) => item.entryId === "app.tsx")?.closure).toStrictEqual(expected);
+
+  expect(plan.owners.find((item) => item.ownerId.startsWith("app.tsx#"))?.styles).toStrictEqual(
+    expected,
+  );
+
+  expect(
+    plan.compositions.find((item) => item.entries.includes("src/routes/+page.tsx"))?.styles,
+  ).toStrictEqual(expected);
 });
 
 test("built page and not-found modes share shell and layout CSS but select distinct views", async () => {
