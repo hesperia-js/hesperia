@@ -20,6 +20,8 @@ bun add @hesperia/stylex @stylexjs/stylex
 
 CSS source maps from a transform describe output against that stage's current input. Hesperia composes maps once and follows only an exact current-input source edge; library, placeholder, and other source branches stay attached to their actual sources. Generated or otherwise unmapped output remains unmapped rather than being attributed wholesale to an unrelated root file.
 
+When a StyleX asset URL comes from unmapped output, a missing-file diagnostic identifies the contributing source file without a source span. It retains the missing asset path and explains that the original source location is unavailable.
+
 Ordinary side-effect CSS imports, with or without `type: "css"`, compile into independent Bun-bundled
 stylesheets. The compiler emits one shared private plan, prepares each module's
 static CSS closure before its definition becomes available, and binds component

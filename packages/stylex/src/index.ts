@@ -6,6 +6,7 @@ import { originalPositionFor, TraceMap, type SourceMapInput } from "@jridgewell/
 import valueParser from "postcss-value-parser";
 import type {
   Plugin,
+  PluginDiagnosticOrigin,
   PluginOrigin,
   PluginSourceInput,
   PluginSourceMap,
@@ -536,7 +537,11 @@ function decodeCssEscapes(value: string): string {
     .replace(/\\([^\da-f\n\r\f])/giu, "$1");
 }
 
-function authoredOrigin(context: AssetRebaseContext, start: number, end: number): PluginOrigin {
+function authoredOrigin(
+  context: AssetRebaseContext,
+  start: number,
+  end: number,
+): PluginDiagnosticOrigin {
   if (!context.previousMap) return { filename: context.filename, start, end };
 
   try {
@@ -556,7 +561,7 @@ function authoredOrigin(context: AssetRebaseContext, start: number, end: number)
       const sourceIndex = trace.resolvedSources.indexOf(originalStart.source);
       const filename = absoluteAuthoredFilename(originalStart.source, context.filename);
 
-      if (!filename) return { filename: context.filename, start, end };
+      if (!filename) return { filename: context.filename };
 
       const mappedContent = trace.sourcesContent?.[sourceIndex];
 
@@ -564,7 +569,7 @@ function authoredOrigin(context: AssetRebaseContext, start: number, end: number)
         mappedContent === null ||
         (mappedContent === undefined && !sameSourcePath(filename, context.filename))
       )
-        return { filename: context.filename, start, end };
+        return { filename: context.filename };
 
       const content = mappedContent ?? context.authored;
       return {
@@ -574,10 +579,10 @@ function authoredOrigin(context: AssetRebaseContext, start: number, end: number)
       };
     }
   } catch {
-    // Fall back to the current source span when an upstream map has no usable location.
+    // An upstream map cannot justify a span in the authored file when tracing fails.
   }
 
-  return { filename: context.filename, start, end };
+  return { filename: context.filename };
 }
 
 function normalizeSourceMapForTrace(map: PluginSourceMap, mapBase: string): SourceMapInput {

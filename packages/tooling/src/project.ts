@@ -2089,11 +2089,16 @@ async function configuredCompilation(
 
         if (!origin) throw error;
 
+        const span =
+          typeof origin.start === "number" && typeof origin.end === "number"
+            ? { start: origin.start, end: origin.end }
+            : undefined;
+
         styleDiagnostics.push({
           code: "HES-CSS",
           severity: "error",
           filename: origin.filename,
-          span: { start: origin.start, end: origin.end },
+          ...(span ? { span } : {}),
           message: error instanceof Error ? error.message : String(error),
         });
       }
