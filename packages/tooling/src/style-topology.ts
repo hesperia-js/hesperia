@@ -171,6 +171,8 @@ export function buildStyleTopology(
     for (const node of parsed.program.body as readonly {
       readonly type: string;
       readonly start: number;
+      readonly importKind?: string;
+      readonly exportKind?: string;
       readonly source?: { readonly value?: unknown };
     }[]) {
       if (
@@ -179,6 +181,8 @@ export function buildStyleTopology(
         node.type !== "ExportAllDeclaration"
       )
         continue;
+
+      if (node.importKind === "type" || node.exportKind === "type") continue;
 
       const specifier = node.source?.value;
 
