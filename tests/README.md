@@ -6,7 +6,7 @@ Test what an application can observe, then use focused checks to locate failures
 The [CI guide](../docs/ci.md) describes required verification, coverage, and rules
 for the independent golden suite and selecting affected cases from changed paths.
 The [golden browser cases](../golden/README.md)
-now cover 32 authored Playwright cases across ten spec files. They run outside
+now cover 34 authored Playwright cases across ten spec files. They run outside
 framework tests in Chromium, Firefox, and WebKit. The selector and planner map
 changed paths to affected specs and fall back to all discovered specs when
 impact is uncertain. Release candidates run the complete suite.

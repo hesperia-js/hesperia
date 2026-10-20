@@ -48,8 +48,8 @@ registration. A controlled same-origin child attempts to write its parent;
 an unsandboxed iframe provides the negative control. The case also checks
 permission-driven iframe replacement, persistent native wrapper identity and
 sizing, load callbacks, and parent disposal. See [the Embed guide](../docs/embed.md)
-for the public contract. Cached-page restoration remains a separate golden case
-to add with the navigation integration.
+for the public contract. Checklist cached-page restoration is described below in
+the navigation scenario.
 
 The native-events case compiles plain `on:` handlers, literal handler/options
 pairs, and helpers imported from `hesperia/events` and `client.events`. Two
@@ -61,6 +61,20 @@ recreated component receives fresh once state. A bounded native control shows
 how a callback-level once flag incorrectly suppresses the second element.
 Cached-route once preservation remains queued until the public navigation
 contract is ready.
+
+The checklist cache scenario runs explicit `fallback` and `native` rows under the
+existing Chromium, Firefox, and WebKit projects. Fallback disables
+`window.navigation` before application startup and records real History traversal
+events. Native runs only when the browser provides the required Navigation API
+and async admission hook; an unavailable capability produces an explicit native
+skip. Its observer preserves the native event and callback receivers while
+recording completed `NavigateEvent.intercept` precommit admissions. Both rows run
+the same retained-node, control-state, effect cleanup, data revalidation, Back,
+and Forward assertions. Each successful row attaches its actual path observations
+as `navigation-mode.json`. Acceptance controls reject a missing observer, fallback
+selected as native, and fallback without actual traversals. Browser names alone
+do not establish either mode. The catalog maps both rows to the same navigation
+behavior, and the selector retains the Windows/Linux and three-engine matrix.
 
 The component CSS case builds an authored project through the public
 `@hesperia/tooling/project-service` package and serves its emitted index and

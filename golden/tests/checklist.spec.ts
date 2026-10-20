@@ -1,4 +1,9 @@
 import { expect, test, type ElementHandle, type Page, type Route } from "@playwright/test";
+import {
+  assertNavigationMode,
+  selectNavigationMode,
+  type NavigationMode,
+} from "./navigation-mode.ts";
 
 interface Item {
   readonly id: string;
@@ -526,14 +531,19 @@ test("compiled checklist CRUD revalidates live queries and releases component ef
   }
 });
 
-test("cached checklist pages restore controls and revalidate data changed on the detail route", async ({
-  page,
-}) => {
+async function cachedChecklistNavigation(page: Page, mode: NavigationMode): Promise<void> {
   const pageErrors: string[] = [];
   const backend = new ControlledBackend(page);
   const backendItems = initialItems();
   const traceSteps: string[] = [];
   const trace: Record<string, unknown> = { steps: traceSteps, requests: backend.trace };
+
+  const missing = await selectNavigationMode(page, mode);
+
+  test.skip(
+    mode === "native" && missing.length > 0,
+    `Native admission is unavailable: ${missing.join(", ")}`,
+  );
 
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
@@ -783,6 +793,13 @@ test("cached checklist pages restore controls and revalidate data changed on the
     trace.requests = [...backend.trace];
 
     expect(pageErrors).toStrictEqual([]);
+
+    const navigationWitness = await assertNavigationMode(page, mode);
+
+    await test.info().attach("navigation-mode.json", {
+      body: JSON.stringify({ mode, witness: navigationWitness }, null, 2),
+      contentType: "application/json",
+    });
   } catch (error) {
     trace.requests = [...backend.trace];
     trace.pageErrors = [...pageErrors];
@@ -796,6 +813,36 @@ test("cached checklist pages restore controls and revalidate data changed on the
   } finally {
     await backend.close();
   }
+}
+
+for (const mode of ["fallback", "native"] as const) {
+  test(`cached checklist pages restore controls and revalidate data changed on the detail route [${mode}]`, async ({
+    page,
+  }) => {
+    await cachedChecklistNavigation(page, mode);
+  });
+}
+
+test("navigation mode acceptance rejects missing observation and incorrect selection", async ({
+  page,
+}) => {
+  await page.goto("/health");
+
+  await expect(assertNavigationMode(page, "fallback")).rejects.toThrow(
+    "Navigation mode witness is missing",
+  );
+
+  await selectNavigationMode(page, "fallback");
+
+  await page.goto("/health");
+
+  await expect(assertNavigationMode(page, "native")).rejects.toThrow(
+    "Actual Navigation API availability disagrees with requested mode",
+  );
+
+  await expect(assertNavigationMode(page, "fallback")).rejects.toThrow(
+    "Fallback did not observe both real History traversals",
+  );
 });
 
 test("seeded bounded checklist actions match an independent model and retain keyed rows", async ({
