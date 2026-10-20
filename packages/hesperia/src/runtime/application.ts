@@ -4,7 +4,13 @@ import { createRouteHost } from "../routing/route-host.ts";
 import { createFilesystemRouter } from "../routing/filesystem.ts";
 import type { RouteTable } from "../routing/route-table.ts";
 import { instantiateComponent, prepareComponent, type Component } from "./components.ts";
-import { createRuntimeRoot, prepareTree, type MountedApplication, type Rendered } from "./dom.ts";
+import {
+  createRuntimeRoot,
+  installStyledDocument,
+  prepareTree,
+  type MountedApplication,
+  type Rendered,
+} from "./dom.ts";
 import { RenderFault } from "./owner.ts";
 import { installRootProjectPolicy } from "./project-policy.ts";
 import { internalStyleBindingFor } from "./style.ts";
@@ -30,8 +36,9 @@ export interface BootstrapApplicationOptions {
 
 /**
  * Start a generated browser application. History tracking precedes every authored
- * module; the shell is installed before the initial route is resolved. Rejection
- * disposes any partially built component tree and releases the history lease.
+ * module. The shell stays hidden and its effects wait for its installed-head CSS
+ * before initial routing begins. Rejection disposes any partially built component
+ * tree and releases the history lease.
  */
 export async function bootstrapApplication(
   window: Window,
@@ -71,7 +78,13 @@ export async function bootstrapApplication(
       return output;
     });
 
-    tree.install(window.document);
+    const styleBinding = internalStyleBindingFor(shell);
+
+    if (styleBinding) {
+      await installStyledDocument(tree, window.document, styleBinding.runtime, {
+        entryId: styleBinding.entryId,
+      });
+    } else tree.install(window.document);
 
     router = createFilesystemRouter(
       window,
@@ -79,7 +92,7 @@ export async function bootstrapApplication(
       host,
       table,
       configuration,
-      internalStyleBindingFor(shell)?.runtime,
+      styleBinding?.runtime,
       navigationReservation.mountPath,
     );
 

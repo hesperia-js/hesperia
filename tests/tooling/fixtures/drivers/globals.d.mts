@@ -22,6 +22,14 @@ interface PageTaskFixture {
 }
 
 declare global {
+  interface Window {
+    fixtureStartup: "pending" | "ready" | "failed";
+    fixtureError: string;
+    fixtureCssHeld: boolean;
+    fixturePushState: History["pushState"];
+    fixtureEffects: { name: string; color: string; display: string }[];
+  }
+
   var beforeReloadMarker: boolean | undefined;
 
   var documentIdentity: number;
