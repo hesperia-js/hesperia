@@ -87,11 +87,13 @@ members. It reads the current document text, including unsaved changes, without
 exposing generated compiler helpers. Incomplete syntax may temporarily produce
 a partial or empty Outline.
 
-An invalid `hesperia.config.json` produces an `HES-CONFIG` diagnostic on that
-file. Editor checking and navigation continue with the last valid configuration,
-or defaults if none has been read successfully. Save a repaired configuration to
-clear the error and apply its settings. Builds and command-line checking still
-reject invalid configuration. Use `{}` for an empty configuration object; a
+An invalid `hesperia.config.ts` or `hesperia.config.json` produces an `HES-CONFIG`
+diagnostic on that file, including when it is open in the editor. TypeScript
+configuration errors retain the last valid project snapshot, when available, for
+checking and navigation. JSON configuration errors retain the last valid settings, or defaults
+if none have been read successfully. Save a repaired configuration to clear the
+error and apply its settings. Builds and command-line checking still reject
+invalid configuration. Use `{}` for an empty JSON configuration object; a
 zero-byte file is invalid JSON.
 
 The extension starts only in trusted workspace folders that resolve an installed

@@ -455,30 +455,33 @@ export function startLanguageServer(
               ...(versions.has(normalize(filename))
                 ? { version: versions.get(normalize(filename))! }
                 : {}),
-              diagnostics: module.diagnostics.map((item) => {
-                const end = document.positionAt(document.getText().length);
-                return {
-                  code: item.code,
-                  source: "hesperia",
-                  message: item.span
-                    ? item.message
-                    : item.message.includes("location unavailable")
+              diagnostics: [
+                ...(outgoing.get(document.uri)?.diagnostics ?? []),
+                ...module.diagnostics.map((item) => {
+                  const end = document.positionAt(document.getText().length);
+                  return {
+                    code: item.code,
+                    source: "hesperia",
+                    message: item.span
                       ? item.message
-                      : `${item.message} (Source location unavailable.)`,
-                  severity:
-                    item.severity === "error"
-                      ? DiagnosticSeverity.Error
-                      : item.severity === "warning"
-                        ? DiagnosticSeverity.Warning
-                        : DiagnosticSeverity.Information,
-                  range: item.span
-                    ? {
-                        start: document.positionAt(item.span.start),
-                        end: document.positionAt(item.span.end),
-                      }
-                    : { start: end, end },
-                };
-              }),
+                      : item.message.includes("location unavailable")
+                        ? item.message
+                        : `${item.message} (Source location unavailable.)`,
+                    severity:
+                      item.severity === "error"
+                        ? DiagnosticSeverity.Error
+                        : item.severity === "warning"
+                          ? DiagnosticSeverity.Warning
+                          : DiagnosticSeverity.Information,
+                    range: item.span
+                      ? {
+                          start: document.positionAt(item.span.start),
+                          end: document.positionAt(item.span.end),
+                        }
+                      : { start: end, end },
+                  };
+                }),
+              ],
             });
           }
 
