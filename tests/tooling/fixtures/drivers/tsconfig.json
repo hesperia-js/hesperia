@@ -20,6 +20,8 @@
     "development-browser.mjs",
     "development-deletion-browser.mjs",
     "route-table-browser.mjs",
+    "document-navigation-diagnostics.mjs",
+    "document-navigation-controls.mjs",
     "routing-page-task-browser.mjs",
     "routing-public-flows-browser.mjs",
     "routing-public-flows.d.mts",

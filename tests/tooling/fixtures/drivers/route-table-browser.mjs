@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { startBrowserDiagnostics } from "./browser-diagnostics.mjs";
 import { startProcessDiagnostics } from "./process-diagnostics.mjs";
+import { installDocumentNavigationDiagnostics } from "./document-navigation-diagnostics.mjs";
 
 const [playwrightModuleURL, serverURL, diagnosticsDirectory] = process.argv.slice(2);
 const driver = startProcessDiagnostics({ directory: diagnosticsDirectory, label: "node-driver" });
+const documentURL = new URL("/dashboard/", serverURL).href;
 
 process.env.DEBUG = [process.env.DEBUG, "pw:browser"].filter(Boolean).join(",");
 
@@ -24,6 +26,8 @@ for (const engine of [chromium, firefox, webkit]) {
 
   /** @type {Awaited<ReturnType<typeof startBrowserDiagnostics>> | undefined} */
   let diagnostics;
+  /** @type {(() => void) | undefined} */
+  let stopDocumentTiming;
   let failed = false;
 
   try {
@@ -37,6 +41,8 @@ for (const engine of [chromium, firefox, webkit]) {
       directory: diagnosticsDirectory,
       label: engine.name(),
     });
+
+    stopDocumentTiming = await installDocumentNavigationDiagnostics(page, diagnostics, documentURL);
 
     if (engine.name() === "webkit") {
       await page.addInitScript(() => {
@@ -52,10 +58,10 @@ for (const engine of [chromium, firefox, webkit]) {
 
     page.on("pageerror", (error) => errors.push(String(error)));
 
-    diagnostics.mark("document navigation", { url: new URL("/dashboard/", serverURL).href });
+    diagnostics.mark("document navigation", { url: documentURL });
 
     await page
-      .goto(new URL("/dashboard/", serverURL).href, {
+      .goto(documentURL, {
         waitUntil: "domcontentloaded",
         timeout: 5000,
       })
@@ -170,6 +176,8 @@ for (const engine of [chromium, firefox, webkit]) {
       cause: error,
     });
   } finally {
+    stopDocumentTiming?.();
+
     try {
       await diagnostics?.dispose().catch((error) => {
         if (!failed) throw error;
