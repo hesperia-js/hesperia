@@ -1346,7 +1346,8 @@ function protectPlaceholders(
   };
 }
 
-function normalizeSourceMap(map: PluginSourceMap, filename: string): PluginSourceMap {
+/** @internal Resolve map sources against their owning file, retaining URL and placeholder identities. */
+export function normalizeSourceMap(map: PluginSourceMap, filename: string): PluginSourceMap {
   const { sourceRoot, ...withoutSourceRoot } = map as PluginSourceMap & {
     readonly sourceRoot?: string;
   };
