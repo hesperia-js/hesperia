@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -308,6 +308,71 @@ export default function App() { return <html><head /><body><main><Panel title="c
     }
 
     await writeFile(filename, source);
+  },
+  { timeout: 30_000 },
+);
+
+test.each([
+  { name: "URL strings", extended: false, rejected: "" },
+  { name: "Blob and structured srcset", extended: true, rejected: "" },
+  { name: "script Blob rejection", extended: false, rejected: "<Script src={blob} />" },
+  { name: "caller children rejection", extended: false, rejected: '<Image children="blocked" />' },
+  { name: "native iframe string rejection", extended: false, rejected: '<iframe src="/frame" />' },
+  { name: "native iframe Blob rejection", extended: false, rejected: "<iframe src={blob} />" },
+  { name: "native embed Blob rejection", extended: false, rejected: "<embed src={blob} />" },
+  { name: "native object Blob rejection", extended: false, rejected: "<object data={blob} />" },
+])(
+  "imported HTML root source props: $name",
+  async (entry) => {
+    const root = await mkdtemp(join(tmpdir(), "hesperia-markup-source-props-"));
+
+    roots.push(root);
+
+    await cp(join(import.meta.dir, "fixtures/applications/imported-source-props"), root, {
+      recursive: true,
+    });
+
+    await mkdir(join(root, "src"));
+
+    await linkFrameworkPackages(root);
+
+    const filename = join(root, "app.tsx");
+    const authored = await readFile(filename, "utf8");
+    const strings = authored
+      .replaceAll("src={blob}", 'src="/image.png"')
+      .replaceAll("poster={blob}", 'poster="/poster.png"')
+      .replaceAll("srcset={sourceSet}", 'srcset="/image.png 480w, /large.png 960w"');
+    const source = entry.extended ? authored : strings.replace("{/* rejected */}", entry.rejected);
+
+    await writeFile(filename, source);
+
+    const errors = (await checkProject(root)).filter((item) => item.severity === "error");
+
+    if (entry.rejected === "") {
+      expect(errors).toStrictEqual([]);
+    } else {
+      const start = source.indexOf(entry.rejected);
+
+      const primary = errors.filter((item) => item.code !== "HES-CAPABILITY-UNRESOLVED");
+
+      expect(primary.length).toBeGreaterThan(0);
+
+      expect(
+        primary.every(
+          (item) =>
+            item.span !== undefined &&
+            item.span.start >= start &&
+            item.span.end <= start + entry.rejected.length,
+        ),
+      ).toBe(true);
+
+      if (
+        entry.rejected.startsWith("<iframe") ||
+        entry.rejected.startsWith("<embed") ||
+        entry.rejected.startsWith("<object")
+      )
+        expect(primary.some((item) => item.code === "HES-EMBED")).toBe(true);
+    }
   },
   { timeout: 30_000 },
 );
