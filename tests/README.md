@@ -130,7 +130,11 @@ final sample. Native body-size fields can also remain zero after `requestfinishe
 Interpret these fields with request completion and any independent body evidence;
 the actual route's measured byte counts have no independent expected-body-size assertion.
 The held-parser control completes the document response while an external script
-blocks DOMContentLoaded. These controls also check History API correlation and
+blocks DOMContentLoaded. It waits for the server to retain the script response;
+the browser's request event alone does not establish server receipt. Both controls
+sample the browser clock, then wait for that clock to advance before releasing
+the held response. This preserves strict timestamp ordering when the browser
+reports coarse native times. These controls also check History API correlation and
 ignore unrelated documents. Console delivery and synchronous journaling can
 perturb timing; native timestamps help distinguish browser progress from later
 protocol receipt but do not measure browser CPU or explain missing capture.
