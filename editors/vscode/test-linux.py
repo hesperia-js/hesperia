@@ -39,6 +39,10 @@ class CaptureError(RuntimeError):
     pass
 
 
+class ExitedTraceSupervisor(CaptureError):
+    pass
+
+
 class IncompleteProcArgv(CaptureError):
     def __init__(self, pid: int, stage: str, proc: dict[str, Any], detail: str):
         super().__init__(detail)
@@ -421,6 +425,7 @@ class Generation:
     sample_started_ns: int | None = None
     sample_finished_ns: int | None = None
     current_proc: dict[str, Any] | None = None
+    _terminal_sample: tuple[dict[str, Any], int, int] | None = None
 
     def observe(
         self,
@@ -456,12 +461,31 @@ class Generation:
         self.sample_started_ns = sample_started_ns
         self.sample_finished_ns = sample_finished_ns
         self.current_image_complete = True
+        self._terminal_sample = None
+
+    def _complete_sample(self) -> tuple[dict[str, Any], int, int] | None:
+        if (
+            not self.current_image_complete
+            or self.current_proc is None
+            or self.sample_started_ns is None
+            or self.sample_finished_ns is None
+            or self.sample_started_ns < 0
+            or self.sample_finished_ns < self.sample_started_ns
+        ):
+            return None
+
+        return (
+            {**self.current_proc, "argv": list(self.current_proc["argv"])},
+            self.sample_started_ns,
+            self.sample_finished_ns,
+        )
 
     def mark_image_incomplete(self) -> None:
         self.current_proc = None
         self.sample_started_ns = None
         self.sample_finished_ns = None
         self.current_image_complete = False
+        self._terminal_sample = None
 
     def qualify_after_exec(self, transition: dict[str, Any]) -> bool:
         if (
@@ -526,15 +550,23 @@ def defer_verified_zombie(
     if observed["ppid"] != reference["ppid"]:
         raise CaptureError(f"Retained process parent changed during zombie verification: {generation.pid} ({stage})")
 
+    # A verified zombie invalidates live image reads, but its last complete sample can
+    # still identify the exited image once raw exec/terminal order and pidfd readiness agree.
+    terminal_sample = generation._complete_sample() or generation._terminal_sample
+
     generation.mark_image_incomplete()
 
     if generation.check_exit():
+        generation._terminal_sample = terminal_sample
+
         return
 
     try:
         after = read_proc_kernel_identity(generation.pid, f"after {stage}", allow_zombie=True)
     except (FileNotFoundError, ProcessLookupError) as error:
         if generation.check_exit():
+            generation._terminal_sample = terminal_sample
+
             return
 
         raise CaptureError(
@@ -547,6 +579,8 @@ def defer_verified_zombie(
         raise CaptureError(f"Retained process identity changed during zombie verification: {generation.pid} ({stage})")
 
     generation.check_exit()
+
+    generation._terminal_sample = terminal_sample
 
 
 def terminate_retained_generation(
@@ -2235,6 +2269,39 @@ def raw_trace_tid_birth_ns(tid: int, trace: dict[str, Any]) -> int:
     raise CaptureError(f"Raw parent TID {tid} has an empty trace")
 
 
+def validate_raw_tid_terminal(tid: int, trace: dict[str, Any]) -> int:
+    path = trace["files"][tid]
+    lines = raw_lines(path)
+
+    if not lines:
+        raise CaptureError(f"Raw TID {tid} has an empty trace file")
+
+    previous_ns: int | None = None
+    terminal_indexes: list[int] = []
+
+    for index, raw in enumerate(lines):
+        line = raw.decode("utf-8", errors="strict").rstrip("\r\n")
+        current_ns = trace_time_ns(line)
+
+        if previous_ns is not None and current_ns < previous_ns:
+            raise CaptureError(f"Raw TID {tid} has nonmonotonic trace timestamps")
+
+        previous_ns = current_ns
+
+        if EXIT_RE.search(line) or SIGNAL_RE.search(line):
+            terminal_indexes.append(index)
+
+    if terminal_indexes != [len(lines) - 1]:
+        raise CaptureError(f"Raw TID {tid} has records after or multiple terminal trace records")
+
+    terminal_ns = trace_time_ns(lines[-1].decode("utf-8", errors="strict").rstrip("\r\n"))
+
+    if raw_trace_tid_birth_ns(tid, trace) >= terminal_ns:
+        raise CaptureError(f"Raw TID {tid} terminal precedes its independently traced birth")
+
+    return terminal_ns
+
+
 def validate_complete_raw_process_tree(trace: dict[str, Any]) -> int:
     cached_root = trace.get("_rawOnlyCreatorTreeRoot")
 
@@ -2271,33 +2338,7 @@ def validate_complete_raw_process_tree(trace: dict[str, Any]) -> int:
         if edges and edges[0]["parentTid"] not in files:
             raise CaptureError(f"Raw TID {tid} has an untraced creator TID")
 
-        lines = raw_lines(path)
-
-        if not lines:
-            raise CaptureError(f"Raw TID {tid} has an empty trace file")
-
-        previous_ns: int | None = None
-        terminal_indexes: list[int] = []
-
-        for index, raw in enumerate(lines):
-            line = raw.decode("utf-8", errors="strict").rstrip("\r\n")
-            current_ns = trace_time_ns(line)
-
-            if previous_ns is not None and current_ns < previous_ns:
-                raise CaptureError(f"Raw TID {tid} has nonmonotonic trace timestamps")
-
-            previous_ns = current_ns
-
-            if EXIT_RE.search(line) or SIGNAL_RE.search(line):
-                terminal_indexes.append(index)
-
-        if terminal_indexes != [len(lines) - 1]:
-            raise CaptureError(f"Raw TID {tid} has records after or multiple terminal trace records")
-
-        terminal_ns = trace_time_ns(lines[-1].decode("utf-8", errors="strict").rstrip("\r\n"))
-
-        if raw_trace_tid_birth_ns(tid, trace) >= terminal_ns:
-            raise CaptureError(f"Raw TID {tid} terminal precedes its independently traced birth")
+        validate_raw_tid_terminal(tid, trace)
 
         raw_trace_tgid(tid, trace)
 
@@ -2432,6 +2473,56 @@ def confirm_traced_exit(
         generation.ready_at = observed_at
 
     return True
+
+
+def terminal_image_after_exec(
+    generation: Generation,
+    transition: dict[str, Any],
+    trace: dict[str, Any],
+    tid_groups: dict[int, int],
+) -> dict[str, Any] | None:
+    sample = generation._complete_sample() or generation._terminal_sample
+
+    if sample is None or not generation.executions:
+        return None
+
+    proc, started_ns, finished_ns = sample
+    latest = generation.executions[-1]
+
+    if (
+        proc["pid"] != generation.pid
+        or proc["tgid"] != generation.pid
+        or proc["startTicks"] != generation.start_ticks
+        or proc["ppid"] != generation.ppid
+        or started_ns <= transition["completionNs"]
+        or finished_ns < started_ns
+        or proc["executablePath"] != transition["resolvedPath"]
+        or latest["executablePath"] != proc["executablePath"]
+        or latest["argv"] != proc["argv"]
+        or utc_time_ns(latest["observedAt"]) > started_ns
+    ):
+        return None
+
+    closure = raw_process_group_if_complete(generation.pid, trace, tid_groups)
+    leader = trace["exits"].get(generation.pid)
+
+    if (
+        closure is None
+        or leader is None
+        or finished_ns >= trace_time_ns(leader["line"])
+        or any(trace["exits"][tid]["outcome"] != {"kind": "exit", "status": 0} for tid in closure[0])
+        or not confirm_traced_exit(generation, trace, tid_groups)
+    ):
+        return None
+
+    if utc_time_ns(latest["observedAt"]) <= transition["completionNs"]:
+        generation.executions.append({
+            "executablePath": proc["executablePath"],
+            "argv": list(proc["argv"]),
+            "observedAt": utc_at_ns(started_ns),
+        })
+
+    return generation.executions[-1]
 
 
 def create_raw_creator_fixture(temporary_root: pathlib.Path) -> RawCreatorFixture:
@@ -3759,7 +3850,9 @@ def native_ack(
     if not host_generation.qualify_after_exec(host_exec):
         raise CaptureError("Extension Host has no complete current /proc sample after its latest successful exec")
 
-    if not server_generation.qualify_after_exec(server_exec):
+    server_proc_image = terminal_image_after_exec(server_generation, server_exec, trace, tid_groups)
+
+    if server_proc_image is None:
         raise CaptureError("Language server has no complete /proc sample after its latest successful exec")
 
     if not has_node_service_proc_history(host_generation, host_path, host_exec):
@@ -3788,7 +3881,6 @@ def native_ack(
 
     gui_proc_image = acknowledgement_proc_images[gui.pid]
     host_proc_image = acknowledgement_proc_images[host_generation.pid]
-    server_proc_image = server_generation.executions[-1]
 
     if (
         gui_image["executablePath"] != code_path
@@ -3944,7 +4036,7 @@ def signal_retained_process(process: subprocess.Popen[bytes], generation: Genera
 
 def late_traced_kernel_identity(pid: int, supervisor_generation: Generation) -> dict[str, int | str]:
     if supervisor_generation.check_exit():
-        raise CaptureError("Late traced process has no live retained tracer")
+        raise ExitedTraceSupervisor("Late traced process has no live retained tracer")
 
     tracer = read_proc_kernel_identity(supervisor_generation.pid, "late traced process supervisor")
 
@@ -4052,6 +4144,69 @@ def drain_late_traced_generations(
 
         return True
 
+    def closed_after_supervisor_exit(pid: int) -> bool:
+        if not supervisor_generation.check_exit() or supervisor.poll() != 0:
+            return False
+
+        sample = supervisor_generation._complete_sample()
+
+        if sample is None or not isinstance(supervisor.args, (list, tuple)):
+            return False
+
+        proc, _, finished_ns = sample
+
+        validate_retained_generation(
+            proc, supervisor.pid, supervisor_generation.start_ticks, "exited late process supervisor"
+        )
+
+        argv = proc["argv"]
+
+        if (
+            proc["ppid"] != supervisor_generation.ppid
+            or argv != [os.fsdecode(argument) for argument in supervisor.args]
+            or not argv
+            or proc["executablePath"] != os.path.realpath(argv[0])
+            or "--" not in argv
+        ):
+            return False
+
+        options = argv[1:argv.index("--")]
+
+        if (
+            "-ff" not in options
+            or "-ttt" not in options
+            or options.count("-e") != 1
+            or options.index("-e") + 1 >= len(options)
+            or options[options.index("-e") + 1] != "trace=%process"
+            or options.count("-o") != 1
+            or options.index("-o") + 1 >= len(options)
+            or os.path.realpath(options[options.index("-o") + 1]) != os.path.realpath(trace_directory / prefix)
+        ):
+            return False
+
+        final = scan_trace(trace_directory, prefix, final=True)
+        closure = raw_process_group_if_complete(pid, final, tid_groups)
+        ready_at = supervisor_generation.ready_at
+
+        if (
+            creator_for(pid, final) is None
+            or closure is None
+            or ready_at is None
+            or finished_ns > utc_time_ns(ready_at)
+            or closure[1] > utc_time_ns(ready_at)
+        ):
+            return False
+
+        for tid in closure[0]:
+            if not final["files"][tid].read_bytes().endswith(b"\n"):
+                return False
+
+            validate_raw_tid_terminal(tid, final)
+
+        attachment = generations.get(pid) or pending_trace_generations.get(pid)
+
+        return attachment is None or pidfd_ready(attachment.pidfd)
+
     while time.monotonic() < deadline and not supervisor_generation.check_exit():
         try:
             trace = scan_trace(trace_directory, prefix)
@@ -4123,6 +4278,18 @@ def drain_late_traced_generations(
                         raise CaptureError(f"Late pending process {pid} remained live after retained pidfd cleanup")
             except (FileNotFoundError, ProcessLookupError):
                 continue
+            except ExitedTraceSupervisor as cleanup_error:
+                try:
+                    # The snapshot may precede the last tracee's exit while cleanup
+                    # of another child lets strace finish. Reconcile without signaling.
+                    if closed_after_supervisor_exit(pid):
+                        continue
+                except BaseException as terminal_error:
+                    cleanup_error = CaptureError(f"{cleanup_error}; terminal trace verification failed: {terminal_error}")
+
+                rejected.add(pid)
+
+                cleanup_errors.append({"pid": pid, "error": f"Late traced process cleanup refused: {cleanup_error}"})
             except BaseException as cleanup_error:
                 rejected.add(pid)
 

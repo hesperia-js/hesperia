@@ -117,6 +117,244 @@ class NodeServiceProcHistoryTests(unittest.TestCase):
                 ))
 
 
+class NativeAcknowledgementTests(unittest.TestCase):
+    def test_exited_server_acknowledges_complete_image_before_verified_zombie(self) -> None:
+        for lifecycle in (
+            "retained image", "verified zombie", "repeated verified zombie", "post-reexec verified zombie"
+        ):
+            with self.subTest(lifecycle=lifecycle):
+                self.check_acknowledgement(lifecycle)
+
+    def test_terminal_acknowledgement_rejects_unproven_or_changed_images(self) -> None:
+        controls = (
+            ("preexec sample", "complete /proc sample"),
+            ("sample at exec", "complete /proc sample"),
+            ("sample after terminal", "complete /proc sample"),
+            ("sample overlaps leader exit", "complete /proc sample"),
+            ("changed generation", "complete /proc sample"),
+            ("changed parent", "complete /proc sample"),
+            ("changed history argv", "complete /proc sample"),
+            ("later history interval", "complete /proc sample"),
+            ("later exec", "complete /proc sample"),
+            ("pending exec", "pending or missing successful exec"),
+            ("incomplete thread closure", "complete /proc sample"),
+            ("killed leader", "complete /proc sample"),
+            ("nonzero leader", "complete /proc sample"),
+            ("nonzero thread", "complete /proc sample"),
+            ("killed thread", "complete /proc sample"),
+            ("unready pidfd", "complete /proc sample"),
+            ("unverified incomplete image", "complete /proc sample"),
+            ("incomplete after zombie", "complete /proc sample"),
+            ("wrong server role", "role anchors"),
+            ("wrong GUI flags", "role anchors"),
+            ("exited GUI", "exited before language-server acknowledgement"),
+            ("exited host", "exited before language-server acknowledgement"),
+            ("changed GUI sample", "Rejected native acknowledgement /proc sample"),
+            ("changed host sample", "Rejected native acknowledgement /proc sample"),
+            ("wrong executable", "Could not bind one language server"),
+            ("wrong argv", "Could not bind one language server"),
+        )
+
+        for control, error in controls:
+            with self.subTest(control=control):
+                self.check_acknowledgement("verified zombie", control=control, error=error)
+
+    def check_acknowledgement(
+        self, lifecycle: str, *, control: str | None = None, error: str | None = None
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            code = os.path.realpath(directory / "code")
+            server_executable = os.path.realpath(directory / "bun")
+            args = observer.argparse.Namespace(
+                code_executable=code,
+                user_data_dir=directory / "profile",
+                extensions_dir=directory / "extensions",
+                extension_path=directory / "extension",
+                coverage_host_path=directory / "coverage-host.js",
+                output=directory,
+            )
+            gui_argv = [code, *(
+                f"--{flag}={value}" for flag, value in (
+                    ("user-data-dir", args.user_data_dir),
+                    ("extensions-dir", args.extensions_dir),
+                    ("extensionDevelopmentPath", args.extension_path),
+                    ("extensionTestsPath", args.coverage_host_path),
+                )
+            )]
+            host_argv = [code, "--type=utility", "--utility-sub-type=node.mojom.NodeService"]
+            server_argv = [server_executable, "/workspace/packages/language-server/dist/cli.js"]
+            base_ns = 1_792_029_360_000_000_000
+
+            def timestamp(offset: int) -> str:
+                return f"1792029360.{offset:09d}"
+
+            def exec_line(offset: int, executable: str, argv: list[str]) -> str:
+                path = executable.replace("\\", "/")
+                return f"{timestamp(offset)} execve({json.dumps(path)}, {json.dumps(argv)}, 0x0) = 0\n"
+
+            traces = {
+                41: exec_line(10, code, gui_argv),
+                42: exec_line(20, code, host_argv)
+                    + f"{timestamp(30)} clone(child_stack=NULL, flags=SIGCHLD) = 43\n",
+                43: exec_line(40, server_executable, server_argv)
+                    + f"{timestamp(60)} clone(child_stack=NULL, flags=CLONE_VM|CLONE_THREAD) = 44\n"
+                    + f"{timestamp(100)} +++ exited with 0 +++\n",
+                44: f"{timestamp(110)} +++ exited with 0 +++\n",
+            }
+
+            if control == "later exec" or lifecycle == "post-reexec verified zombie":
+                traces[43] = traces[43].replace(
+                    f"{timestamp(100)}", exec_line(80, server_executable, server_argv) + timestamp(100)
+                )
+            elif control == "pending exec":
+                traces[43] += f'{timestamp(115)} execve("/unknown", ["/unknown"], 0x0 <unfinished ...>\n'
+            elif control == "incomplete thread closure":
+                traces[44] = ""
+            elif control == "killed leader":
+                traces[43] = traces[43].replace("exited with 0", "killed by SIGKILL")
+            elif control == "nonzero leader":
+                traces[43] = traces[43].replace("exited with 0", "exited with 1")
+            elif control == "nonzero thread":
+                traces[44] = traces[44].replace("exited with 0", "exited with 1")
+            elif control == "killed thread":
+                traces[44] = traces[44].replace("exited with 0", "killed by SIGKILL")
+            elif control == "wrong server role":
+                traces[43] = traces[43].replace("/workspace/packages/language-server/dist/cli.js", "/foreign.js")
+            elif control == "wrong GUI flags":
+                traces[41] = traces[41].replace("--user-data-dir=", "--foreign-dir=")
+
+            for pid, content in traces.items():
+                (directory / f"native-process-trace.{pid}").write_text(content, encoding="utf-8")
+
+            generations = {}
+            procs = {}
+
+            for pid, parent, executable, argv in (
+                (41, 40, code, gui_argv),
+                (42, 41, code, host_argv),
+                (43, 42, server_executable, server_argv),
+            ):
+                proc = {
+                    "pid": pid, "tgid": pid, "ppid": parent, "startTicks": pid * 100,
+                    "executablePath": executable, "argv": argv,
+                }
+                generation = observer.Generation(pid, parent, pid * 100, pid, observer.utc_at_ns(base_ns))
+
+                started, finished = 50, 55
+
+                if pid == 43:
+                    if control == "preexec sample":
+                        started, finished = 35, 36
+                    elif control == "sample at exec":
+                        started, finished = 40, 41
+                    elif control == "sample after terminal":
+                        started, finished = 111, 115
+                    elif control == "sample overlaps leader exit":
+                        started, finished = 50, 100
+
+                    if control == "wrong executable":
+                        proc["executablePath"] = os.path.realpath(directory / "foreign")
+                    elif control == "wrong argv":
+                        proc["argv"] = [server_executable, "/foreign.js"]
+
+                generation.observe(proc, base_ns + started, base_ns + finished)
+
+                if pid == 43 and lifecycle == "post-reexec verified zombie":
+                    generation.observe(proc, base_ns + 85, base_ns + 90)
+
+                generations[pid] = generation
+                procs[pid] = proc
+
+            server_generation = generations[43]
+
+            if control == "unverified incomplete image":
+                server_generation.mark_image_incomplete()
+            elif lifecycle != "retained image":
+                zombie = {**procs[43], "state": "Z"}
+
+                with mock.patch.object(observer, "pidfd_ready", return_value=False), mock.patch.object(
+                    observer, "read_proc_kernel_identity", return_value=zombie
+                ):
+                    for _ in range(2 if lifecycle == "repeated verified zombie" else 1):
+                        observer.defer_verified_zombie(server_generation, zombie, procs[43], "acknowledgement control")
+
+                self.assertFalse(server_generation.qualify_after_exec({
+                    "completionNs": base_ns + 40, "resolvedPath": server_executable,
+                }))
+
+            if control == "changed generation":
+                server_generation.start_ticks += 1
+            elif control == "changed parent":
+                server_generation.ppid += 1
+            elif control == "changed history argv":
+                server_generation.executions[-1]["argv"] = [*server_argv, "--foreign"]
+            elif control == "later history interval":
+                server_generation.executions[-1]["observedAt"] = observer.utc_at_ns(base_ns + 85)
+            elif control == "incomplete after zombie":
+                server_generation.mark_image_incomplete()
+            elif control == "changed GUI sample":
+                procs[41] = {**procs[41], "startTicks": 99}
+            elif control == "changed host sample":
+                procs[42] = {**procs[42], "startTicks": 99}
+
+            host = {
+                "pid": 42, "ppid": 41, "execPath": code,
+                "argv": [code, "/code/resources/app/out/bootstrap-fork.js"],
+            }
+            server = {
+                "pid": 43, "ppid": 42, "execPath": server_executable,
+                "argv": server_argv, "ownerId": "server-owner",
+            }
+            (directory / "language-server-exit.json").write_text(json.dumps({
+                "exitCode": 0, "exitedAt": observer.utc_at_ns(base_ns + 90),
+            }), encoding="utf-8")
+
+            with mock.patch.object(
+                observer, "pidfd_ready", side_effect=lambda fd: (
+                    (fd == 43 and control != "unready pidfd")
+                    or (fd == 41 and control == "exited GUI")
+                    or (fd == 42 and control == "exited host")
+                )
+            ), mock.patch.object(
+                observer, "sample_proc", side_effect=lambda pid: (procs[pid], base_ns + 120, base_ns + 125)
+            ), mock.patch.object(observer, "read_tid_groups", return_value={}), mock.patch.object(
+                observer, "verify_code_elf", return_value=code
+            ), mock.patch.object(observer, "utc_now", return_value=observer.utc_at_ns(base_ns + 130)):
+                with self.assertRaisesRegex(observer.CaptureError, error) if error else contextlib.nullcontext():
+                    ack = observer.native_ack(
+                        args, {"runId": "run", "populationFingerprint": "population"},
+                        host, server, generations[41], generations, {}, directory, "native-process-trace",
+                    )
+
+            if error:
+                return
+
+            self.assertEqual(ack["languageServer"]["procArgv"], server_argv)
+
+            self.assertEqual(ack["languageServer"]["executablePath"], server_executable)
+
+            self.assertEqual(ack["languageServer"]["outcome"], {"kind": "exit", "status": 0})
+
+            self.assertEqual([item["tid"] for item in ack["languageServer"]["threadExits"]], [43, 44])
+
+            self.assertEqual(
+                ack["languageServer"]["traceExit"]["completion"]["line"],
+                4 if lifecycle == "post-reexec verified zombie" else 3,
+            )
+
+            self.assertEqual(
+                server_generation.executions[-1]["observedAt"],
+                observer.utc_at_ns(base_ns + (85 if lifecycle == "post-reexec verified zombie" else 50)),
+            )
+
+            self.assertEqual(ack["languageServer"]["pidfdReadyAt"], observer.utc_at_ns(base_ns + 130))
+
+            self.assertEqual(ack["extensionHost"]["sampleStartedAt"], observer.utc_at_ns(base_ns + 120))
+
+            self.assertEqual(ack["codeGui"]["sampleFinishedAt"], observer.utc_at_ns(base_ns + 125))
+
+
 class RetainedGenerationTests(unittest.TestCase):
     def test_exit_between_cmdline_and_executable_invalidates_retained_image(self) -> None:
         for changed_generation in (False, True):
@@ -1069,7 +1307,17 @@ sys.stdin.buffer.read(1)
             with self.subTest(authority=authority):
                 self.check_failure_cleanup_late_child(authority)
 
-    def check_failure_cleanup_late_child(self, authority: str) -> None:
+    def test_failure_cleanup_reconciles_terminal_trace_after_supervisor_exits(self) -> None:
+        for boundary in (
+            "after-scan", "after-attachment", "detached-live-child", "missing-thread-terminal",
+            "pending-trace", "changed-exited-tracer", "changed-recorded-parent", "changed-invocation",
+            "changed-trace-prefix", "changed-trace-filter", "tracer-ready-before-terminal",
+            "completed-exec-after-terminal", "nonmonotonic-record", "unterminated-tail",
+        ):
+            with self.subTest(boundary=boundary):
+                self.check_failure_cleanup_late_child("retained-tracer", boundary=boundary)
+
+    def check_failure_cleanup_late_child(self, authority: str, *, boundary: str | None = None) -> None:
         strace = shutil.which("strace")
 
         self.assertIsNotNone(strace, "the Linux observer owner requires the prepared strace runtime")
@@ -1092,6 +1340,13 @@ if os.fork() == 0:
 else:
     sys.stdin.buffer.read(1)
 '''
+
+        if boundary is not None:
+            child_source = child_source.replace(
+                "    release.wait()\nelse:",
+                "    os.read(int(sys.argv[1]), 1)\n    release.set()\nelse:",
+            )
+
         with tempfile.TemporaryDirectory(prefix="hesperia-late-traced-cleanup-") as temporary:
             directory = pathlib.Path(temporary)
             script = directory / "creator.py"
@@ -1114,6 +1369,7 @@ else:
             pending_popen: dict[int, observer.PendingPopenGeneration] = {}
             startup_diagnostics: list[str] = []
             supervisor_ticks: int | None = None
+            release_read_fd, release_write_fd = os.pipe() if boundary is not None else (None, None)
 
             def receive() -> dict[str, object]:
                 self.assertIsNotNone(supervisor)
@@ -1143,11 +1399,19 @@ else:
                     )
                     supervisor = subprocess.Popen(
                         [strace, "-ff", "-ttt", "-v", "-s", "8192", "-e", "trace=%process",
-                         "-o", str(trace_directory / prefix), "--", sys.executable, "-u", str(script)],
+                         "-o", str(trace_directory / prefix), "--", sys.executable, "-u", str(script),
+                         *([str(release_read_fd)] if release_read_fd is not None else [])],
                         stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
                         stderr=stderr,
+                        pass_fds=(release_read_fd,) if release_read_fd is not None else (),
                     )
+
+                    if release_read_fd is not None:
+                        os.close(release_read_fd)
+
+                        release_read_fd = None
+
                     parent = receive()
                     supervisor_generation = observer.open_popen_generation(
                         supervisor, "strace supervisor", pending_popen, startup_diagnostics,
@@ -1192,7 +1456,16 @@ else:
                     forced: list[int] = []
                     errors: list[dict[str, object]] = []
 
-                    observer.terminate_retained_generation(parent_generation, forced)
+                    if boundary is None:
+                        observer.terminate_retained_generation(parent_generation, forced)
+                    else:
+                        supervisor.stdin.write(b"x")
+
+                        supervisor.stdin.flush()
+
+                        self.assertTrue(select.select([parent_generation.pidfd], [], [], 5)[0])
+
+                        self.assertTrue(parent_generation.check_exit())
 
                     selected_supervisor = supervisor
                     selected_generation = supervisor_generation
@@ -1203,12 +1476,133 @@ else:
                         selected_supervisor = unrelated
                         selected_generation = unrelated_generation
 
-                    remaining = observer.drain_late_traced_generations(
-                        selected_supervisor, selected_generation, generations, pending,
-                        trace_directory, prefix, {}, forced, errors,
-                    )
+                    original_scan = observer.scan_trace
+                    original_open = observer.open_generation
+                    boundary_crossed = False
+
+                    def cross_boundary() -> None:
+                        nonlocal boundary_crossed
+
+                        self.assertFalse(supervisor_generation.check_exit())
+
+                        boundary_crossed = True
+
+                        if boundary == "detached-live-child":
+                            supervisor.terminate()
+                        else:
+                            os.write(release_write_fd, b"x")
+
+                        supervisor.wait(timeout=5)
+
+                        self.assertTrue(supervisor_generation.check_exit())
+
+                        if boundary == "detached-live-child":
+                            self.assertFalse(observer.pidfd_ready(child_fd))
+                        else:
+                            self.assertEqual(supervisor.returncode, 0)
+
+                            self.assertTrue(observer.pidfd_ready(child_fd))
+
+                        if boundary == "missing-thread-terminal":
+                            path = trace_directory / f"{prefix}.{child_tid}"
+                            lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+                            path.write_text("".join(line for line in lines if "+++ exited with" not in line), encoding="utf-8")
+                        elif boundary == "pending-trace":
+                            with (trace_directory / f"{prefix}.{child_pid}").open("a", encoding="utf-8") as trace_file:
+                                trace_file.write(f'{time.time():.6f} execve("/unknown", ["/unknown"], 0x0 <unfinished ...>\n')
+                        elif boundary == "completed-exec-after-terminal":
+                            with (trace_directory / f"{prefix}.{child_pid}").open("a", encoding="utf-8") as trace_file:
+                                trace_file.write(
+                                    f'{time.time():.6f} execve({json.dumps(sys.executable)}, '
+                                    f'{json.dumps([sys.executable, "-c", "pass"])}, 0x0) = 0\n'
+                                )
+                        elif boundary == "nonmonotonic-record":
+                            path = trace_directory / f"{prefix}.{child_pid}"
+                            lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+                            lines.insert(-1, f"1.000000 getpid() = {child_pid}\n")
+
+                            path.write_text("".join(lines), encoding="utf-8")
+                        elif boundary == "unterminated-tail":
+                            with (trace_directory / f"{prefix}.{child_pid}").open("a", encoding="utf-8") as trace_file:
+                                trace_file.write("incomplete trailing record")
+                        elif boundary == "changed-exited-tracer":
+                            supervisor_generation.start_ticks += 1
+                        elif boundary == "changed-recorded-parent":
+                            supervisor_generation.ppid += 1
+                        elif boundary == "changed-invocation":
+                            supervisor.args = [*supervisor.args, "--foreign"]
+                        elif boundary in ("changed-trace-prefix", "changed-trace-filter"):
+                            argv = list(supervisor_generation.current_proc["argv"])
+                            option = "-o" if boundary == "changed-trace-prefix" else "-e"
+                            argv[argv.index(option) + 1] = str(directory / "foreign-trace") if option == "-o" else "trace=none"
+                            supervisor.args = argv
+                            supervisor_generation.current_proc["argv"] = argv
+                        elif boundary == "tracer-ready-before-terminal":
+                            supervisor_generation.ready_at = supervisor_generation.attached_at
+
+                    def scan_at_boundary(*args: object, **kwargs: object):
+                        trace = original_scan(*args, **kwargs)
+
+                        if boundary is not None and boundary != "after-attachment" and not boundary_crossed:
+                            self.assertIn(child_pid, trace["files"])
+
+                            self.assertNotIn(child_pid, trace["exits"])
+
+                            cross_boundary()
+
+                        return trace
+
+                    def open_at_boundary(*args: object, **kwargs: object):
+                        generation = original_open(*args, **kwargs)
+
+                        if boundary == "after-attachment" and not boundary_crossed and args[0] == child_pid:
+                            self.assertIsNotNone(generation)
+
+                            cross_boundary()
+
+                        return generation
+
+                    with mock.patch.object(observer, "scan_trace", side_effect=scan_at_boundary), mock.patch.object(
+                        observer, "open_generation", side_effect=open_at_boundary
+                    ):
+                        remaining = observer.drain_late_traced_generations(
+                            selected_supervisor, selected_generation, generations, pending,
+                            trace_directory, prefix, {}, forced, errors,
+                        )
 
                     self.assertFalse(unrelated_generation.check_exit())
+
+                    if boundary is not None:
+                        self.assertTrue(boundary_crossed)
+
+                        self.assertNotIn(child_pid, forced)
+
+                        self.assertNotIn(child_tid, forced)
+
+                        final = original_scan(trace_directory, prefix)
+
+                        if boundary not in ("detached-live-child", "missing-thread-terminal", "pending-trace"):
+                            closure = observer.raw_process_group_if_complete(child_pid, final, {})
+
+                            self.assertIsNotNone(closure)
+
+                            self.assertEqual(closure[0], {child_pid, child_tid})
+
+                        if boundary in ("after-scan", "after-attachment"):
+                            self.assertEqual(errors, [])
+
+                            self.assertTrue(observer.pidfd_ready(child_fd))
+                        else:
+                            self.assertTrue(errors)
+
+                            if boundary == "changed-exited-tracer":
+                                self.assertNotEqual(supervisor_generation.start_ticks, supervisor_ticks)
+                            elif boundary in ("detached-live-child", "missing-thread-terminal", "pending-trace"):
+                                self.assertIsNone(observer.raw_process_group_if_complete(child_pid, final, {}))
+
+                        return
 
                     if authority != "retained-tracer":
                         expected_error = (
@@ -1246,6 +1640,10 @@ else:
 
                     self.assertTrue(all(item["bytes"] > 0 for item in manifest))
                 finally:
+                    for descriptor in (release_read_fd, release_write_fd):
+                        if descriptor is not None:
+                            os.close(descriptor)
+
                     if supervisor_generation is not None and supervisor_ticks is not None:
                         supervisor_generation.start_ticks = supervisor_ticks
 
