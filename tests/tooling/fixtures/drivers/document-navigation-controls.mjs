@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
@@ -36,6 +37,8 @@ const server = createServer((request, response) => {
     response.end(parserDocument);
   } else if (request.url === "/held.js") {
     parserResponse = response;
+
+    server.emit("parser-response-held");
   } else {
     response.end("<!doctype html><p>Unrelated document</p>");
   }
@@ -83,8 +86,18 @@ try {
           },
           targetURL,
         );
+        const parserReceiptAbort = new AbortController();
 
         try {
+          const parserHeld =
+            mode === "parser"
+              ? once(server, "parser-response-held", {
+                  signal: AbortSignal.any([parserReceiptAbort.signal, AbortSignal.timeout(5000)]),
+                })
+              : undefined;
+
+          void parserHeld?.catch(() => {});
+
           const documentFinished = page.waitForEvent("requestfinished", {
             predicate: (request) => request.isNavigationRequest() && request.url() === targetURL,
             timeout: 5000,
@@ -139,6 +152,10 @@ try {
 
             assert.ok(bodyResponse);
 
+            await page.waitForFunction((now) => performance.now() > now, beforeRelease.now, {
+              timeout: 5000,
+            });
+
             bodyResponse.end(bodySuffix);
           } else {
             await scriptRequest;
@@ -172,7 +189,13 @@ try {
 
             assert.equal(beforeRelease.dcl, 0);
 
+            await parserHeld;
+
             assert.ok(parserResponse);
+
+            await page.waitForFunction((now) => performance.now() > now, beforeRelease.now, {
+              timeout: 5000,
+            });
 
             parserResponse.end("// Release the parser-blocking script.");
           }
@@ -248,6 +271,8 @@ try {
             `${engine.name()} ${mode}: ${error instanceof Error ? error.stack : error}`,
           );
         } finally {
+          parserReceiptAbort.abort();
+
           if (bodyResponse && !bodyResponse.writableEnded) bodyResponse.end();
 
           if (parserResponse && !parserResponse.writableEnded) parserResponse.end();

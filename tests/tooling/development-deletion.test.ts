@@ -24,6 +24,20 @@ test.each(
     let server: Awaited<ReturnType<typeof devProject>> | undefined;
 
     try {
+      let diagnostics: string | undefined;
+      let diagnosticsFailure: string | undefined;
+
+      try {
+        const diagnosticsParent = resolve(import.meta.dir, "../../.hesperia/browser-diagnostics");
+
+        await mkdir(diagnosticsParent, { recursive: true });
+
+        diagnostics = await mkdtemp(join(diagnosticsParent, "development-deletion-"));
+      } catch (error) {
+        diagnosticsFailure = String(error);
+        console.error(`Deletion diagnostics unavailable: ${diagnosticsFailure}`);
+      }
+
       await linkFrameworkPackages(root);
 
       await mkdir(join(root, "src", "routes", "a"), { recursive: true });
@@ -70,6 +84,7 @@ export default function Page() { const count = client.state(0); const veto = cli
           css,
           removed,
           navigationMode,
+          diagnostics ?? "",
         ],
         {
           stdout: "pipe",
@@ -85,7 +100,7 @@ export default function Page() { const count = client.state(0); const veto = cli
 
       if (status !== 0)
         throw new Error(
-          `Deletion browser failed\n${output}\n${errors}\nReports: ${JSON.stringify(reports)}`,
+          `Deletion browser failed; evidence=${diagnostics ?? "unavailable"}${diagnosticsFailure ? `; diagnostics-error=${diagnosticsFailure}` : ""}\n${output}\n${errors}\nReports: ${JSON.stringify(reports)}`,
         );
 
       expect(output.trim().endsWith("Active and cached deletion behavior verified")).toBe(true);
