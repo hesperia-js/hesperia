@@ -30,6 +30,8 @@ type FixtureEvent =
   | "stream-cancelled";
 
 type RecordedCall = {
+  readonly id: number;
+  readonly http2StreamId: number;
   readonly path: string;
   readonly requestFrames: readonly string[];
   readonly responseFrames: readonly string[];
@@ -39,6 +41,11 @@ type RecordedCall = {
   readonly responseTrailers: Readonly<Record<string, string>>;
   readonly closeCode: number | undefined;
   readonly streamErrors?: readonly string[];
+  readonly streamErrorEvents: readonly {
+    readonly code: string | null;
+    readonly rstCode: number;
+    readonly http2StreamId: number;
+  }[];
 };
 
 type FixtureEventRecord = {
@@ -435,11 +442,17 @@ async function main(): Promise<void> {
 
     assert.deepEqual(hex(deadlineCall.responseFrames), []);
 
+    assert.deepEqual(deadlineCall.responseHeaders, {});
+
     assert.ok(readHeader(deadlineCall.requestHeaders, "grpc-timeout"));
 
     assert.equal(deadlineCall.closeCode, 2);
 
     assert.equal(deadlineEvent.closeCode, 2);
+
+    assert.equal(deadlineCall.id, deadlineEvent.callId);
+
+    assert.equal(deadlineEvent.requestLabel, "D");
 
     checks.push("deadline");
 
@@ -634,7 +647,22 @@ async function main(): Promise<void> {
     for (const call of fixture.observations.calls) {
       assert.equal(call.requestError, undefined);
 
-      assert.deepEqual(call.streamErrors ?? [], []);
+      // Connect-Node 2.2.0 uses reset 2 for deadlines, which Node reports as a stream error.
+      if (call === deadlineCall) {
+        assert.equal(call.streamErrors?.length, 1);
+
+        assert.deepEqual(call.streamErrorEvents, [
+          {
+            code: "ERR_HTTP2_STREAM_ERROR",
+            rstCode: 2,
+            http2StreamId: deadlineCall.http2StreamId,
+          },
+        ]);
+      } else {
+        assert.deepEqual(call.streamErrors ?? [], []);
+
+        assert.deepEqual(call.streamErrorEvents, []);
+      }
     }
 
     assert.deepEqual(fixture.observations.serverErrors, []);
@@ -724,6 +752,8 @@ async function main(): Promise<void> {
       moduleResolutions,
       observations: {
         calls: fixture.observations.calls.map((call) => ({
+          callId: call.id,
+          http2StreamId: call.http2StreamId,
           path: call.path,
           requestFrames: call.requestFrames,
           responseFrames: call.responseFrames,
@@ -733,6 +763,7 @@ async function main(): Promise<void> {
           closeCode: call.closeCode ?? null,
           requestError: call.requestError ?? null,
           streamErrors: call.streamErrors ?? [],
+          streamErrorEvents: call.streamErrorEvents,
         })),
         events: fixture.observations.events,
         serverErrors: fixture.observations.serverErrors,

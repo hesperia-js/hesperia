@@ -111,6 +111,7 @@ export async function startGrpcServerFixture() {
   server.on("stream", (stream, headers) => {
     const call = {
       id: ++nextCallId,
+      http2StreamId: stream.id,
       path: headerValue(headers[":path"]),
       requestHeaders: plainHeaders(headers),
       requestFrames: [],
@@ -121,12 +122,22 @@ export async function startGrpcServerFixture() {
       responseTrailers: {},
       closeCode: undefined,
       streamErrors: [],
+      streamErrorEvents: [],
       pendingTrailers: undefined,
     };
 
     observations.calls.push(call);
 
-    stream.on("error", (error) => call.streamErrors.push(errorText(error)));
+    stream.on("error", (error) => {
+      call.streamErrors.push(errorText(error));
+
+      call.streamErrorEvents.push({
+        code: error.code ?? null,
+        rstCode: stream.rstCode,
+        http2StreamId: stream.id,
+      });
+    });
+
     stream.once("close", () => {
       call.closeCode = stream.rstCode;
 
