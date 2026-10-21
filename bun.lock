@@ -13,6 +13,7 @@
         "@graphql-tools/executor": "2.1.0",
         "@hesperia/compiler": "workspace:*",
         "@hesperia/graphql": "workspace:*",
+        "@hesperia/grpc": "workspace:*",
         "@hesperia/language-server": "workspace:*",
         "@hesperia/tooling": "workspace:*",
         "@jridgewell/trace-mapping": "0.3.31",
