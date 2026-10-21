@@ -450,6 +450,31 @@ Each run keeps its records, coverage artifacts, and merged `lcov.info` under
 and the LCOV path. Files with no recorded hits remain in the measured source
 population.
 
+During this capture, the generated coverage preload and fixture server write a
+startup journal to stderr with the `[browser-css-startup]` prefix and to
+`.hesperia/browser-diagnostics/browser-css-startup/<runId>/`. It records the
+authored preload import, initial fixture build, imported-markup preparation,
+host creation, server return, and first health request. Each role records its
+PID, sequence, and monotonic timestamps. The fixture closes its journal after
+the first health request; a missing later phase or final record remains partial
+evidence, including when the existing 30-second readiness deadline kills it.
+
+Each role is limited to 32 records, 32 KiB, and 1 KiB per line, including the
+stderr prefix. Cap and sink errors use reserved records when a sink survives.
+A failed sink cannot change the original startup result. A partial write can
+leave a truncated last line in that sink; the other sink may retain its error.
+Failed coverage-group artifacts retain this diagnostics directory and the
+actual group stderr. Successful runs may show the prefix in the job log, but
+the workflow does not upload successful startup journals.
+
+The journal begins after its helper's static imports. The fixture's first body
+record also follows the fixture's static imports, so those earlier parse,
+linking, and import gaps remain unobserved. Synchronous writes can affect
+timing. The records identify the last observed startup boundary; they do not
+establish the cause of a timeout. This test support stays outside the existing
+executable coverage-source population; the coverage runner keeps its existing
+source ownership and admission checks.
+
 This capture runs separately from the ordinary coverage and browser commands.
 Its selected scenarios verify this capture path only; complete browser, editor,
 application-startup, and CI coverage have separate evidence requirements for
