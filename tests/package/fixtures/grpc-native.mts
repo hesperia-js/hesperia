@@ -304,6 +304,7 @@ async function main(): Promise<void> {
       `${JSON.stringify({
         event: "server-ready",
         nodeVersion: process.versions.node,
+        nodeExecutable: process.execPath,
         baseUrl: fixture.baseUrl,
       })}\n`,
     );
@@ -716,6 +717,7 @@ async function main(): Promise<void> {
     `${JSON.stringify({
       event: "completed",
       nodeVersion: process.versions.node,
+      nodeExecutable: process.execPath,
       clientSessionState: sessionManager?.state() ?? "not-created",
       serverCleanup: "complete",
       checks,
