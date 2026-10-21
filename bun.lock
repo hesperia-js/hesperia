@@ -63,7 +63,7 @@
     },
     "packages/compiler": {
       "name": "@hesperia/compiler",
-      "version": "1.0.0-alpha.2",
+      "version": "1.0.0-alpha.3",
       "dependencies": {
         "@jridgewell/remapping": "2.3.5",
         "@jridgewell/trace-mapping": "0.3.31",
@@ -77,14 +77,14 @@
     },
     "packages/create-hesperia": {
       "name": "create-hesperia",
-      "version": "1.0.0-alpha.2",
+      "version": "1.0.0-alpha.3",
       "bin": {
         "create-hesperia": "./dist/cli.js",
       },
     },
     "packages/elysia": {
       "name": "@hesperia/elysia",
-      "version": "1.0.0-alpha.2",
+      "version": "1.0.0-alpha.3",
       "dependencies": {
         "@jridgewell/remapping": "2.3.5",
         "@jridgewell/trace-mapping": "0.3.31",
@@ -105,18 +105,18 @@
     },
     "packages/hesperia": {
       "name": "hesperia",
-      "version": "1.0.0-alpha.2",
+      "version": "1.0.0-alpha.3",
       "peerDependencies": {
         "aeolia": "1.0.0-alpha.1",
       },
     },
     "packages/hosting": {
       "name": "@hesperia/hosting",
-      "version": "1.0.0-alpha.2",
+      "version": "1.0.0-alpha.3",
     },
     "packages/language-server": {
       "name": "@hesperia/language-server",
-      "version": "1.0.0-alpha.2",
+      "version": "1.0.0-alpha.3",
       "bin": {
         "hesperia-language-server": "./dist/cli.js",
       },
@@ -131,7 +131,7 @@
     },
     "packages/postcss": {
       "name": "@hesperia/postcss",
-      "version": "1.0.0-alpha.2",
+      "version": "1.0.0-alpha.3",
       "dependencies": {
         "@jridgewell/trace-mapping": "0.3.31",
       },
@@ -140,13 +140,13 @@
         "postcss": "8.5.28",
       },
       "peerDependencies": {
-        "@hesperia/tooling": "1.0.0-alpha.2",
+        "@hesperia/tooling": "1.0.0-alpha.3",
         "postcss": "^8.5.16",
       },
     },
     "packages/stylex": {
       "name": "@hesperia/stylex",
-      "version": "1.0.0-alpha.2",
+      "version": "1.0.0-alpha.3",
       "dependencies": {
         "@babel/core": "7.29.7",
         "@jridgewell/trace-mapping": "0.3.31",
@@ -159,13 +159,13 @@
         "@types/babel__core": "7.20.5",
       },
       "peerDependencies": {
-        "@hesperia/tooling": "1.0.0-alpha.2",
+        "@hesperia/tooling": "1.0.0-alpha.3",
         "@stylexjs/stylex": "0.19.1",
       },
     },
     "packages/tailwind": {
       "name": "@hesperia/tailwind",
-      "version": "1.0.0-alpha.2",
+      "version": "1.0.0-alpha.3",
       "dependencies": {
         "@hesperia/postcss": "workspace:*",
         "@tailwindcss/postcss": "4.3.3",
@@ -177,13 +177,13 @@
         "postcss": "8.5.28",
       },
       "peerDependencies": {
-        "@hesperia/tooling": "1.0.0-alpha.2",
+        "@hesperia/tooling": "1.0.0-alpha.3",
         "postcss": "^8.5.16",
       },
     },
     "packages/tooling": {
       "name": "@hesperia/tooling",
-      "version": "1.0.0-alpha.2",
+      "version": "1.0.0-alpha.3",
       "bin": {
         "hesperia": "./dist/cli.js",
       },

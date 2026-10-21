@@ -10,11 +10,11 @@
   },
   "dependencies": {
     "aeolia": "1.0.0-alpha.1",
-    "hesperia": "1.0.0-alpha.2"
+    "hesperia": "1.0.0-alpha.3"
   },
   "devDependencies": {
-    "@hesperia/language-server": "1.0.0-alpha.2",
-    "@hesperia/tooling": "1.0.0-alpha.2",
+    "@hesperia/language-server": "1.0.0-alpha.3",
+    "@hesperia/tooling": "1.0.0-alpha.3",
     "@types/bun": "1.4.2",
     "typescript": "7.0.2"
   }
