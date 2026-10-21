@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, join, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import { buildCoverageWorkerGraph } from "./coverage-worker-build.ts";
 import {
   browserCssCoverageOwnerIds,
@@ -158,6 +159,10 @@ function createBrowserPreloadBootstrap(
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createBrowserCssStartupJournal } from ${JSON.stringify(pathToFileURL(join(repoPath, "tests/browser/fixture-startup-journal.ts")).href)};
+
+const startupJournal = createBrowserCssStartupJournal("preload-bootstrap");
+startupJournal.mark("bootstrap-body-enter");
 
 const originalPath = ${JSON.stringify(prepared.path)};
 const preparedPath = ${JSON.stringify(instrumentedPath)};
@@ -183,7 +188,10 @@ Bun.plugin({
     });
   },
 });
+startupJournal.mark("authored-preload-import-begin");
 await import(pathToFileURL(originalPath).href);
+startupJournal.mark("authored-preload-import-end");
+startupJournal.finish();
 `,
     { flag: "wx" },
   );

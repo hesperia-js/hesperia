@@ -8,8 +8,15 @@ import {
   createBrowserCssCoverageBuildPlugin,
   withBrowserCssCoverageFixtureBuild,
 } from "../../scripts/ci/browser-css-coverage-preload.ts";
+import { createBrowserCssStartupJournal } from "./fixture-startup-journal.ts";
+
+const startupJournal = createBrowserCssStartupJournal("fixture-server");
+
+startupJournal.mark("fixture-body-enter");
 
 const browserCoverageBuildPlugin = createBrowserCssCoverageBuildPlugin();
+
+startupJournal.mark("initial-build-begin");
 
 const built = await Bun.build({
   entrypoints: [
@@ -55,6 +62,8 @@ const built = await Bun.build({
     ...(browserCoverageBuildPlugin ? [browserCoverageBuildPlugin] : []),
   ],
 });
+
+startupJournal.mark("initial-build-end", { success: built.success, outputs: built.outputs.length });
 
 if (!built.success) throw new AggregateError(built.logs, "Browser fixture compilation failed");
 
@@ -127,9 +136,14 @@ if (
   throw new Error("The browser fixture build produced no entry point");
 
 const importedMarkupRoot = resolve(import.meta.dir, "fixtures/imported-markup");
+
+startupJournal.mark("markup-prepare-begin");
+
 const importedMarkupBuild = await withBrowserCssCoverageFixtureBuild(importedMarkupRoot, () =>
   prepareBuild(importedMarkupRoot),
 );
+
+startupJournal.mark("markup-prepare-end");
 const importedMarkupFiles = new Map(
   importedMarkupBuild.hosting.assets.map((asset) => {
     const file = importedMarkupBuild.files.get(asset.path);
@@ -139,15 +153,23 @@ const importedMarkupFiles = new Map(
     return [asset.path, file] as const;
   }),
 );
+startupJournal.mark("host-create-begin");
+
 const importedMarkupHost = await createHost({
   hosting: importedMarkupBuild.hosting,
   files: importedMarkupFiles,
 });
 
+startupJournal.mark("host-create-end");
+
 const browserPort = Number.parseInt(process.env.HESPERIA_BROWSER_PORT ?? "4178", 10);
 
 if (!Number.isInteger(browserPort) || browserPort < 1 || browserPort > 65535)
   throw new Error("HESPERIA_BROWSER_PORT must be a valid TCP port");
+
+let startupHealthRecorded = false;
+
+startupJournal.mark("serve-begin");
 
 Bun.serve({
   hostname: "127.0.0.1",
@@ -157,7 +179,16 @@ Bun.serve({
     const url = new URL(request.url);
     const path = url.pathname;
 
-    if (path === "/health") return new Response("ready");
+    if (path === "/health") {
+      if (!startupHealthRecorded) {
+        startupHealthRecorded = true;
+
+        startupJournal.mark("first-health-request", { method: request.method });
+        startupJournal.finish();
+      }
+
+      return new Response("ready");
+    }
 
     if (path === "/__coverage/browser-css-page") {
       if (!browserCssCoverageEnabled) return new Response("Not found", { status: 404 });
@@ -397,3 +428,5 @@ Bun.serve({
     );
   },
 });
+
+startupJournal.mark("serve-return");

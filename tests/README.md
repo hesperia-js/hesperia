@@ -117,6 +117,29 @@ screenshot, and trace when capture completes. Synchronous process journals start
 before browser launch and remain active through cleanup, so an outer test timeout
 can leave useful checkpoints even when final capture never runs.
 
+The development-deletion cases also keep a persistent directory named
+`development-deletion-*` under that diagnostics root, outside their removed
+application fixture. The driver records phase begin, completion, and failure
+around the original click, style, removal, identity, and counter checks. Before
+navigation, a private recorder observes actual pointer and click targets, counter
+node identities and mutations, fixture events, native navigation events, and
+errors. A MessageChannel task observes the clicked node and current counters in
+a later task; a capture-listener microtask can run before the click handler.
+These observations do not expose the framework owner lifecycle or prove why a
+counter did not increment.
+
+The browser recorder admits at most 500 records per document, including reserved
+cap and capture-error records. Text, node lists, mutation batches, payloads, and
+pending tasks have separate bounds. The Node receiver limits the whole case to
+1,200 browser records and 512,000 payload bytes, with a 6,000-byte record limit,
+and writes accepted records to the existing process journal rather than stdout.
+Capture-ready, setup, cap, and transport errors are distinct. Missing or truncated
+records remain missing evidence. Mutation callbacks batch changes and sample node
+state when delivered; they do not record every intermediate write. Node and
+browser timestamps use separate clocks. Listener work, task scheduling, console
+delivery, tracing, and synchronous journal writes can change timing and hide a
+race. A passing instrumented case is a nonreproduction, not a product fix.
+
 The route-table driver also records browser-native document timing at init,
 DOMContentLoaded, and load, with a separate Node receipt timestamp. It matches the
 exact `/dashboard/` navigation entry even if the page changes its history URL.
@@ -426,6 +449,31 @@ Each run keeps its records, coverage artifacts, and merged `lcov.info` under
 `.hesperia/coverage/browser-css-runs/<runId>/`. The command prints that directory
 and the LCOV path. Files with no recorded hits remain in the measured source
 population.
+
+During this capture, the generated coverage preload and fixture server write a
+startup journal to stderr with the `[browser-css-startup]` prefix and to
+`.hesperia/browser-diagnostics/browser-css-startup/<runId>/`. It records the
+authored preload import, initial fixture build, imported-markup preparation,
+host creation, server return, and first health request. Each role records its
+PID, sequence, and monotonic timestamps. The fixture closes its journal after
+the first health request; a missing later phase or final record remains partial
+evidence, including when the existing 30-second readiness deadline kills it.
+
+Each role is limited to 32 records, 32 KiB, and 1 KiB per line, including the
+stderr prefix. Cap and sink errors use reserved records when a sink survives.
+A failed sink cannot change the original startup result. A partial write can
+leave a truncated last line in that sink; the other sink may retain its error.
+Failed coverage-group artifacts retain this diagnostics directory and the
+actual group stderr. Successful runs may show the prefix in the job log, but
+the workflow does not upload successful startup journals.
+
+The journal begins after its helper's static imports. The fixture's first body
+record also follows the fixture's static imports, so those earlier parse,
+linking, and import gaps remain unobserved. Synchronous writes can affect
+timing. The records identify the last observed startup boundary; they do not
+establish the cause of a timeout. This test support stays outside the existing
+executable coverage-source population; the coverage runner keeps its existing
+source ownership and admission checks.
 
 This capture runs separately from the ordinary coverage and browser commands.
 Its selected scenarios verify this capture path only; complete browser, editor,
