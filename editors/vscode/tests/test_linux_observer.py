@@ -1307,7 +1307,17 @@ sys.stdin.buffer.read(1)
             with self.subTest(authority=authority):
                 self.check_failure_cleanup_late_child(authority)
 
-    def check_failure_cleanup_late_child(self, authority: str) -> None:
+    def test_failure_cleanup_reconciles_terminal_trace_after_supervisor_exits(self) -> None:
+        for boundary in (
+            "after-scan", "after-attachment", "detached-live-child", "missing-thread-terminal",
+            "pending-trace", "changed-exited-tracer", "changed-recorded-parent", "changed-invocation",
+            "changed-trace-prefix", "changed-trace-filter", "tracer-ready-before-terminal",
+            "completed-exec-after-terminal", "nonmonotonic-record", "unterminated-tail",
+        ):
+            with self.subTest(boundary=boundary):
+                self.check_failure_cleanup_late_child("retained-tracer", boundary=boundary)
+
+    def check_failure_cleanup_late_child(self, authority: str, *, boundary: str | None = None) -> None:
         strace = shutil.which("strace")
 
         self.assertIsNotNone(strace, "the Linux observer owner requires the prepared strace runtime")
@@ -1330,6 +1340,13 @@ if os.fork() == 0:
 else:
     sys.stdin.buffer.read(1)
 '''
+
+        if boundary is not None:
+            child_source = child_source.replace(
+                "    release.wait()\nelse:",
+                "    os.read(int(sys.argv[1]), 1)\n    release.set()\nelse:",
+            )
+
         with tempfile.TemporaryDirectory(prefix="hesperia-late-traced-cleanup-") as temporary:
             directory = pathlib.Path(temporary)
             script = directory / "creator.py"
@@ -1352,6 +1369,7 @@ else:
             pending_popen: dict[int, observer.PendingPopenGeneration] = {}
             startup_diagnostics: list[str] = []
             supervisor_ticks: int | None = None
+            release_read_fd, release_write_fd = os.pipe() if boundary is not None else (None, None)
 
             def receive() -> dict[str, object]:
                 self.assertIsNotNone(supervisor)
@@ -1381,11 +1399,19 @@ else:
                     )
                     supervisor = subprocess.Popen(
                         [strace, "-ff", "-ttt", "-v", "-s", "8192", "-e", "trace=%process",
-                         "-o", str(trace_directory / prefix), "--", sys.executable, "-u", str(script)],
+                         "-o", str(trace_directory / prefix), "--", sys.executable, "-u", str(script),
+                         *([str(release_read_fd)] if release_read_fd is not None else [])],
                         stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
                         stderr=stderr,
+                        pass_fds=(release_read_fd,) if release_read_fd is not None else (),
                     )
+
+                    if release_read_fd is not None:
+                        os.close(release_read_fd)
+
+                        release_read_fd = None
+
                     parent = receive()
                     supervisor_generation = observer.open_popen_generation(
                         supervisor, "strace supervisor", pending_popen, startup_diagnostics,
@@ -1430,7 +1456,16 @@ else:
                     forced: list[int] = []
                     errors: list[dict[str, object]] = []
 
-                    observer.terminate_retained_generation(parent_generation, forced)
+                    if boundary is None:
+                        observer.terminate_retained_generation(parent_generation, forced)
+                    else:
+                        supervisor.stdin.write(b"x")
+
+                        supervisor.stdin.flush()
+
+                        self.assertTrue(select.select([parent_generation.pidfd], [], [], 5)[0])
+
+                        self.assertTrue(parent_generation.check_exit())
 
                     selected_supervisor = supervisor
                     selected_generation = supervisor_generation
@@ -1441,12 +1476,133 @@ else:
                         selected_supervisor = unrelated
                         selected_generation = unrelated_generation
 
-                    remaining = observer.drain_late_traced_generations(
-                        selected_supervisor, selected_generation, generations, pending,
-                        trace_directory, prefix, {}, forced, errors,
-                    )
+                    original_scan = observer.scan_trace
+                    original_open = observer.open_generation
+                    boundary_crossed = False
+
+                    def cross_boundary() -> None:
+                        nonlocal boundary_crossed
+
+                        self.assertFalse(supervisor_generation.check_exit())
+
+                        boundary_crossed = True
+
+                        if boundary == "detached-live-child":
+                            supervisor.terminate()
+                        else:
+                            os.write(release_write_fd, b"x")
+
+                        supervisor.wait(timeout=5)
+
+                        self.assertTrue(supervisor_generation.check_exit())
+
+                        if boundary == "detached-live-child":
+                            self.assertFalse(observer.pidfd_ready(child_fd))
+                        else:
+                            self.assertEqual(supervisor.returncode, 0)
+
+                            self.assertTrue(observer.pidfd_ready(child_fd))
+
+                        if boundary == "missing-thread-terminal":
+                            path = trace_directory / f"{prefix}.{child_tid}"
+                            lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+                            path.write_text("".join(line for line in lines if "+++ exited with" not in line), encoding="utf-8")
+                        elif boundary == "pending-trace":
+                            with (trace_directory / f"{prefix}.{child_pid}").open("a", encoding="utf-8") as trace_file:
+                                trace_file.write(f'{time.time():.6f} execve("/unknown", ["/unknown"], 0x0 <unfinished ...>\n')
+                        elif boundary == "completed-exec-after-terminal":
+                            with (trace_directory / f"{prefix}.{child_pid}").open("a", encoding="utf-8") as trace_file:
+                                trace_file.write(
+                                    f'{time.time():.6f} execve({json.dumps(sys.executable)}, '
+                                    f'{json.dumps([sys.executable, "-c", "pass"])}, 0x0) = 0\n'
+                                )
+                        elif boundary == "nonmonotonic-record":
+                            path = trace_directory / f"{prefix}.{child_pid}"
+                            lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+                            lines.insert(-1, f"1.000000 getpid() = {child_pid}\n")
+
+                            path.write_text("".join(lines), encoding="utf-8")
+                        elif boundary == "unterminated-tail":
+                            with (trace_directory / f"{prefix}.{child_pid}").open("a", encoding="utf-8") as trace_file:
+                                trace_file.write("incomplete trailing record")
+                        elif boundary == "changed-exited-tracer":
+                            supervisor_generation.start_ticks += 1
+                        elif boundary == "changed-recorded-parent":
+                            supervisor_generation.ppid += 1
+                        elif boundary == "changed-invocation":
+                            supervisor.args = [*supervisor.args, "--foreign"]
+                        elif boundary in ("changed-trace-prefix", "changed-trace-filter"):
+                            argv = list(supervisor_generation.current_proc["argv"])
+                            option = "-o" if boundary == "changed-trace-prefix" else "-e"
+                            argv[argv.index(option) + 1] = str(directory / "foreign-trace") if option == "-o" else "trace=none"
+                            supervisor.args = argv
+                            supervisor_generation.current_proc["argv"] = argv
+                        elif boundary == "tracer-ready-before-terminal":
+                            supervisor_generation.ready_at = supervisor_generation.attached_at
+
+                    def scan_at_boundary(*args: object, **kwargs: object):
+                        trace = original_scan(*args, **kwargs)
+
+                        if boundary is not None and boundary != "after-attachment" and not boundary_crossed:
+                            self.assertIn(child_pid, trace["files"])
+
+                            self.assertNotIn(child_pid, trace["exits"])
+
+                            cross_boundary()
+
+                        return trace
+
+                    def open_at_boundary(*args: object, **kwargs: object):
+                        generation = original_open(*args, **kwargs)
+
+                        if boundary == "after-attachment" and not boundary_crossed and args[0] == child_pid:
+                            self.assertIsNotNone(generation)
+
+                            cross_boundary()
+
+                        return generation
+
+                    with mock.patch.object(observer, "scan_trace", side_effect=scan_at_boundary), mock.patch.object(
+                        observer, "open_generation", side_effect=open_at_boundary
+                    ):
+                        remaining = observer.drain_late_traced_generations(
+                            selected_supervisor, selected_generation, generations, pending,
+                            trace_directory, prefix, {}, forced, errors,
+                        )
 
                     self.assertFalse(unrelated_generation.check_exit())
+
+                    if boundary is not None:
+                        self.assertTrue(boundary_crossed)
+
+                        self.assertNotIn(child_pid, forced)
+
+                        self.assertNotIn(child_tid, forced)
+
+                        final = original_scan(trace_directory, prefix)
+
+                        if boundary not in ("detached-live-child", "missing-thread-terminal", "pending-trace"):
+                            closure = observer.raw_process_group_if_complete(child_pid, final, {})
+
+                            self.assertIsNotNone(closure)
+
+                            self.assertEqual(closure[0], {child_pid, child_tid})
+
+                        if boundary in ("after-scan", "after-attachment"):
+                            self.assertEqual(errors, [])
+
+                            self.assertTrue(observer.pidfd_ready(child_fd))
+                        else:
+                            self.assertTrue(errors)
+
+                            if boundary == "changed-exited-tracer":
+                                self.assertNotEqual(supervisor_generation.start_ticks, supervisor_ticks)
+                            elif boundary in ("detached-live-child", "missing-thread-terminal", "pending-trace"):
+                                self.assertIsNone(observer.raw_process_group_if_complete(child_pid, final, {}))
+
+                        return
 
                     if authority != "retained-tracer":
                         expected_error = (
@@ -1484,6 +1640,10 @@ else:
 
                     self.assertTrue(all(item["bytes"] > 0 for item in manifest))
                 finally:
+                    for descriptor in (release_read_fd, release_write_fd):
+                        if descriptor is not None:
+                            os.close(descriptor)
+
                     if supervisor_generation is not None and supervisor_ticks is not None:
                         supervisor_generation.start_ticks = supervisor_ticks
 

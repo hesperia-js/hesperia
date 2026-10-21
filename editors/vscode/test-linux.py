@@ -39,6 +39,10 @@ class CaptureError(RuntimeError):
     pass
 
 
+class ExitedTraceSupervisor(CaptureError):
+    pass
+
+
 class IncompleteProcArgv(CaptureError):
     def __init__(self, pid: int, stage: str, proc: dict[str, Any], detail: str):
         super().__init__(detail)
@@ -2265,6 +2269,39 @@ def raw_trace_tid_birth_ns(tid: int, trace: dict[str, Any]) -> int:
     raise CaptureError(f"Raw parent TID {tid} has an empty trace")
 
 
+def validate_raw_tid_terminal(tid: int, trace: dict[str, Any]) -> int:
+    path = trace["files"][tid]
+    lines = raw_lines(path)
+
+    if not lines:
+        raise CaptureError(f"Raw TID {tid} has an empty trace file")
+
+    previous_ns: int | None = None
+    terminal_indexes: list[int] = []
+
+    for index, raw in enumerate(lines):
+        line = raw.decode("utf-8", errors="strict").rstrip("\r\n")
+        current_ns = trace_time_ns(line)
+
+        if previous_ns is not None and current_ns < previous_ns:
+            raise CaptureError(f"Raw TID {tid} has nonmonotonic trace timestamps")
+
+        previous_ns = current_ns
+
+        if EXIT_RE.search(line) or SIGNAL_RE.search(line):
+            terminal_indexes.append(index)
+
+    if terminal_indexes != [len(lines) - 1]:
+        raise CaptureError(f"Raw TID {tid} has records after or multiple terminal trace records")
+
+    terminal_ns = trace_time_ns(lines[-1].decode("utf-8", errors="strict").rstrip("\r\n"))
+
+    if raw_trace_tid_birth_ns(tid, trace) >= terminal_ns:
+        raise CaptureError(f"Raw TID {tid} terminal precedes its independently traced birth")
+
+    return terminal_ns
+
+
 def validate_complete_raw_process_tree(trace: dict[str, Any]) -> int:
     cached_root = trace.get("_rawOnlyCreatorTreeRoot")
 
@@ -2301,33 +2338,7 @@ def validate_complete_raw_process_tree(trace: dict[str, Any]) -> int:
         if edges and edges[0]["parentTid"] not in files:
             raise CaptureError(f"Raw TID {tid} has an untraced creator TID")
 
-        lines = raw_lines(path)
-
-        if not lines:
-            raise CaptureError(f"Raw TID {tid} has an empty trace file")
-
-        previous_ns: int | None = None
-        terminal_indexes: list[int] = []
-
-        for index, raw in enumerate(lines):
-            line = raw.decode("utf-8", errors="strict").rstrip("\r\n")
-            current_ns = trace_time_ns(line)
-
-            if previous_ns is not None and current_ns < previous_ns:
-                raise CaptureError(f"Raw TID {tid} has nonmonotonic trace timestamps")
-
-            previous_ns = current_ns
-
-            if EXIT_RE.search(line) or SIGNAL_RE.search(line):
-                terminal_indexes.append(index)
-
-        if terminal_indexes != [len(lines) - 1]:
-            raise CaptureError(f"Raw TID {tid} has records after or multiple terminal trace records")
-
-        terminal_ns = trace_time_ns(lines[-1].decode("utf-8", errors="strict").rstrip("\r\n"))
-
-        if raw_trace_tid_birth_ns(tid, trace) >= terminal_ns:
-            raise CaptureError(f"Raw TID {tid} terminal precedes its independently traced birth")
+        validate_raw_tid_terminal(tid, trace)
 
         raw_trace_tgid(tid, trace)
 
@@ -4025,7 +4036,7 @@ def signal_retained_process(process: subprocess.Popen[bytes], generation: Genera
 
 def late_traced_kernel_identity(pid: int, supervisor_generation: Generation) -> dict[str, int | str]:
     if supervisor_generation.check_exit():
-        raise CaptureError("Late traced process has no live retained tracer")
+        raise ExitedTraceSupervisor("Late traced process has no live retained tracer")
 
     tracer = read_proc_kernel_identity(supervisor_generation.pid, "late traced process supervisor")
 
@@ -4133,6 +4144,69 @@ def drain_late_traced_generations(
 
         return True
 
+    def closed_after_supervisor_exit(pid: int) -> bool:
+        if not supervisor_generation.check_exit() or supervisor.poll() != 0:
+            return False
+
+        sample = supervisor_generation._complete_sample()
+
+        if sample is None or not isinstance(supervisor.args, (list, tuple)):
+            return False
+
+        proc, _, finished_ns = sample
+
+        validate_retained_generation(
+            proc, supervisor.pid, supervisor_generation.start_ticks, "exited late process supervisor"
+        )
+
+        argv = proc["argv"]
+
+        if (
+            proc["ppid"] != supervisor_generation.ppid
+            or argv != [os.fsdecode(argument) for argument in supervisor.args]
+            or not argv
+            or proc["executablePath"] != os.path.realpath(argv[0])
+            or "--" not in argv
+        ):
+            return False
+
+        options = argv[1:argv.index("--")]
+
+        if (
+            "-ff" not in options
+            or "-ttt" not in options
+            or options.count("-e") != 1
+            or options.index("-e") + 1 >= len(options)
+            or options[options.index("-e") + 1] != "trace=%process"
+            or options.count("-o") != 1
+            or options.index("-o") + 1 >= len(options)
+            or os.path.realpath(options[options.index("-o") + 1]) != os.path.realpath(trace_directory / prefix)
+        ):
+            return False
+
+        final = scan_trace(trace_directory, prefix, final=True)
+        closure = raw_process_group_if_complete(pid, final, tid_groups)
+        ready_at = supervisor_generation.ready_at
+
+        if (
+            creator_for(pid, final) is None
+            or closure is None
+            or ready_at is None
+            or finished_ns > utc_time_ns(ready_at)
+            or closure[1] > utc_time_ns(ready_at)
+        ):
+            return False
+
+        for tid in closure[0]:
+            if not final["files"][tid].read_bytes().endswith(b"\n"):
+                return False
+
+            validate_raw_tid_terminal(tid, final)
+
+        attachment = generations.get(pid) or pending_trace_generations.get(pid)
+
+        return attachment is None or pidfd_ready(attachment.pidfd)
+
     while time.monotonic() < deadline and not supervisor_generation.check_exit():
         try:
             trace = scan_trace(trace_directory, prefix)
@@ -4204,6 +4278,18 @@ def drain_late_traced_generations(
                         raise CaptureError(f"Late pending process {pid} remained live after retained pidfd cleanup")
             except (FileNotFoundError, ProcessLookupError):
                 continue
+            except ExitedTraceSupervisor as cleanup_error:
+                try:
+                    # The snapshot may precede the last tracee's exit while cleanup
+                    # of another child lets strace finish. Reconcile without signaling.
+                    if closed_after_supervisor_exit(pid):
+                        continue
+                except BaseException as terminal_error:
+                    cleanup_error = CaptureError(f"{cleanup_error}; terminal trace verification failed: {terminal_error}")
+
+                rejected.add(pid)
+
+                cleanup_errors.append({"pid": pid, "error": f"Late traced process cleanup refused: {cleanup_error}"})
             except BaseException as cleanup_error:
                 rejected.add(pid)
 
