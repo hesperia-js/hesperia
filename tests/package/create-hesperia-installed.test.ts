@@ -344,7 +344,7 @@ test("packed creator defaults to Elysia and builds a selectable no-host applicat
       await readFile(join(interactiveApplication, "package.json"), "utf8"),
     ) as { dependencies: Record<string, string> };
 
-    expect(interactiveManifest.dependencies["@hesperia/hosting"]).toBe("1.0.0-alpha.2");
+    expect(interactiveManifest.dependencies["@hesperia/hosting"]).toBe("1.0.0-alpha.3");
 
     expect(interactiveManifest.dependencies["@elysia/eden"]).toBe("1.4.10");
 
@@ -404,9 +404,9 @@ test("packed creator defaults to Elysia and builds a selectable no-host applicat
       languageServerWorkspaceManifest.version,
     );
 
-    expect(appManifest.dependencies["@hesperia/hosting"]).toBe("1.0.0-alpha.2");
+    expect(appManifest.dependencies["@hesperia/hosting"]).toBe("1.0.0-alpha.3");
 
-    expect(appManifest.dependencies["@hesperia/elysia"]).toBe("1.0.0-alpha.2");
+    expect(appManifest.dependencies["@hesperia/elysia"]).toBe("1.0.0-alpha.3");
 
     expect(appManifest.dependencies.elysia).toBe("1.4.30");
 

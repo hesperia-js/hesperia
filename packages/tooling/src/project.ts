@@ -3008,9 +3008,9 @@ export async function initProject(destination: string): Promise<void> {
             preview: "hesperia preview",
             check: "hesperia check",
           },
-          dependencies: { hesperia: "1.0.0-alpha.2", aeolia: "1.0.0-alpha.1" },
+          dependencies: { hesperia: "1.0.0-alpha.3", aeolia: "1.0.0-alpha.1" },
           devDependencies: {
-            "@hesperia/tooling": "1.0.0-alpha.2",
+            "@hesperia/tooling": "1.0.0-alpha.3",
             typescript: "7.0.2",
             "@types/bun": "1.4.2",
           },
