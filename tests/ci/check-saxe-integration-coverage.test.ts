@@ -141,7 +141,10 @@ function createHitCoverage(
   return result;
 }
 
-async function createCaptureFixture(requestedHits: number): Promise<CaptureFixture> {
+async function createCaptureFixture(
+  requestedHits: number,
+  indexSource = "export {};\n",
+): Promise<CaptureFixture> {
   const root = await mkdtemp(join(tmpdir(), "hesperia-saxe-integration-coverage-"));
 
   roots.push(root);
@@ -166,7 +169,7 @@ async function createCaptureFixture(requestedHits: number): Promise<CaptureFixtu
 
   for (const source of closureSaxeFiles) {
     if (source.endsWith("/index.ts")) {
-      await writeFixtureFile(root, source, "export {};\n");
+      await writeFixtureFile(root, source, indexSource);
 
       continue;
     }
@@ -313,7 +316,7 @@ async function writeInputs(
 }
 
 test("counts zero-hit supported lines and keeps the full six-file closure", async () => {
-  const fixture = await createCaptureFixture(7);
+  const fixture = await createCaptureFixture(7, "export const indexValue = 1;\n");
 
   const report = await checkSaxeIntegrationCoverage(checkerOptions(fixture));
 
@@ -357,15 +360,17 @@ test("counts zero-hit supported lines and keeps the full six-file closure", asyn
 
   expect(report.fullSixClosure.files.map((file) => file.path)).toStrictEqual([...closureSaxeFiles]);
 
-  expect(report.fullSixClosure.totals.lineFound).toBe(10);
+  expect(report.fullSixClosure.totals.lineFound).toBe(11);
 
   expect(report.fullSixClosure.totals.lineHit).toBe(7);
 
+  expect(report.fullSixClosure.totals.linePercent).toBeCloseTo(63.63636363636363);
+
   expect(report.fullSixClosure.files.at(-1)?.lines).toStrictEqual({
     hit: 0,
-    found: 0,
-    percent: null,
-    uncovered: [],
+    found: 1,
+    percent: 0,
+    uncovered: [1],
   });
 
   expect(report.fullSixClosure.files.at(-1)?.functions.percent).toBeNull();
@@ -391,6 +396,13 @@ test("enforces the 70 percent floor and leaves the 90 percent aim diagnostic", a
   expect(report.supportedFive.straightforwardAimMet).toBe(false);
 
   expect(report.status).toBe("below-floor");
+
+  expect(report.fullSixClosure.files.at(-1)?.lines).toStrictEqual({
+    hit: 0,
+    found: 0,
+    percent: null,
+    uncovered: [],
+  });
 });
 
 test("rejects stale candidates and non-integration evidence", async () => {
