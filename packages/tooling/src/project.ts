@@ -24,6 +24,8 @@ import {
   compileProjectModules,
   runtimeKeyRegistry,
   scanRouteFiles,
+  requestTypingEvidenceCapture,
+  registerMappedProjectCompilation,
   type CompilerDiagnostic,
   type VirtualModule,
   type ProjectCompilation,
@@ -1982,18 +1984,20 @@ async function configuredCompilation(
 
   pinBrowserResolution(sources, root, resolution, declaredIds);
 
+  const checkingOptions = {
+    root,
+    ...configuration,
+    documentShell: true,
+    browserTarget: false,
+    resolution,
+    resolutionOverrides: configuration.resolutionOverrides,
+    additionalFiles: retainedAdditionalFiles,
+    checkingRoots,
+  };
+  if (development) requestTypingEvidenceCapture(checkingOptions);
   const session = await openCheckingProject(
     [...sources].map(([filename, source]) => ({ filename, source })),
-    {
-      root,
-      ...configuration,
-      documentShell: true,
-      browserTarget: false,
-      resolution,
-      resolutionOverrides: configuration.resolutionOverrides,
-      additionalFiles: retainedAdditionalFiles,
-      checkingRoots,
-    },
+    checkingOptions,
   );
 
   try {
@@ -2783,7 +2787,7 @@ function mapPluginCompilation(
       ] as const;
     }),
   );
-  return {
+  const mappedCompilation = {
     checking: {
       ...compilation.checking,
       modules: checked,
@@ -2791,6 +2795,8 @@ function mapPluginCompilation(
     },
     modules,
   };
+  registerMappedProjectCompilation(compilation, mappedCompilation);
+  return mappedCompilation;
 }
 
 interface MappedPluginDiagnostic extends CompilerDiagnostic {
