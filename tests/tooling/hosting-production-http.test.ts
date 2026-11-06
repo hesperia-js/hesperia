@@ -1002,3 +1002,91 @@ async function verifyDevelopmentPublicFiles(format: ConfigurationFormat): Promis
 test("development updates public files through worker and in-process builds", async () => {
   for (const format of ["typescript", "json"] as const) await verifyDevelopmentPublicFiles(format);
 }, 180_000);
+
+async function verifyDevelopmentLinkedTarget(format: ConfigurationFormat): Promise<void> {
+  const root = await createProjectRoot(`hesperia-q10-target-${format}-`, format);
+  const publicRoot = join(root, "public");
+  const firstTarget = join(root, "linked-source");
+  const nextTarget = join(root, "linked-replacement");
+  const removedTarget = join(root, "linked-replacement-away");
+  const alias = join(publicRoot, "linked");
+  const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
+  const first = new TextEncoder().encode("first-target");
+  const updated = new TextEncoder().encode("updated-first-target");
+  const replacement = new TextEncoder().encode("replacement-target");
+  const restored = new TextEncoder().encode("restored-target");
+  const reports: string[] = [];
+  let linked = false;
+  let server: ProjectServer | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let deadline: ReturnType<typeof createDeadline> | undefined;
+
+  await withFixtureCleanup(async () => {
+    await mkdir(publicRoot);
+    await mkdir(firstTarget);
+    await mkdir(nextTarget);
+    await writeFile(join(firstTarget, "live.bin"), first);
+    await writeFile(join(nextTarget, "live.bin"), replacement);
+    await symlink(firstTarget, alias, directoryLinkType);
+    linked = true;
+
+    server = await devProject(root, { port: 0, report: (message) => reports.push(message) });
+    deadline = createDeadline(150_000);
+    const signal = deadline.signal;
+    const linkedURL = new URL("/linked/live.bin", server.url);
+    const initial = await fetch(linkedURL, { signal });
+
+    expect(initial.status).toBe(200);
+    expect([...new Uint8Array(await initial.arrayBuffer())]).toStrictEqual([...first]);
+
+    const events = await fetch(new URL("/_hesperia/events", server.url), { signal });
+    expect(events.status).toBe(200);
+    reader = events.body!.getReader();
+    const nextEvent = nextDevelopmentEvent(reader, signal);
+    await nextEvent();
+
+    await writeFile(join(firstTarget, "live.bin"), updated);
+    await waitForPublicBytes(nextEvent, linkedURL, updated, signal);
+
+    await unlink(alias);
+    linked = false;
+    await symlink(nextTarget, alias, directoryLinkType);
+    linked = true;
+    await waitForPublicBytes(nextEvent, linkedURL, replacement, signal);
+
+    const reportsBeforeFailure = reports.length;
+    await rename(nextTarget, removedTarget);
+
+    for (;;) {
+      const event = await nextEvent();
+      const failure = reports.slice(reportsBeforeFailure).find((message) => {
+        const normalized = message.replaceAll("\\", "/");
+
+        return (
+          normalized.includes("public source could not be resolved (broken or cyclic link)") &&
+          normalized.includes(alias.replaceAll("\\", "/")) &&
+          event.includes(JSON.stringify(message))
+        );
+      });
+
+      if (failure !== undefined) break;
+    }
+
+    const lastGood = await fetch(linkedURL, { signal });
+    expect(lastGood.status).toBe(200);
+    expect([...new Uint8Array(await lastGood.arrayBuffer())]).toStrictEqual([...replacement]);
+
+    await writeFile(join(removedTarget, "live.bin"), restored);
+    await rename(removedTarget, nextTarget);
+    await waitForPublicBytes(nextEvent, linkedURL, restored, signal);
+  }, [
+    () => deadline?.close(),
+    () => reader?.cancel(),
+    () => server?.close(),
+    () => (linked ? unlink(alias) : undefined),
+  ]);
+}
+
+test("development follows a changed public link target and retains bytes on failure", async () => {
+  for (const format of ["typescript", "json"] as const) await verifyDevelopmentLinkedTarget(format);
+}, 330_000);
