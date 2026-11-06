@@ -355,9 +355,6 @@ function validatePublicFileRecords(files: readonly HostingPublicFileMetadataSnap
         `public file URL path does not match its storage path: ${file.relativePath}`,
       );
 
-    if (file.urlPath === "/_hesperia" || file.urlPath.startsWith("/_hesperia/"))
-      throw new TypeError(`public file path is reserved: ${file.urlPath}`);
-
     if (storagePaths.has(file.relativePath))
       throw new TypeError(`duplicate public file storage path: ${file.relativePath}`);
 

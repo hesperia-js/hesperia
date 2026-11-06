@@ -159,5 +159,5 @@ export function assertCanonicalPublicFilePath(urlPath: string): void {
   if (canonical !== urlPath) throw new TypeError("public file urlPath must already be canonical");
 
   if (urlPath === publicFilesNamespace || urlPath.startsWith(`${publicFilesNamespace}/`))
-    throw new TypeError(`public file urlPath is reserved by ${publicFilesNamespace}`);
+    throw new TypeError(`public file path is reserved: ${urlPath}`);
 }

@@ -423,7 +423,7 @@ describe("createHost", () => {
 
   test("rejects malformed records, mismatched maps, invalid digests and unsafe inventory paths", async () => {
     const badVersion = await fixture();
-    (badVersion.build.hosting as unknown as { version: number }).version = 2;
+    (badVersion.build.hosting as unknown as { version: number }).version = 0;
 
     await expect(createHost(badVersion.build)).rejects.toThrow("version");
 

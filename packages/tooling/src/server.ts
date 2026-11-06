@@ -695,7 +695,7 @@ export async function devProject(
           dirname(entryIdentityPath),
           false,
           { kind: "file", path: entryIdentityPath, identityPath: entryIdentityPath },
-          reportMissing,
+          false,
         );
       }
 
@@ -766,11 +766,10 @@ export async function devProject(
 
         if (canonical !== undefined) {
           if (ancestor === requestedDirectory) nextMissing.delete(requestedDirectory);
-          else {
+          else if (reportMissing) {
             nextMissing.add(requestedDirectory);
 
-            if (reportMissing && !missingDirectories.has(requestedDirectory))
-              newlyMissing.add(requestedDirectory);
+            if (!missingDirectories.has(requestedDirectory)) newlyMissing.add(requestedDirectory);
           }
 
           return;
