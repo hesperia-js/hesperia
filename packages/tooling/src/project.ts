@@ -2,6 +2,7 @@ import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import remapping, { type SourceMapInput } from "@jridgewell/remapping";
 import { parseSync } from "oxc-parser";
@@ -28,8 +29,14 @@ import {
   type ProjectCompilation,
   type CheckingSession,
 } from "@hesperia/compiler/tooling";
-import { createHost, type HostingRecordV1 } from "@hesperia/hosting";
+import {
+  createHost,
+  type HostingPublicFileRecord,
+  type HostingRecordV1,
+  type HostingRecordV2,
+} from "@hesperia/hosting";
 import { canonicalizeMountURL } from "@hesperia/hosting/internal";
+import { capturePublicFiles } from "./public-files.ts";
 import { readConfiguration, type ProjectConfiguration } from "./configuration.ts";
 import { buildRouteGuards, routeFilesFromManifest } from "./route-build.ts";
 import { createRouteTable } from "./route-table.ts";
@@ -78,12 +85,10 @@ export interface ProjectDiagnostic extends CompilerDiagnostic {
   readonly filename: string;
 }
 
-/** Browser artifacts are prepared in memory before a successful build is published. */
-export interface BrowserBuild {
-  /** URL-keyed assets captured before publishing a successful build. */
+/** Metadata shared by supported browser-build record versions. */
+export interface BrowserBuildMetadata {
+  /** Complete build artifact map, including the control record used by writeBuild. */
   readonly files: ReadonlyMap<string, Blob>;
-  /** Validated-host input metadata published with the completed build. */
-  readonly hosting: HostingRecordV1;
   /** Authored sources and native TypeScript checking inputs used for development watching. */
   readonly sources: readonly string[];
   /** Authored diagnostics retained after successful checking and emission. */
@@ -102,6 +107,23 @@ export interface BrowserBuild {
   };
 }
 
+/** Browser build with the unchanged version 1 hosting record. */
+export interface BrowserBuildV1 extends BrowserBuildMetadata {
+  /** Validated-host input metadata published with the completed build. */
+  readonly hosting: HostingRecordV1;
+}
+
+/** Browser build with a separate version 2 public-file inventory and byte map. */
+export interface BrowserBuildV2 extends BrowserBuildMetadata {
+  /** Validated-host input metadata published with the completed build. */
+  readonly hosting: HostingRecordV2;
+  /** Captured public bytes keyed by their canonical app-relative URL path. */
+  readonly publicFiles: ReadonlyMap<string, Blob>;
+}
+
+/** One supported browser build, with the version 2 public map required when present. */
+export type BrowserBuild = BrowserBuildV1 | BrowserBuildV2;
+
 interface GeneratedBrowserSource {
   readonly filename: string;
   readonly source: string;
@@ -113,14 +135,92 @@ interface GeneratedBrowserSource {
 
 /** Refuse a project operation while preserving each compiler diagnostic for display. */
 export class ProjectError extends Error {
+  /** Attempted file and directory inputs retained for failed-build recovery. */
+  readonly watch?: readonly PluginWatch[];
+
   constructor(
     message: string,
     readonly diagnostics: readonly ProjectDiagnostic[] = [],
+    options: ErrorOptions & { readonly watch?: readonly PluginWatch[] } = {},
   ) {
-    super(message);
+    super(message, options);
 
     this.name = "ProjectError";
+    const watch = options.watch;
+
+    if (watch !== undefined) this.watch = snapshotPluginWatches(watch);
   }
+}
+
+function pluginWatchKey(watch: PluginWatch): string {
+  if (watch.kind === "file") return JSON.stringify([watch.kind, resolve(watch.file)]);
+
+  return JSON.stringify([
+    watch.kind,
+    resolve(watch.dir),
+    Object.hasOwn(watch, "glob") ? ["present", watch.glob] : ["absent"],
+  ]);
+}
+
+function snapshotPluginWatches(watches: readonly PluginWatch[]): readonly PluginWatch[] {
+  return Object.freeze(watches.map(snapshotPluginWatch));
+}
+
+function snapshotPluginWatch(watch: PluginWatch): PluginWatch {
+  if (watch.kind === "file") return Object.freeze({ kind: "file", file: watch.file });
+
+  return Object.freeze({
+    kind: "directory",
+    dir: watch.dir,
+    ...(Object.hasOwn(watch, "glob") ? { glob: watch.glob } : {}),
+  });
+}
+
+function createPluginWatchAccumulator() {
+  const watches: PluginWatch[] = [];
+  const keys = new Set<string>();
+
+  return {
+    watches,
+
+    report(watch: PluginWatch): void {
+      const snapshot = snapshotPluginWatch(watch);
+      const key = pluginWatchKey(snapshot);
+
+      if (keys.has(key)) return;
+
+      keys.add(key);
+      watches.push(snapshot);
+    },
+
+    snapshot(): readonly PluginWatch[] {
+      return snapshotPluginWatches(watches);
+    },
+  };
+}
+
+function mergePluginWatches(...groups: (readonly PluginWatch[])[]): readonly PluginWatch[] {
+  const accumulator = createPluginWatchAccumulator();
+
+  for (const group of groups) {
+    for (const watch of group) accumulator.report(watch);
+  }
+
+  return accumulator.snapshot();
+}
+
+function projectErrorWithWatches(error: unknown, watches: readonly PluginWatch[]): ProjectError {
+  if (error instanceof ProjectError) {
+    return new ProjectError(error.message, error.diagnostics, {
+      cause: error,
+      watch: watches,
+    });
+  }
+
+  return new ProjectError(error instanceof Error ? error.message : String(error), [], {
+    cause: error,
+    watch: watches,
+  });
 }
 
 /** Read the root app shell and source modules once for a shared checking/build snapshot. */
@@ -409,6 +509,22 @@ export async function prepareBuild(root: string, development = false): Promise<B
 
 /** Project-root worker entry; plugin closures never cross this boundary. */
 export async function prepareBuildLocal(root: string, development = false): Promise<BrowserBuild> {
+  const publicWatches = createPluginWatchAccumulator();
+
+  try {
+    return await prepareBuildLocalAttempt(root, development, publicWatches);
+  } catch (error) {
+    if (publicWatches.watches.length === 0) throw error;
+
+    throw projectErrorWithWatches(error, publicWatches.watches);
+  }
+}
+
+async function prepareBuildLocalAttempt(
+  root: string,
+  development: boolean,
+  publicWatches: ReturnType<typeof createPluginWatchAccumulator>,
+): Promise<BrowserBuild> {
   root = resolve(root);
 
   if (!development) await cleanUnpublishedCaptures(root);
@@ -469,6 +585,7 @@ export async function prepareBuildLocal(root: string, development = false): Prom
     routeRoot,
     [...sources.keys()].filter((path) => path.startsWith(`${routeRoot}${sep}`)),
   );
+  const publicCapture = await capturePublicFiles(root, manifest, publicWatches.report);
   const routeDeclarations = new Set<string>();
   const pendingRoutes = [manifest.root];
 
@@ -1057,29 +1174,41 @@ export async function prepareBuildLocal(root: string, development = false): Prom
     );
   }
 
-  const hosting: HostingRecordV1 = Object.freeze({
-    version: 1,
-    mode: development ? "development" : "production",
-    standaloneMountURL: configuration.mountURL,
-    startupAsset: outputPath(entry.path),
-    assets: Object.freeze(
-      await Promise.all(
-        [...files]
-          .filter(([path]) => path.startsWith("/assets/"))
-          .sort(([left], [right]) => left.localeCompare(right))
-          .map(async ([path, blob]) => ({
-            path,
-            sha256: new Bun.CryptoHasher("sha256")
-              .update(new Uint8Array(await blob.arrayBuffer()))
-              .digest("hex"),
-            contentType:
-              (configured?.bundledCss
-                ? nativeCssResponseType(configured.bundledCss.files, path)
-                : undefined) ?? assetContentType(path, blob.type),
-          })),
-      ),
+  const assets = Object.freeze(
+    await Promise.all(
+      [...files]
+        .filter(([path]) => path.startsWith("/assets/"))
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(async ([path, blob]) => ({
+          path,
+          sha256: new Bun.CryptoHasher("sha256")
+            .update(new Uint8Array(await blob.arrayBuffer()))
+            .digest("hex"),
+          contentType:
+            (configured?.bundledCss
+              ? nativeCssResponseType(configured.bundledCss.files, path)
+              : undefined) ?? assetContentType(path, blob.type),
+        })),
     ),
-  });
+  );
+  const hosting = publicCapture.records.length
+    ? (Object.freeze({
+        version: 2 as const,
+        mode: development ? "development" : "production",
+        standaloneMountURL: configuration.mountURL,
+        startupAsset: outputPath(entry.path),
+        assets,
+        publicFiles: Object.freeze(
+          publicCapture.records.map((record) => Object.freeze({ ...record })),
+        ),
+      }) satisfies HostingRecordV2)
+    : (Object.freeze({
+        version: 1 as const,
+        mode: development ? "development" : "production",
+        standaloneMountURL: configuration.mountURL,
+        startupAsset: outputPath(entry.path),
+        assets,
+      }) satisfies HostingRecordV1);
   const checkingInputs = [...compilation.checking.checkingInputs].sort((left, right) =>
     left.filename.localeCompare(right.filename),
   );
@@ -1297,9 +1426,8 @@ export async function prepareBuildLocal(root: string, development = false): Prom
     developmentDependencies = { shared, routes, assets };
   }
 
-  return {
+  const buildMetadata: BrowserBuildMetadata = {
     files,
-    hosting,
     sources: Object.freeze([
       ...sources.keys(),
       ...checkingInputs.map((item) => item.filename),
@@ -1311,8 +1439,15 @@ export async function prepareBuildLocal(root: string, development = false): Prom
     diagnostics,
     ...(styleRevision ? { styleRevision } : {}),
     ...(developmentDependencies ? { developmentDependencies } : {}),
-    ...(configured ? { styles, watch: configured.pipeline.watch } : {}),
+    ...(configured ? { styles } : {}),
+    ...(configured || publicWatches.watches.length > 0
+      ? { watch: mergePluginWatches(configured?.pipeline.watch ?? [], publicWatches.watches) }
+      : {}),
   };
+
+  if (hosting.version === 2) return { ...buildMetadata, hosting, publicFiles: publicCapture.files };
+
+  return { ...buildMetadata, hosting };
 }
 
 function styleSemanticKey(
@@ -1482,9 +1617,47 @@ function samePath(first: string, second: string, root?: string): boolean {
  */
 export async function writeBuild(root: string, build: BrowserBuild): Promise<string> {
   const output = resolve(root, ".hesperia/build");
-  const record = build.files.get("/hesperia-build.json");
+  const snapshot =
+    "publicFiles" in build
+      ? {
+          version: 2 as const,
+          hosting: snapshotHosting(build.hosting),
+          files: snapshotBlobMap(build.files),
+          publicFiles: snapshotBlobMap(build.publicFiles),
+        }
+      : {
+          version: 1 as const,
+          hosting: snapshotHosting(build.hosting),
+          files: snapshotBlobMap(build.files),
+        };
+  const record = snapshot.files.get("/hesperia-build.json");
 
   if (!record) throw new ProjectError("Browser build has no completed hosting record");
+
+  const metadataValue: unknown = JSON.parse(await record.text());
+
+  if (typeof metadataValue !== "object" || metadataValue === null || Array.isArray(metadataValue))
+    throw new ProjectError("Browser build control record must be an object");
+
+  const metadata = metadataValue as Record<string, unknown>;
+
+  if (!isDeepStrictEqual(metadata.hosting, snapshot.hosting))
+    throw new ProjectError("Browser build hosting record does not match its control record");
+
+  if ((snapshot.version === 2) !== (snapshot.hosting.version === 2))
+    throw new ProjectError("Browser build public-file map does not match its hosting record");
+
+  const assets = new Map([...snapshot.files].filter(([path]) => path.startsWith("/assets/")));
+
+  if (snapshot.version === 2) {
+    await createHost({
+      hosting: snapshot.hosting,
+      files: assets,
+      publicFiles: snapshot.publicFiles,
+    });
+  } else {
+    await createHost({ hosting: snapshot.hosting, files: assets });
+  }
 
   await cleanUnpublishedCaptures(root);
 
@@ -1510,20 +1683,15 @@ export async function writeBuild(root: string, build: BrowserBuild): Promise<str
   const captureDirectory = join(capturesDirectory, captureId);
   const assetRoot = join(captureDirectory, "assets");
   const assetDirectory = `.captures/${captureId}/assets`;
+  const publicDirectory = `.captures/${captureId}/public`;
   const destination = join(output, "hesperia-build.json");
   const temporary = join(output, `.hesperia-build.${randomUUID()}.tmp`);
   const previousDirectory = await publishedAssetDirectory(output);
 
   try {
-    const metadata = JSON.parse(await record.text()) as Record<string, unknown>;
-    const hosting = metadata.hosting as HostingRecordV1;
-    const assets = new Map([...build.files].filter(([path]) => path.startsWith("/assets/")));
-
-    await createHost({ hosting, files: assets });
-
     await mkdir(assetRoot, { recursive: true });
 
-    for (const { path } of hosting.assets) {
+    for (const { path } of snapshot.hosting.assets) {
       const blob = assets.get(path);
 
       if (!blob) throw new ProjectError(`Browser build omitted ${path}`);
@@ -1535,8 +1703,41 @@ export async function writeBuild(root: string, build: BrowserBuild): Promise<str
       await writeFile(target, new Uint8Array(await blob.arrayBuffer()));
     }
 
+    if (snapshot.version === 2) {
+      const publicRoot = join(captureDirectory, "public");
+
+      await mkdir(publicRoot, { recursive: true });
+
+      for (const file of snapshot.hosting.publicFiles) {
+        const blob = snapshot.publicFiles.get(file.urlPath);
+
+        if (!blob) throw new ProjectError(`Browser build omitted public file ${file.urlPath}`);
+
+        const target = join(publicRoot, ...file.relativePath.split("/"));
+
+        await mkdir(dirname(target), { recursive: true });
+
+        await writeFile(target, new Uint8Array(await blob.arrayBuffer()));
+      }
+    }
+
+    const {
+      assetDirectory: _assetDirectory,
+      publicDirectory: _publicDirectory,
+      ...buildRecord
+    } = metadata;
     const publishedRecord = new Blob(
-      [JSON.stringify({ ...metadata, assetDirectory }, null, 2) + "\n"],
+      [
+        JSON.stringify(
+          {
+            ...buildRecord,
+            assetDirectory,
+            ...(snapshot.version === 2 ? { publicDirectory } : {}),
+          },
+          null,
+          2,
+        ) + "\n",
+      ],
       { type: record.type || "application/json" },
     );
 
@@ -1569,6 +1770,28 @@ export async function writeBuild(root: string, build: BrowserBuild): Promise<str
   await rm(join(output, "index.html"), { force: true });
 
   return output;
+}
+
+function snapshotBlobMap(files: ReadonlyMap<string, Blob>): Map<string, Blob> {
+  return new Map(files);
+}
+
+function snapshotHosting(hosting: HostingRecordV1): HostingRecordV1;
+function snapshotHosting(hosting: HostingRecordV2): HostingRecordV2;
+function snapshotHosting(
+  hosting: HostingRecordV1 | HostingRecordV2,
+): HostingRecordV1 | HostingRecordV2 {
+  const assets = Object.freeze(hosting.assets.map((asset) => Object.freeze({ ...asset })));
+
+  if (hosting.version === 2) {
+    const publicFiles: readonly HostingPublicFileRecord[] = Object.freeze(
+      hosting.publicFiles.map((file) => Object.freeze({ ...file })),
+    );
+
+    return Object.freeze({ ...hosting, assets, publicFiles });
+  }
+
+  return Object.freeze({ ...hosting, assets });
 }
 
 async function publishedAssetDirectory(output: string): Promise<string | undefined> {

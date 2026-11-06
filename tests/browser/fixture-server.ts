@@ -35,6 +35,7 @@ const built = await Bun.build({
     resolve(import.meta.dir, "fixtures/error-boundary.fixture.mts"),
     resolve(import.meta.dir, "fixtures/stream.fixture.mts"),
     resolve(import.meta.dir, "fixtures/embed.fixture.mts"),
+    resolve(import.meta.dir, "fixtures/scheduling.tsx"),
   ],
   target: "browser",
   format: "esm",
@@ -115,6 +116,9 @@ const streamOutput = built.outputs.find(
 const embedOutput = built.outputs.find(
   (artifact) => artifact.kind === "entry-point" && artifact.path.endsWith("embed.fixture.js"),
 );
+const schedulingOutput = built.outputs.find(
+  (artifact) => artifact.kind === "entry-point" && artifact.path.endsWith("scheduling.js"),
+);
 
 if (
   !output ||
@@ -131,7 +135,8 @@ if (
   !cssRuntimeOutput ||
   !errorBoundaryOutput ||
   !streamOutput ||
-  !embedOutput
+  !embedOutput ||
+  !schedulingOutput
 )
   throw new Error("The browser fixture build produced no entry point");
 
@@ -155,10 +160,15 @@ const importedMarkupFiles = new Map(
 );
 startupJournal.mark("host-create-begin");
 
-const importedMarkupHost = await createHost({
-  hosting: importedMarkupBuild.hosting,
-  files: importedMarkupFiles,
-});
+const importedMarkupHost = await createHost(
+  "publicFiles" in importedMarkupBuild
+    ? {
+        hosting: importedMarkupBuild.hosting,
+        files: importedMarkupFiles,
+        publicFiles: importedMarkupBuild.publicFiles,
+      }
+    : { hosting: importedMarkupBuild.hosting, files: importedMarkupFiles },
+);
 
 startupJournal.mark("host-create-end");
 
@@ -251,6 +261,15 @@ Bun.serve({
       return new Response(
         ".markup-panel { text-indent: 23px; } .managed-bad-sri-target { color: rgb(255, 1, 2); }",
         { headers: { "content-type": "text/css" } },
+      );
+
+    if (path === "/scheduling.js")
+      return new Response(schedulingOutput, { headers: { "content-type": "text/javascript" } });
+
+    if (path === "/scheduling")
+      return new Response(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Scheduling utilities</title></head><body><div id="app"></div><script type="module" src="/scheduling.js"></script></body></html>',
+        { headers: { "content-type": "text/html" } },
       );
 
     if (path === "/embed-browser.js")
