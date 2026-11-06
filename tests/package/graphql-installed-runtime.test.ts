@@ -438,6 +438,45 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
       tslib: "2.8.1",
     };
 
+    const cachePreparationRoot = join(workspace, "native-cache-preparation");
+
+    await mkdir(cachePreparationRoot);
+
+    const cachePreparationManifest = {
+      name: "hesperia-graphql-native-cache-preparation",
+      private: true,
+      dependencies: nativeOverrides,
+      overrides: nativeOverrides,
+    };
+
+    await writePackageManifest(join(cachePreparationRoot, "package.json"), cachePreparationManifest);
+
+    evidence.phase = "preparing-native-cache";
+    evidence.cachePreparationManifest = cachePreparationManifest;
+    await saveEvidence();
+
+    const cachePreparation = await runCommand(
+      [process.execPath, "install", "--ignore-scripts", "--lockfile-only"],
+      cachePreparationRoot,
+      boundedTimeout(25_000, deadlineAt),
+    );
+    const cachePreparationLock = await readFile(join(cachePreparationRoot, "bun.lock"), "utf8");
+
+    evidence.cachePreparation = cachePreparation;
+    evidence.cachePreparationLockIntegrity = archiveIntegrity(
+      new TextEncoder().encode(cachePreparationLock),
+    );
+
+    if (evidenceRoot) {
+      await copyFile(
+        join(cachePreparationRoot, "package.json"),
+        join(evidenceRoot, "cache-package.json"),
+      );
+      await writeFile(join(evidenceRoot, "cache-bun.lock"), cachePreparationLock);
+    }
+
+    await saveEvidence();
+
     const archive = await packGraphQL(workspace, deadlineAt);
     const archiveBytes = await readFile(archive);
     const archiveReceipt = {
