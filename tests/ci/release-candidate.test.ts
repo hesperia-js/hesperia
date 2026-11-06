@@ -99,10 +99,24 @@ test("one real packed workspace candidate retains package documentation and noti
         private: true,
         license: "MPL-2.0",
         version,
-        workspaces: ["packages/*"],
+        workspaces: ["packages/*", "golden", "editors/vscode"],
         devDependencies: { aeolia: "1.0.0-alpha.1" },
       }),
     );
+
+    for (const [directory, name] of [
+      ["golden", "release-test-golden"],
+      ["editors/vscode", "release-test-editor"],
+    ] as const) {
+      const workspaceRoot = join(workspace, directory);
+
+      await mkdir(workspaceRoot, { recursive: true });
+
+      await writeFile(
+        join(workspaceRoot, "package.json"),
+        JSON.stringify({ name, version, private: true }),
+      );
+    }
 
     for (const notice of releaseNotices)
       await writeFile(join(workspace, notice), `existing ${notice} notice\n`);
