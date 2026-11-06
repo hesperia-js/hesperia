@@ -1,5 +1,15 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { prepareBuild, writeBuild } from "../../packages/tooling/src/project.ts";
@@ -733,6 +743,8 @@ test("public collisions reject before replacing the last published build", async
 
   roots.push(outside);
 
+  const canonicalOutside = await realpath(outside);
+
   await writeFile(join(outside, "secret.bin"), "outside project");
 
   const link = join(publicRoot, "link.bin");
@@ -777,7 +789,12 @@ test("public collisions reject before replacing the last published build", async
       );
 
       if (kind === "escape" || kind === "escape-and-return")
-        expect(failure).toContain(outside.replaceAll("\\", "/"));
+        expect(failure).toContain(
+          join(canonicalOutside, kind === "escape" ? "secret.bin" : "return.bin").replaceAll(
+            "\\",
+            "/",
+          ),
+        );
 
       expect(await readFile(recordPath)).toEqual(publishedRecord);
     }, [
