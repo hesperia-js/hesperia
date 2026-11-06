@@ -112,6 +112,17 @@ test("packed packages serve a custom backend data flow in all three browser engi
       ),
     );
 
+    const schedulingRoute = join(application, "src/routes/scheduling");
+
+    await mkdir(schedulingRoute, { recursive: true });
+    await writeFile(
+      join(schedulingRoute, "+page.tsx"),
+      await readFile(
+        new URL("./fixtures/installed-app/src/routes/scheduling/+page.tsx", import.meta.url),
+        "utf8",
+      ),
+    );
+
     const manifestPath = join(application, "package.json");
 
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
