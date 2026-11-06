@@ -428,6 +428,31 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.22.0
+          package-manager-cache: false
+      - name: "Record Node 24 scheduling profile"
+        shell: bash
+        run: "printf 'HESPERIA_SCHEDULING_NODE_24_22_0_EXE=%s\\n' \"$(node -p 'process.execPath')\" >> \"$GITHUB_ENV\""
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.10.0
+          package-manager-cache: false
+      - name: "Record Node 26.10 scheduling profile"
+        shell: bash
+        run: "printf 'HESPERIA_SCHEDULING_NODE_26_10_0_EXE=%s\\n' \"$(node -p 'process.execPath')\" >> \"$GITHUB_ENV\""
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.12.0
+          package-manager-cache: false
+      - name: "Record Node 26.12 scheduling profile"
+        shell: bash
+        run: "printf 'HESPERIA_SCHEDULING_NODE_26_12_0_EXE=%s\\n' \"$(node -p 'process.execPath')\" >> \"$GITHUB_ENV\""
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.2
+          package-manager-cache: false
       - name: "Build workspace packages"
         run: "bun run build"
       - name: "Install browser engines and system dependencies"
@@ -444,7 +469,10 @@ jobs:
       - name: "Validate the package candidate"
         run: "bun scripts/ci/verify-release-candidate.ts --candidate-dir .hesperia/release-candidate"
       - name: "Run installed and linked package behavior"
-        run: "bun test --timeout=60000 tests/package"
+        shell: bash
+        run: |
+          export HESPERIA_SCHEDULING_NODE_22_23_2_EXE="$(node -p 'process.execPath')"
+          bun test --timeout=60000 tests/package
         env:
           HESPERIA_RELEASE_CANDIDATE_DIR: ${{ format('{0}/.hesperia/release-candidate', github.workspace) }}
   golden-plan:

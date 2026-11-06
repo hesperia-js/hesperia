@@ -1,10 +1,35 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** @typedef {import("playwright").BrowserType} BrowserType */
 const [playwrightUrl, applicationUrl] = process.argv.slice(2);
 
 if (!playwrightUrl || !applicationUrl)
   throw new Error("Expected Playwright module URL and application URL");
+
+const schedulingNodeProof = JSON.parse(
+  execFileSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      'import { debounce } from "hesperia/scheduling"; const run = debounce((value) => value * 2, 0); console.log(JSON.stringify({ resolved: import.meta.resolve("hesperia/scheduling"), node: process.versions.node, result: await run(21) }));',
+    ],
+    { cwd: process.cwd(), encoding: "utf8", timeout: 10_000 },
+  ),
+);
+
+assert.equal(schedulingNodeProof.node, "22.23.2");
+assert.equal(schedulingNodeProof.result, 42);
+assert.equal(
+  realpathSync(fileURLToPath(schedulingNodeProof.resolved)),
+  realpathSync(join(process.cwd(), "node_modules/hesperia/dist/scheduling/node.js")),
+);
+
+console.error(JSON.stringify({ kind: "installed-scheduling-node", ...schedulingNodeProof }));
 
 /** @type {typeof import("playwright")} */
 const playwright = await import(playwrightUrl);
@@ -233,6 +258,28 @@ for (const [name, engine] of Object.entries(engines)) {
 
       await page.getByText("HELLO HESPERIA", { exact: true }).waitFor();
     }
+
+    assert.deepEqual(errors, []);
+
+    const schedulingTarget = new URL("deep/link", new URL("scheduling", applicationUrl));
+
+    await page.goto(applicationUrl + "scheduling");
+    await page.locator("#installed-schedule").click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#installed-scheduling-result")?.textContent === "packed scheduling",
+    );
+
+    const leaveScheduling =
+      name === "webkit"
+        ? clickWithoutNavigationWait(page, "#leave-installed-scheduling")
+        : page.locator("#leave-installed-scheduling").click();
+
+    await Promise.all([page.waitForURL(schedulingTarget.href), leaveScheduling]);
+    await page.locator("#count").waitFor();
+    await page.waitForFunction(
+      () => document.documentElement.dataset.installedSchedulingCleanup === "true",
+    );
 
     assert.deepEqual(errors, []);
 
