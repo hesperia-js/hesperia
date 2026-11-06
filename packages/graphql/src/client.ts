@@ -7,12 +7,14 @@ import type {
 } from "@apollo/client";
 import { CombinedGraphQLErrors } from "@apollo/client/errors";
 import { ApolloLink } from "@apollo/client/link";
-import { createMutation, createQuery } from "aeolia";
+import { createMutation, createQuery, createStream } from "aeolia";
 import type {
   CreateMutationInput,
   CreateQueryInput,
+  CreateStreamInput,
   MutationDefinition,
   QueryDefinition,
+  StreamDefinition,
 } from "aeolia";
 import {
   createGraphQLResultError,
@@ -20,8 +22,9 @@ import {
   isGraphQLExecutionResult,
 } from "./response.ts";
 import type { GraphQLResult } from "./types.ts";
+import { createSubscriptionLink, openGraphQLSubscription } from "./subscription.ts";
 
-/** Configuration for a finite GraphQL operation-definition factory. */
+/** Configuration for a GraphQL operation-definition factory. */
 export interface GraphQLClientOptions {
   /** Native Apollo transport chain. This factory does not change the supplied link. */
   readonly link: ApolloLink;
@@ -36,6 +39,8 @@ export interface GraphQLClientOptions {
   readonly queryErrorPolicy?: ErrorPolicy;
   /** Default native mutation error policy. Defaults to `none`. */
   readonly mutationErrorPolicy?: ErrorPolicy;
+  /** Default native subscription error policy. Defaults to `none`. */
+  readonly subscriptionErrorPolicy?: ErrorPolicy;
 }
 
 /**
@@ -74,6 +79,25 @@ export type GraphQLMutationOptions<TData, TVariables extends OperationVariables>
 };
 
 /**
+ * A typed incoming subscription with an ordinary Aeolia key and value options.
+ * The supplied native link owns transport configuration; each opened keyed
+ * stream owns one native subscription, independently of the shared socket.
+ * @typeParam TData - The document's result data.
+ * @typeParam TVariables - The document's native variables.
+ * @typeParam TKey - The nonempty stream key derived from those variables.
+ */
+export type GraphQLSubscriptionOptions<
+  TData,
+  TVariables extends OperationVariables,
+  TKey extends string = string,
+> = Omit<CreateStreamInput<TVariables, GraphQLResult<TData>, TKey>, "open"> & {
+  /** Typed native subscription document. */
+  readonly document: TypedDocumentNode<TData, TVariables>;
+  /** Native event error policy, overriding the factory's subscription default. */
+  readonly errorPolicy?: ErrorPolicy;
+};
+
+/**
  * Builds ordinary Aeolia definitions over one owned, uncached native client.
  * Declaring an operation performs no request. Put definitions in a public
  * Aeolia contract/graph and adapt that same pair with `hesperia/aeolia`.
@@ -102,6 +126,20 @@ export interface GraphQLClient {
     options: GraphQLMutationOptions<TData, TVariables>,
   ): MutationDefinition<TVariables, GraphQLResult<TData>>;
   /**
+   * Declare an incoming subscription. Declaration does not open an operation.
+   * A graph opens one native subscription for each shared keyed stream session.
+   * Execution-error events remain nonterminal: `none` omits their data, `all`
+   * retains partial data and errors, and `ignore` omits execution errors.
+   * A protocol or transport error fails the source under every policy.
+   * Returning its iterator or aborting that session unsubscribes the operation.
+   * The caller owns socket configuration and disposal.
+   * @param options - Typed document, shared key and native event error policy.
+   * @returns A dormant public Aeolia stream definition.
+   */
+  subscription<TData, TVariables extends OperationVariables, TKey extends string>(
+    options: GraphQLSubscriptionOptions<TData, TVariables, TKey>,
+  ): StreamDefinition<TVariables, GraphQLResult<TData>, TKey>;
+  /**
    * Stop the owned Apollo client after its graphs have been disposed.
    * Repeated calls are harmless. Later definition callbacks reject without
    * starting native work. This is not proof of remote rollback or cancellation.
@@ -110,7 +148,7 @@ export interface GraphQLClient {
 }
 
 /**
- * Create finite typed GraphQL definitions using an adapter-owned Apollo Client.
+ * Create typed GraphQL definitions using an adapter-owned Apollo Client.
  *
  * Aeolia owns result caching, predictions and declared mutation effects. Native
  * calls use no-cache and independent request dispatch; the supplied link and
@@ -127,8 +165,10 @@ export function createGraphQLClient(options: GraphQLClientOptions): GraphQLClien
   const context = { ...options.context };
   const queryPolicy = checkPolicy(options.queryErrorPolicy ?? "all");
   const mutationPolicy = checkPolicy(options.mutationErrorPolicy ?? "none");
+  const subscriptionPolicy = checkPolicy(options.subscriptionErrorPolicy ?? "none");
+  const terminations = new Set<() => void>();
   const native = new ApolloClient({
-    link: ApolloLink.from([captureLink.link, options.link]),
+    link: ApolloLink.from([captureLink.link, createSubscriptionLink(), options.link]),
     cache: new InMemoryCache(),
     queryDeduplication: false,
     devtools: { enabled: false },
@@ -228,11 +268,55 @@ export function createGraphQLClient(options: GraphQLClientOptions): GraphQLClien
           request("mutation", document, variables, abortSignal, policy),
       });
     },
+    subscription<TData, TVariables extends OperationVariables, TKey extends string>(
+      input: GraphQLSubscriptionOptions<TData, TVariables, TKey>,
+    ): StreamDefinition<TVariables, GraphQLResult<TData>, TKey> {
+      const { document, errorPolicy = subscriptionPolicy, ...definition } = input;
+      const policy = checkPolicy(errorPolicy);
+
+      return createStream<TVariables, GraphQLResult<TData>, TKey>({
+        ...definition,
+        open(variables, { abortSignal }) {
+          if (stopped) throw new Error("The GraphQL client has been stopped");
+
+          return openGraphQLSubscription(
+            native,
+            document,
+            variables,
+            abortSignal,
+            policy,
+            context,
+            terminations,
+          );
+        },
+      });
+    },
     stop() {
       if (stopped) return;
 
       stopped = true;
-      native.stop();
+      const failures: unknown[] = [];
+
+      for (const terminate of terminations) {
+        try {
+          terminate();
+        } catch (cause) {
+          failures.push(cause);
+        }
+      }
+
+      try {
+        native.stop();
+      } catch (cause) {
+        if (failures.length === 0) throw cause;
+        failures.push(cause);
+      }
+
+      if (failures.length > 0)
+        throw new AggregateError(
+          failures,
+          "The GraphQL client could not release every native resource",
+        );
     },
   };
 

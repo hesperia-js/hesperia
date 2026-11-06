@@ -18,6 +18,7 @@ import { suppliedReleaseArchive } from "./release-candidate.ts";
 
 const packageRoot = resolve(import.meta.dir, "../..");
 const graphqlPackageRoot = resolve(packageRoot, "packages/graphql");
+const hesperiaPackageRoot = resolve(packageRoot, "packages/hesperia");
 
 type PackageManifest = {
   readonly name?: string;
@@ -33,6 +34,7 @@ type FixtureReady = {
   readonly port: number;
   readonly instanceId: string;
   readonly graphqlUrl: string;
+  readonly graphqlWsUrl: string;
   readonly controlUrl: string;
 };
 
@@ -70,6 +72,7 @@ type FixtureState = {
 type FixtureProcess = {
   readonly child: ReturnType<typeof Bun.spawn>;
   readonly graphqlUrl: string;
+  readonly graphqlWsUrl: string;
   readonly controlUrl: string;
   readonly instanceId: string;
   readonly readyLine: string;
@@ -138,8 +141,12 @@ function boundedTimeout(timeoutMs: number, deadlineAt: number): number {
   return Math.min(timeoutMs, remaining);
 }
 
-async function packGraphQL(workspace: string, deadlineAt: number): Promise<string> {
-  const supplied = await suppliedReleaseArchive(graphqlPackageRoot);
+async function packPackage(
+  workspace: string,
+  directory: string,
+  deadlineAt: number,
+): Promise<string> {
+  const supplied = await suppliedReleaseArchive(directory);
 
   if (supplied) return supplied;
 
@@ -147,7 +154,7 @@ async function packGraphQL(workspace: string, deadlineAt: number): Promise<strin
 
   await runCommand(
     [process.execPath, "pm", "pack", "--destination", workspace, "--ignore-scripts", "--quiet"],
-    graphqlPackageRoot,
+    directory,
     boundedTimeout(10_000, deadlineAt),
   );
 
@@ -155,7 +162,7 @@ async function packGraphQL(workspace: string, deadlineAt: number): Promise<strin
     (item) => item.endsWith(".tgz") && !before.has(item),
   );
 
-  if (!name) throw new Error(`Packing ${graphqlPackageRoot} produced no new tarball`);
+  if (!name) throw new Error(`Packing ${directory} produced no new tarball`);
 
   return join(workspace, name).replaceAll("\\", "/");
 }
@@ -235,6 +242,7 @@ async function startFixture(nodePath: string, deadlineAt: number): Promise<Fixtu
       ready.port < 1 ||
       !ready.instanceId ||
       !ready.graphqlUrl ||
+      !ready.graphqlWsUrl ||
       !ready.controlUrl
     )
       throw new Error(`Yoga fixture returned invalid readiness data: ${JSON.stringify(ready)}`);
@@ -242,6 +250,7 @@ async function startFixture(nodePath: string, deadlineAt: number): Promise<Fixtu
     return {
       child,
       graphqlUrl: ready.graphqlUrl,
+      graphqlWsUrl: ready.graphqlWsUrl,
       controlUrl: ready.controlUrl,
       instanceId: ready.instanceId,
       readyLine,
@@ -427,7 +436,19 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
           return [name, rootVersion];
         }),
     );
-    const versions = { [packageName]: packageVersion, ...nativeVersions };
+    const subscriptionVersions = { "graphql-ws": "6.4.1", ws: "8.22.0" };
+    const hesperiaManifest = JSON.parse(
+      await readFile(resolve(hesperiaPackageRoot, "package.json"), "utf8"),
+    ) as PackageManifest;
+    const hesperiaVersion = hesperiaManifest.version;
+    assert.ok(hesperiaVersion, "Hesperia package manifest has no version");
+    const versions = {
+      [packageName]: packageVersion,
+      ...nativeVersions,
+      ...subscriptionVersions,
+      "happy-dom": exactVersion(rootManifest, "happy-dom"),
+      hesperia: hesperiaVersion,
+    };
     const nativeOverrides = {
       ...nativeVersions,
       "@graphql-typed-document-node/core": "3.2.0",
@@ -438,6 +459,15 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
       "graphql-tag": "2.12.7",
       optimism: "0.18.1",
       tslib: "2.8.1",
+      "@types/node": exactVersion(rootManifest, "@types/node"),
+      "@types/whatwg-mimetype": "3.0.2",
+      "@types/ws": "8.18.1",
+      "buffer-image-size": "0.6.4",
+      entities: "7.0.1",
+      "undici-types": "6.21.0",
+      "whatwg-mimetype": "3.0.0",
+      ...subscriptionVersions,
+      "happy-dom": versions["happy-dom"],
     };
 
     const cachePreparationRoot = join(workspace, "native-cache-preparation");
@@ -486,13 +516,20 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
 
     await saveEvidence();
 
-    const archive = await packGraphQL(workspace, deadlineAt);
+    const archive = await packPackage(workspace, graphqlPackageRoot, deadlineAt);
+    const hesperiaArchive = await packPackage(workspace, hesperiaPackageRoot, deadlineAt);
     const archiveBytes = await readFile(archive);
     const archiveReceipt = {
       path: archive,
       package: packageName,
       version: packageVersion,
       integrity: archiveIntegrity(archiveBytes),
+    };
+    const hesperiaArchiveReceipt = {
+      path: hesperiaArchive,
+      package: "hesperia",
+      version: hesperiaVersion,
+      integrity: archiveIntegrity(await readFile(hesperiaArchive)),
     };
     const appManifestPath = join(application, "package.json");
     const applicationManifest = {
@@ -501,6 +538,9 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
       type: "module",
       dependencies: {
         ...nativeVersions,
+        ...subscriptionVersions,
+        "happy-dom": versions["happy-dom"],
+        hesperia: hesperiaArchive,
         [packageName]: archive,
       },
       overrides: nativeOverrides,
@@ -508,9 +548,13 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
 
     evidence.phase = "archive-created";
     evidence.archive = archiveReceipt;
+    evidence.hesperiaArchive = hesperiaArchiveReceipt;
     evidence.applicationManifest = applicationManifest;
 
-    if (evidenceRoot) await copyFile(archive, join(evidenceRoot, basename(archive)));
+    if (evidenceRoot) {
+      await copyFile(archive, join(evidenceRoot, basename(archive)));
+      await copyFile(hesperiaArchive, join(evidenceRoot, basename(hesperiaArchive)));
+    }
 
     await writePackageManifest(appManifestPath, applicationManifest);
     await copyFile(sourceConsumer, join(application, "graphql-runtime.mjs"));
@@ -550,6 +594,7 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
         join(application, "graphql-runtime.mjs"),
         runningFixture.graphqlUrl,
         runningFixture.controlUrl,
+        runningFixture.graphqlWsUrl,
         checkoutRoot,
         runningFixture.instanceId,
         JSON.stringify({
@@ -569,6 +614,39 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
       readonly fixtureInstanceId: string;
       readonly entrypoints: Record<string, string>;
       readonly installedVersions: Record<string, string>;
+      readonly hesperiaRoots: {
+        readonly package: string;
+        readonly runtime: string;
+        readonly aeolia: string;
+      };
+      readonly nativeSubscription: {
+        readonly none: {
+          readonly dataOmitted: boolean;
+          readonly errorMessage: string;
+          readonly extensionInstanceId: string;
+          readonly emitted: number;
+          readonly protocolComplete: number;
+          readonly generatorFinally: number;
+        };
+        readonly all: {
+          readonly sequence: number;
+          readonly value: string;
+          readonly broken: string | null;
+          readonly errorMessage: string;
+          readonly errorPath: readonly string[];
+          readonly extensionInstanceId: string;
+          readonly emitted: number;
+          readonly protocolComplete: number;
+          readonly generatorFinally: number;
+        };
+        readonly cancellation: {
+          readonly clientComplete: number;
+          readonly emitted: number;
+          readonly generatorFinally: number;
+          readonly socketCloseBeforeCallerDisposal: number;
+          readonly socketCloseAfterCallerDisposal: number;
+        };
+      };
       readonly partial: {
         readonly ok: string;
         readonly broken: string | null;
@@ -597,6 +675,36 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
     expect(receipt.nodeVersion).toBe("22.23.2");
     expect(receipt.fixtureInstanceId).toBe(runningFixture.instanceId);
     expect(receipt.installedVersions).toEqual(versions);
+    expect(receipt.hesperiaRoots.runtime).toBe(receipt.hesperiaRoots.package);
+    expect(receipt.hesperiaRoots.aeolia).toBe(receipt.hesperiaRoots.package);
+    expect(receipt.nativeSubscription).toMatchObject({
+      none: {
+        dataOmitted: true,
+        errorMessage: "fixture subscription field failure",
+        extensionInstanceId: receipt.fixtureInstanceId,
+        emitted: 1,
+        protocolComplete: 1,
+        generatorFinally: 1,
+      },
+      all: {
+        sequence: 2,
+        value: "installed-all-event",
+        broken: null,
+        errorMessage: "fixture subscription field failure",
+        errorPath: ["events", "broken"],
+        extensionInstanceId: receipt.fixtureInstanceId,
+        emitted: 1,
+        protocolComplete: 1,
+        generatorFinally: 1,
+      },
+      cancellation: {
+        clientComplete: 1,
+        emitted: 0,
+        generatorFinally: 1,
+        socketCloseBeforeCallerDisposal: 0,
+        socketCloseAfterCallerDisposal: 1,
+      },
+    });
     expect(receipt.partial).toMatchObject({
       ok: "partial-ok",
       broken: null,
