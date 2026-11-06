@@ -170,11 +170,14 @@ function startNativeGraphQLFixture(): NativeGraphQLFixture {
       "HESPERIA_GRAPHQL_NODE must be an absolute Node 22.23.2 executable path when supplied",
     );
 
-  const nodePath = nodeOverride ?? Bun.which("node");
+  if (!isAbsolute(process.execPath) || Bun.version !== "1.4.4")
+    throw new Error("The GraphQL fixture launcher requires the pinned Bun 1.4.4 executable");
 
-  if (!nodePath) throw new Error("Node 22.23.2 was not found on PATH");
-
-  const child = Bun.spawn([nodePath, nativeGraphQLPath], {
+  const command =
+    nodeOverride === undefined
+      ? [process.execPath, "--no-env-file", "--no-install", nativeGraphQLPath, "bun"]
+      : [nodeOverride, nativeGraphQLPath, "node"];
+  const child = Bun.spawn(command, {
     cwd: resolve(import.meta.dir, "../.."),
     stdout: "pipe",
     stderr: "pipe",

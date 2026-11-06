@@ -5,8 +5,17 @@ import { useServer } from "graphql-ws/use/ws";
 import { createYoga } from "graphql-yoga";
 import { WebSocketServer } from "ws";
 
-if (process.versions.node !== "22.23.2")
-  throw new Error(`Expected Node 22.23.2; received ${process.versions.node}`);
+const runtime = process.argv[2];
+
+if (runtime === "bun") {
+  if (globalThis.Bun?.version !== "1.4.4")
+    throw new Error(`Expected Bun 1.4.4; received ${globalThis.Bun?.version}`);
+} else if (runtime === "node" || runtime === undefined) {
+  if (globalThis.Bun !== undefined || process.versions.node !== "22.23.2")
+    throw new Error(`Expected Node 22.23.2; received ${process.versions.node}`);
+} else {
+  throw new Error("Expected an explicitly selected GraphQL fixture runtime");
+}
 
 const host = "127.0.0.1";
 const instanceId = randomUUID();

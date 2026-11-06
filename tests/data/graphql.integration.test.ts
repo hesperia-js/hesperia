@@ -278,12 +278,7 @@ async function readReadyLine(child: NativeChild): Promise<string> {
       })(),
       new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(
-          () =>
-            reject(
-              new Error(
-                "Timed out waiting for the Node 22.23.2 GraphQL Yoga fixture readiness line",
-              ),
-            ),
+          () => reject(new Error("Timed out waiting for the GraphQL Yoga fixture readiness line")),
           15_000,
         );
       }),
@@ -308,16 +303,16 @@ async function startFixture(): Promise<FixtureReady> {
     );
   }
 
-  const nodePath = nodeOverride ?? Bun.which("node");
-
-  if (!nodePath) {
-    throw new Error(
-      "Node 22.23.2 was not found on PATH; install it or set HESPERIA_GRAPHQL_NODE to its absolute executable path",
-    );
+  if (!isAbsolute(process.execPath) || Bun.version !== "1.4.4") {
+    throw new Error("The GraphQL fixture launcher requires the pinned Bun 1.4.4 executable");
   }
 
   const fixturePath = resolve(import.meta.dir, "fixtures/graphql-server.fixture.mjs");
-  const child = Bun.spawn([nodePath, fixturePath], {
+  const command =
+    nodeOverride === undefined
+      ? [process.execPath, "--no-env-file", "--no-install", fixturePath, "bun"]
+      : [nodeOverride, fixturePath, "node"];
+  const child = Bun.spawn(command, {
     cwd: resolve(import.meta.dir, "../.."),
     stdout: "pipe",
     stderr: "pipe",
