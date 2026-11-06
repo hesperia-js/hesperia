@@ -36,11 +36,26 @@ export function createTask<Input = void, Output = unknown>(
   return createTaskController<Input, Output>(owner, factory).task;
 }
 
+interface TaskController<Input, Output> {
+  readonly task: Task<Input, Output>;
+  readonly reset: () => void;
+}
+
 /** Create a task with an internal reset capability for owner-bound validation state. */
 export function createTaskController<Input = void, Output = unknown>(
   owner: Owner,
   factory: TaskFactory<Input, Output>,
-): { readonly task: Task<Input, Output>; readonly reset: () => void } {
+): TaskController<Input, Output>;
+export function createTaskController<Input, Output, Prepared>(
+  owner: Owner,
+  factory: TaskFactory<Prepared, Output>,
+  prepare: (input: Input) => Prepared,
+): TaskController<Input, Output>;
+export function createTaskController<Input, Output, Prepared = Input>(
+  owner: Owner,
+  factory: TaskFactory<Prepared, Output>,
+  prepare?: (input: Input) => Prepared,
+): TaskController<Input, Output> {
   owner.assertActive();
 
   if (typeof factory !== "function") throw new TypeError("Task factory must be a function");
@@ -154,16 +169,62 @@ export function createTaskController<Input = void, Output = unknown>(
 
     current = invocation;
 
+    // Reserve this invocation before capture: native formdata listeners can reenter.
+    // Capture before aborting the previous run, whose listeners may change the form.
+    let prepared!: Prepared;
+    let preparationFailure: { readonly error: unknown } | undefined;
+
+    if (prepare) {
+      try {
+        prepared = prepare(input as Input);
+      } catch (error) {
+        preparationFailure = { error };
+      }
+    } else {
+      prepared = input as unknown as Prepared;
+    }
+
     previous?.cancel(cancellationReason("Task superseded by a newer invocation"));
 
-    // An abort listener may synchronously dispatch another run. That newer run remains primary,
-    // so the superseded invocation must not publish state or invoke its factory afterward.
+    // Capture and abort listeners can start a newer run or retire this owner.
     if (current !== invocation || controller.signal.aborted || disposed) return handle;
+
+    const rejectSynchronousFailure = (error: unknown): void => {
+      if (settled) return;
+
+      if (isCancellationError(error)) {
+        invocation.cancel(error);
+
+        return;
+      }
+
+      settled = true;
+
+      if (current === invocation) {
+        current = undefined;
+
+        try {
+          stateCell.set({ status: "failure", value: undefined, error });
+        } catch (publicationError) {
+          reportPublicationFailure(publicationError);
+
+          rejectPromise(publicationError);
+        }
+      }
+
+      rejectPromise(error);
+    };
+
+    if (preparationFailure) {
+      rejectSynchronousFailure(preparationFailure.error);
+
+      return handle;
+    }
 
     try {
       stateCell.set({ status: "pending", value: undefined, error: undefined });
     } catch (error) {
-      current = undefined;
+      if (current === invocation) current = undefined;
 
       reportPublicationFailure(error);
 
@@ -174,7 +235,7 @@ export function createTaskController<Input = void, Output = unknown>(
 
     if (current !== invocation || controller.signal.aborted || disposed) return handle;
 
-    let operation: ReturnType<TaskFactory<Input, Output>>;
+    let operation: ReturnType<TaskFactory<Prepared, Output>>;
 
     try {
       operation = factory({ signal: controller.signal });
@@ -184,7 +245,7 @@ export function createTaskController<Input = void, Output = unknown>(
 
       if (current !== invocation || controller.signal.aborted || disposed) return handle;
 
-      const outcome = operation(input as Input);
+      const outcome = operation(prepared);
 
       Promise.resolve(outcome).then(
         (value) => {
@@ -253,31 +314,7 @@ export function createTaskController<Input = void, Output = unknown>(
         },
       );
     } catch (error) {
-      if (!settled) {
-        if (isCancellationError(error)) {
-          invocation.cancel(error);
-
-          return handle;
-        }
-
-        settled = true;
-
-        if (current === invocation) {
-          current = undefined;
-
-          try {
-            stateCell.set({ status: "failure", value: undefined, error });
-          } catch (publicationError) {
-            current = undefined;
-
-            reportPublicationFailure(publicationError);
-
-            rejectPromise(publicationError);
-          }
-        }
-
-        rejectPromise(error);
-      }
+      rejectSynchronousFailure(error);
     }
 
     return handle;

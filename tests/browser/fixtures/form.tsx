@@ -37,6 +37,7 @@ function displayError(error: unknown): string {
 function FormValidation() {
   const schemaCalls = client.state(0);
   const captureTiming = client.state("not-run");
+  const reentrantOuter = client.state("not-run");
   const delayed: Array<() => void> = [];
 
   const schema: StandardSchemaV1<Projection, string> = {
@@ -187,6 +188,7 @@ function FormValidation() {
         </button>
         <output id="validation-status">{validation.status()}</output>
         <output id="captured-in-call">{captureTiming()}</output>
+        <output id="reentrant-outer">{reentrantOuter()}</output>
         <output id="validation-result">{displayResult(validation.value())}</output>
         <output id="validation-error">{displayError(validation.error())}</output>
         <output id="schema-calls">{schemaCalls()}</output>
@@ -202,6 +204,62 @@ function FormValidation() {
         </button>
         <button id="reset-validation" type="button" on:click={() => validation.reset()}>
           Reset validation
+        </button>
+        <button
+          id="run-reentrant-capture"
+          type="button"
+          on:click={() => {
+            const form = nativeForm();
+
+            form.addEventListener(
+              "formdata",
+              () => {
+                const replacement = validation.run({ required: "nested", intent: "reentrant" });
+
+                void replacement.then(undefined, () => undefined);
+              },
+              { once: true },
+            );
+
+            const outer = validation.runForm(form);
+
+            void outer.then(
+              () => reentrantOuter.set("fulfilled"),
+              (error) =>
+                reentrantOuter.set(
+                  outer.signal.aborted && error === outer.signal.reason ? "cancelled" : "rejected",
+                ),
+            );
+          }}
+        >
+          Run reentrant capture
+        </button>
+        <button
+          id="run-abort-mutation-capture"
+          type="button"
+          on:click={() => {
+            const form = nativeForm();
+            const required = form.querySelector<HTMLInputElement>("#required");
+
+            if (!required) throw new Error("The required input is missing");
+
+            const previous = validation.run({ required: "previous", delay: "slow" });
+
+            previous.signal.addEventListener(
+              "abort",
+              () => {
+                required.value = "after-abort";
+              },
+              { once: true },
+            );
+            void previous.then(undefined, () => undefined);
+
+            const next = validation.runForm(form);
+
+            void next.then(undefined, () => undefined);
+          }}
+        >
+          Capture before previous abort
         </button>
       </form>
       <form id="mapped-form" bind={mappedForm} on:submit={startMappedRun}>
