@@ -1302,7 +1302,7 @@ function markupNodeCode(
 
   const attributes = node.attributes.filter((attribute) => !attribute.namespace);
   const namespace =
-    node.namespace || (node.name.toLowerCase() === "svg" ? svgNamespace : undefined);
+    node.namespace ?? (node.name.toLowerCase() === "svg" ? svgNamespace : undefined);
   const children = node.children
     .map((child) => markupNodeCode(child, "{}", resourceCount))
     .filter((child) => child.code !== "null");
@@ -1334,7 +1334,7 @@ function markupNodeCode(
       : `Object.assign(Object.create(null), ${staticProps}, ${rootProps})`;
   const childrenCode = `[${children.map((child) => child.code).join(",")}]`;
   const prefix = `__element(owner, ${JSON.stringify(node.name)}, ${merged}, `;
-  const nodeCode = `${prefix}${childrenCode}${namespace ? `, ${JSON.stringify(namespace)}` : ""})`;
+  const nodeCode = `${prefix}${childrenCode}${namespace !== undefined ? `, ${JSON.stringify(namespace)}` : ""})`;
   const staticPropsOffset = nodeCode.indexOf(staticProps);
   const nameLiteral = JSON.stringify(node.name);
   const nameLiteralStart = nodeCode.indexOf(nameLiteral, "__element(owner, ".length);

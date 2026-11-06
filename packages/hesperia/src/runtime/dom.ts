@@ -510,7 +510,10 @@ export function element<K extends keyof HTMLElementTagNameMap>(
   children?: readonly Rendered[],
 ): HTMLElementTagNameMap[K];
 
-/** Create a namespace-qualified native element for compiler-validated foreign content. */
+/**
+ * Create a namespace-qualified native element for compiler-validated foreign content.
+ * An omitted namespace uses ordinary element creation; an empty string preserves no namespace.
+ */
 export function element(
   owner: Owner,
   tag: string,
@@ -534,9 +537,10 @@ export function element(
       "Use Hesperia's official Embed component from hesperia/embed instead of creating embedded-document elements directly",
     );
 
-  const node = namespace
-    ? owner.context.document.createElementNS(namespace, tag)
-    : owner.context.document.createElement(tag);
+  const node =
+    namespace !== undefined
+      ? owner.context.document.createElementNS(namespace, tag)
+      : owner.context.document.createElement(tag);
 
   owner.nodes.add(node);
 
