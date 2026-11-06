@@ -459,7 +459,7 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
       "graphql-tag": "2.12.7",
       optimism: "0.18.1",
       tslib: "2.8.1",
-      "@types/node": exactVersion(rootManifest, "@types/node"),
+      "@types/node": "22.20.2",
       "@types/whatwg-mimetype": "3.0.2",
       "@types/ws": "8.18.1",
       "buffer-image-size": "0.6.4",
