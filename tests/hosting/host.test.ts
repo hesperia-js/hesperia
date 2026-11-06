@@ -3,7 +3,9 @@ import { Window } from "happy-dom";
 import {
   createHost,
   type CapturedBrowserBuild,
+  type CapturedPublicBuild,
   type HostingAssetRecord,
+  type HostingRecordV2,
   type HostingRecordV1,
 } from "../../packages/hosting/src/index.ts";
 
@@ -51,11 +53,156 @@ async function fixture(mount = "/source"): Promise<Fixture> {
   return { build: { hosting, files }, sources };
 }
 
+async function publicFixture(): Promise<{
+  readonly build: CapturedPublicBuild;
+  readonly content: string;
+}> {
+  const { build } = await fixture();
+  const relativePath = "assets/published.txt";
+  const urlPath = "/assets/published.txt";
+  const content = "captured public bytes";
+  const contentType = "text/plain; charset=utf-8";
+  const hosting: HostingRecordV2 = {
+    version: 2,
+    mode: build.hosting.mode,
+    standaloneMountURL: build.hosting.standaloneMountURL,
+    startupAsset: build.hosting.startupAsset,
+    assets: build.hosting.assets,
+    publicFiles: [
+      {
+        relativePath,
+        urlPath,
+        sha256: await sha256Hex(content),
+        contentType,
+      },
+    ],
+  };
+
+  return {
+    build: {
+      hosting,
+      files: build.files,
+      publicFiles: new Map([[urlPath, new Blob([content], { type: contentType })]]),
+    },
+    content,
+  };
+}
+
 function request(path: string, init?: RequestInit): Request {
   return new Request(`https://example.test${path}`, init);
 }
 
 describe("createHost", () => {
+  test("rejects unknown fields in a direct version 2 public-file record", async () => {
+    const { build } = await publicFixture();
+    const record = build.hosting.publicFiles[0]! as unknown as { debug?: boolean };
+    record.debug = true;
+
+    await expect(createHost(build)).rejects.toThrow("unexpected fields");
+  });
+
+  test("rejects unsafe direct public-file inputs before hosting them", async () => {
+    const cases: readonly {
+      readonly message: string;
+      readonly mutate: (build: CapturedPublicBuild) => void;
+    }[] = [
+      {
+        message: "public file URL path does not match its storage path",
+        mutate(build) {
+          (build.hosting.publicFiles[0] as { relativePath: string }).relativePath =
+            "assets/other.txt";
+        },
+      },
+      {
+        message: "public file path is reserved: /_hesperia/private.txt",
+        mutate(build) {
+          const record = build.hosting.publicFiles[0] as {
+            relativePath: string;
+            urlPath: string;
+          };
+          const blob = build.publicFiles.get(record.urlPath)!;
+
+          record.relativePath = "_hesperia/private.txt";
+          record.urlPath = "/_hesperia/private.txt";
+          (build.publicFiles as Map<string, Blob>).delete("/assets/published.txt");
+          (build.publicFiles as Map<string, Blob>).set(record.urlPath, blob);
+        },
+      },
+      {
+        message: "public file inventory and file map do not match",
+        mutate(build) {
+          (build.publicFiles as Map<string, Blob>).delete("/assets/published.txt");
+        },
+      },
+      {
+        message: "public file digest mismatch: /assets/published.txt",
+        mutate(build) {
+          (build.hosting.publicFiles[0] as { sha256: string }).sha256 = "0".repeat(64);
+        },
+      },
+    ];
+
+    for (const scenario of cases) {
+      const { build } = await publicFixture();
+      scenario.mutate(build);
+
+      await expect(createHost(build)).rejects.toThrow(scenario.message);
+    }
+  });
+
+  test("accepts an explicit empty version 2 public inventory", async () => {
+    const { build } = await fixture();
+    const publicBuild: CapturedPublicBuild = {
+      hosting: { ...build.hosting, version: 2, publicFiles: [] },
+      files: build.files,
+      publicFiles: new Map(),
+    };
+    const host = await createHost(publicBuild);
+    const managed = host.handle(request("/source/_hesperia/assets/nested/start.js"));
+
+    expect(managed?.status).toBe(200);
+    expect(await managed?.text()).toBe(sources.get("/assets/nested/start.js"));
+  });
+
+  test("captures public records and bytes before its first asynchronous digest", async () => {
+    const { build, content } = await publicFixture();
+    const mutableHosting = build.hosting as unknown as {
+      publicFiles: {
+        relativePath: string;
+        urlPath: string;
+        sha256: string;
+        contentType: string;
+      }[];
+    };
+    const mutableFiles = build.publicFiles as Map<string, Blob>;
+    const pending = createHost(build, { mountURL: "/dashboard" });
+
+    mutableHosting.publicFiles[0] = {
+      relativePath: "elsewhere/changed.txt",
+      urlPath: "/changed.txt",
+      sha256: "0".repeat(64),
+      contentType: "text/plain",
+    };
+    mutableFiles.set("/assets/published.txt", new Blob(["replacement bytes"]));
+    mutableFiles.set("/changed.txt", new Blob(["changed path"]));
+
+    const host = await pending;
+    const response = host.handle(
+      request("/dashboard/assets/published.txt", {
+        headers: { accept: "application/octet-stream" },
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(await response?.text()).toBe(content);
+    expect(
+      host.handle(
+        request("/dashboard/changed.txt", { headers: { accept: "application/octet-stream" } }),
+      ),
+    ).toBeUndefined();
+  });
+
   test("preserves ampersands when a browser parses the transport document", async () => {
     const { build } = await fixture("/&copy;");
     const host = await createHost(build);

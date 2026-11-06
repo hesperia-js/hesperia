@@ -1,14 +1,16 @@
-import { existsSync, realpathSync, watch, type FSWatcher } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync, watch, type FSWatcher } from "node:fs";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import {
   createHost,
   readBuild,
   type ApplicationHost,
   type HostingAssetRecord,
+  type HostingPublicFileRecord,
   type HostingRecordV1,
+  type HostingRecordV2,
   type HostSelection,
 } from "@hesperia/hosting";
-import { prepareBuild, type BrowserBuild } from "./project.ts";
+import { prepareBuild, ProjectError, type BrowserBuild } from "./project.ts";
 import { isMissingFile } from "./utils.ts";
 
 /** A local server handle owns its file watchers and connected development clients. */
@@ -50,16 +52,57 @@ export interface DevelopmentOptions {
   readonly report?: (message: string) => void;
 }
 
-interface DevelopmentCapture {
-  readonly hosting: HostingRecordV1;
+interface DevelopmentCaptureMetadata {
   readonly files: ReadonlyMap<string, Blob>;
   readonly sourceFiles: readonly string[];
   readonly dependencies?: BrowserBuild["developmentDependencies"];
 }
 
-interface PublishedDevelopmentRevision extends DevelopmentCapture {
+type DevelopmentCapture = DevelopmentCaptureMetadata &
+  (
+    | { readonly hosting: HostingRecordV1 }
+    | {
+        readonly hosting: HostingRecordV2;
+        readonly publicFiles: ReadonlyMap<string, Blob>;
+      }
+  );
+
+type PublishedDevelopmentRevision = DevelopmentCapture & {
   readonly host: ApplicationHost;
   readonly fingerprint: string;
+};
+
+type DevelopmentWatchEntry = NonNullable<BrowserBuild["watch"]>[number];
+
+interface WatchTarget {
+  readonly kind: "file" | "directory";
+  readonly path: string;
+  readonly identityPath?: string;
+}
+
+interface BigIntWatchStats {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  isDirectory(): boolean;
+  isSymbolicLink(): boolean;
+}
+
+interface WatcherRegistration {
+  readonly watcher: FSWatcher;
+  readonly recursive: boolean;
+  readonly device: bigint;
+  readonly inode: bigint;
+  readonly parentDevice: bigint;
+  readonly parentInode: bigint;
+  readonly identityAvailable: boolean;
+  targets: readonly WatchTarget[];
+}
+
+interface WatchInstallResult {
+  readonly installed: boolean;
+  readonly coverageExpanded: boolean;
+  readonly closeFailures: readonly unknown[];
+  readonly retired: readonly WatcherRegistration[];
 }
 
 /** Build before listening, rebuild serially, and notify connected browsers only when served bytes change. Reload streams remain connected across rebuilds. The optional preparation function is a test seam for revision races. */
@@ -80,23 +123,444 @@ export async function devProject(
 
   let build: BrowserBuild = await prepare();
   const initialCapture = developmentCapture(build);
-  let published: PublishedDevelopmentRevision = {
-    ...initialCapture,
-    host: await createHost({ hosting: initialCapture.hosting, files: initialCapture.files }),
-    fingerprint: developmentFingerprint(build, initialCapture.hosting),
-  };
+  const initialHost = await createHost(developmentHostInput(initialCapture));
+  let published = publishDevelopmentCapture(
+    initialCapture,
+    initialHost,
+    developmentFingerprint(build, initialCapture.hosting),
+  );
   let closed = false;
   let pending = false;
   let building: Promise<void> | undefined;
   let buildAbort: AbortController | undefined;
-  const dependencyWatchers = new Map<
-    string,
-    { watcher: FSWatcher; recursive: boolean; targets: Set<string> }
-  >();
+  const dependencyWatchers = new Map<string, WatcherRegistration>();
   const missingDirectories = new Set<string>();
+  let failedWatchDependencies: readonly DevelopmentWatchEntry[] = [];
   const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();
   const encoder = new TextEncoder();
   const developmentRoots = new Map<string, Blob>();
+
+  function canonicalDirectoryPath(path: string): string {
+    let current = resolve(path);
+    const suffix: string[] = [];
+
+    for (;;) {
+      try {
+        const canonical = realpathSync(current);
+
+        if (lstatSync(canonical, { bigint: true }).isDirectory())
+          return resolve(canonical, ...suffix);
+      } catch (error) {
+        if (!isMissingWatchPath(error)) throw error;
+      }
+
+      const parent = dirname(current);
+
+      if (parent === current) return resolve(current, ...suffix);
+
+      let segment = basename(current);
+
+      try {
+        lstatSync(current, { bigint: true });
+        segment = basename(canonicalWatchPath(current, "file"));
+      } catch (error) {
+        if (!isMissingWatchPath(error)) throw error;
+      }
+
+      suffix.unshift(segment);
+      current = parent;
+    }
+  }
+
+  function nativeEntryName(directory: string, name: string): string {
+    let entries: string[];
+
+    try {
+      entries = readdirSync(directory);
+    } catch (error) {
+      if (isMissingWatchPath(error)) return name;
+
+      throw error;
+    }
+    const exact = entries.find((entry) => entry === name);
+
+    if (exact !== undefined) return exact;
+
+    let requested: Pick<BigIntWatchStats, "dev" | "ino">;
+
+    try {
+      requested = lstatSync(join(directory, name), { bigint: true });
+    } catch (error) {
+      if (isMissingWatchPath(error)) return name;
+
+      throw error;
+    }
+
+    const parent = lstatSync(directory, { bigint: true });
+
+    if (sameFileIdentity(requested, parent)) return name;
+
+    const matches: string[] = [];
+
+    for (const entry of entries) {
+      try {
+        const candidate = lstatSync(join(directory, entry), { bigint: true });
+
+        if (
+          sameFileIdentity(candidate, requested) &&
+          !sameFileIdentity(candidate, parent)
+        )
+          matches.push(entry);
+      } catch (error) {
+        if (!isMissingWatchPath(error)) throw error;
+      }
+    }
+
+    return matches.length === 1 ? matches[0]! : name;
+  }
+
+  function canonicalWatchPath(path: string, kind: WatchTarget["kind"]): string {
+    const absolute = resolve(path);
+
+    if (kind === "file") {
+      const directory = canonicalDirectoryPath(dirname(absolute));
+
+      return resolve(directory, nativeEntryName(directory, basename(absolute)));
+    }
+
+    try {
+      const canonical = realpathSync(absolute);
+
+      if (lstatSync(canonical, { bigint: true }).isDirectory()) return canonical;
+
+      return canonicalWatchPath(absolute, "file");
+    } catch (error) {
+      if (!isMissingWatchPath(error)) throw error;
+
+      try {
+        if (lstatSync(absolute, { bigint: true }).isSymbolicLink())
+          return canonicalWatchPath(absolute, "file");
+      } catch (entryError) {
+        if (!isMissingWatchPath(entryError)) throw entryError;
+      }
+
+      return canonicalDirectoryPath(absolute);
+    }
+  }
+
+  function pathParts(path: string): { readonly root: string; readonly segments: readonly string[] } {
+    const absolute = resolve(path);
+    const parsed = parse(absolute);
+
+    return {
+      root: parsed.root,
+      segments: absolute.slice(parsed.root.length).split(sep).filter(Boolean),
+    };
+  }
+
+  function isWithin(parent: string, child: string): boolean {
+    const parentParts = pathParts(parent);
+    const childParts = pathParts(child);
+
+    return (
+      parentParts.root === childParts.root &&
+      parentParts.segments.length <= childParts.segments.length &&
+      parentParts.segments.every((segment, index) => segment === childParts.segments[index])
+    );
+  }
+
+  function sameFileIdentity(
+    left: { readonly dev: bigint; readonly ino: bigint },
+    right: { readonly dev: bigint; readonly ino: bigint },
+  ): boolean {
+    return left.dev === right.dev && left.ino === right.ino;
+  }
+
+  const canonicalProjectRoot = canonicalDirectoryPath(root);
+  const canonicalProjectRootStats = statSync(canonicalProjectRoot, { bigint: true });
+  const canonicalProjectRootParentStats = statSync(dirname(canonicalProjectRoot), { bigint: true });
+
+  function projectRelativeSegments(path: string): readonly string[] | undefined {
+    const absolute = resolve(path);
+    const targetParts = pathParts(absolute);
+
+    for (const boundary of [root, canonicalProjectRoot]) {
+      const boundaryParts = pathParts(boundary);
+      const exactPrefix =
+        boundaryParts.root === targetParts.root &&
+        boundaryParts.segments.length <= targetParts.segments.length &&
+        boundaryParts.segments.every((segment, index) => segment === targetParts.segments[index]);
+
+      if (exactPrefix) return targetParts.segments.slice(boundaryParts.segments.length);
+
+      const relativePath = relative(boundary, absolute);
+
+      if (
+        !relativePath ||
+        isAbsolute(relativePath) ||
+        relativePath === ".." ||
+        relativePath.startsWith(`..${sep}`)
+      )
+        continue;
+
+      const segments = relativePath.split(sep).filter(Boolean);
+      const targetPrefix = resolve(
+        targetParts.root,
+        ...targetParts.segments.slice(0, boundaryParts.segments.length),
+      );
+
+      try {
+        const prefixStats = statSync(targetPrefix, { bigint: true });
+        const prefixParentStats = statSync(dirname(targetPrefix), { bigint: true });
+
+        if (
+          !sameFileIdentity(prefixStats, prefixParentStats) &&
+          !sameFileIdentity(canonicalProjectRootStats, canonicalProjectRootParentStats) &&
+          sameFileIdentity(prefixStats, canonicalProjectRootStats) &&
+          sameFileIdentity(prefixParentStats, canonicalProjectRootParentStats)
+        )
+          return segments;
+      } catch {
+        continue;
+      }
+    }
+
+    return undefined;
+  }
+
+  function scopedWatchTargets(target: WatchTarget): readonly WatchTarget[] {
+    const segments = projectRelativeSegments(target.path);
+
+    if (segments === undefined) return [target];
+    if (segments.length === 0)
+      return [
+        { ...target, path: canonicalProjectRoot, identityPath: canonicalProjectRoot },
+      ];
+
+    const entries: WatchTarget[] = [];
+    let current = canonicalProjectRoot;
+    let currentStats = lstatSync(current, { bigint: true });
+
+    for (let index = 0; index < segments.length; index++) {
+      const entryPath = resolve(current, segments[index]!);
+      let entryStats: BigIntWatchStats;
+
+      try {
+        entryStats = lstatSync(entryPath, { bigint: true });
+      } catch (error) {
+        if (isMissingWatchPath(error))
+          return uniqueWatchTargets([
+            ...entries,
+            {
+              kind: target.kind,
+              path: resolve(current, ...segments.slice(index)),
+              identityPath: resolve(current, ...segments.slice(index)),
+            },
+          ]);
+
+        return uniqueWatchTargets([
+          ...entries,
+          {
+            kind: "file",
+            path: canonicalWatchPath(entryPath, "file"),
+            identityPath: canonicalWatchPath(entryPath, "file"),
+          },
+        ]);
+      }
+
+      const entryIdentityPath = canonicalWatchPath(entryPath, "file");
+      const entryTarget: WatchTarget = {
+        kind: "file",
+        path: entryIdentityPath,
+        identityPath: entryIdentityPath,
+      };
+
+      if (sameFileIdentity(entryStats, currentStats))
+        return uniqueWatchTargets([...entries, entryTarget]);
+
+      if (entryStats.isSymbolicLink())
+        entries.push(entryTarget);
+
+      if (index < segments.length - 1 && !entryStats.isSymbolicLink() && !entryStats.isDirectory())
+        return uniqueWatchTargets([...entries, entryTarget]);
+
+      let resolvedEntry: string;
+
+      try {
+        resolvedEntry = realpathSync(entryPath);
+      } catch {
+        return uniqueWatchTargets([
+          ...entries,
+          { kind: "file", path: entryIdentityPath, identityPath: entryIdentityPath },
+        ]);
+      }
+
+      if (!isWithin(canonicalProjectRoot, resolvedEntry))
+        return uniqueWatchTargets([...entries, entryTarget]);
+
+      let stableEntry: BigIntWatchStats;
+      let stableParent: BigIntWatchStats;
+      let resolvedStats: BigIntWatchStats;
+
+      try {
+        stableEntry = lstatSync(entryPath, { bigint: true });
+        stableParent = lstatSync(current, { bigint: true });
+        resolvedStats = lstatSync(resolvedEntry, { bigint: true });
+
+        if (
+          realpathSync(entryPath) !== resolvedEntry ||
+          !sameFileIdentity(entryStats, stableEntry) ||
+          !sameFileIdentity(currentStats, stableParent) ||
+          (!entryStats.isSymbolicLink() &&
+            (!sameFileIdentity(entryStats, resolvedStats) ||
+              !sameFileIdentity(currentStats, lstatSync(dirname(resolvedEntry), { bigint: true }))))
+        )
+          return uniqueWatchTargets([...entries, entryTarget]);
+      } catch {
+        return uniqueWatchTargets([...entries, entryTarget]);
+      }
+
+      if (
+        index === segments.length - 1 &&
+        target.kind === "directory" &&
+        !resolvedStats.isDirectory()
+      )
+        return uniqueWatchTargets([...entries, entryTarget]);
+
+      if (index < segments.length - 1 && !resolvedStats.isDirectory())
+        return uniqueWatchTargets([...entries, entryTarget]);
+
+      current = resolvedEntry;
+      currentStats = resolvedStats;
+
+      if (index === segments.length - 1)
+        return uniqueWatchTargets([
+          ...entries,
+          {
+            kind: target.kind,
+            path:
+              target.kind === "file"
+                ? entryIdentityPath
+                : resolvedEntry,
+            identityPath:
+              target.kind === "file"
+                ? entryIdentityPath
+                : resolvedEntry,
+          },
+        ]);
+    }
+
+    return uniqueWatchTargets([...entries, target]);
+  }
+
+  function uniqueWatchTargets(targets: readonly WatchTarget[]): readonly WatchTarget[] {
+    const unique: WatchTarget[] = [];
+
+    for (const target of targets) {
+      const path = resolve(target.path);
+      const identityPath =
+        target.identityPath !== undefined ? resolve(target.identityPath) : undefined;
+      const existing = unique.find(
+        (current) => current.kind === target.kind && resolve(current.path) === path,
+      );
+
+      if (existing) continue;
+
+      unique.push({
+        ...target,
+        path,
+        ...(identityPath !== undefined ? { identityPath } : {}),
+      });
+    }
+
+    return unique;
+  }
+
+  function targetMatches(target: WatchTarget, changed: string): boolean {
+    const targetPaths = new Set([
+      ...(target.identityPath !== undefined ? [target.identityPath] : []),
+      canonicalWatchPath(target.path, target.kind),
+    ]);
+
+    if (target.kind === "file")
+      return [...targetPaths].some((targetPath) => changed === targetPath || isWithin(changed, targetPath));
+
+    return [...targetPaths].some(
+      (targetPath) => isWithin(targetPath, changed) || isWithin(changed, targetPath),
+    );
+  }
+
+  function isMissingWatchPath(error: unknown): boolean {
+    return (
+      isMissingFile(error) ||
+      (typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error.code === "ENOTDIR" || error.code === "ENOENT"))
+    );
+  }
+
+  function closeDependencyWatchers(failures: unknown[]): void {
+    const registrations = [...dependencyWatchers.values()];
+
+    dependencyWatchers.clear();
+
+    for (const registration of registrations) closeWatcher(registration.watcher, failures);
+  }
+
+  function closeWatcher(watcher: FSWatcher, failures: unknown[]): void {
+    try {
+      watcher.close();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+
+  function reportWatchError(error: unknown): void {
+    try {
+      report(String(error));
+    } catch {
+      // A reporting callback must not change which watch set is active.
+    }
+  }
+
+  function reportWatchCloseFailures(failures: readonly unknown[]): void {
+    for (const failure of failures) reportWatchError(failure);
+  }
+
+  function closeRetiredWatchers(registrations: readonly WatcherRegistration[]): readonly unknown[] {
+    const failures: unknown[] = [];
+
+    for (const registration of registrations) closeWatcher(registration.watcher, failures);
+
+    return failures;
+  }
+
+  function commitAndRetire(
+    registrations: readonly WatcherRegistration[],
+    commit: () => void,
+  ): readonly unknown[] {
+    try {
+      commit();
+    } catch (error) {
+      const failures = closeRetiredWatchers(registrations);
+
+      if (failures.length) {
+        reportWatchError(error);
+        reportWatchCloseFailures(failures);
+
+        throw new AggregateError(
+          [error, ...failures],
+          "Development watch publication and retirement failed",
+          { cause: error },
+        );
+      }
+
+      throw error;
+    }
+
+    return closeRetiredWatchers(registrations);
+  }
 
   function rememberDevelopmentRoot(host: ApplicationHost): void {
     const root = host.mount.assetPath;
@@ -119,106 +583,419 @@ export async function devProject(
     }
   }
 
-  function watchDependencies(candidate: BrowserBuild): void {
+  function watchDependencies(
+    candidate: Pick<BrowserBuild, "sources" | "watch">,
+    failed: readonly DevelopmentWatchEntry[],
+    isCurrent: () => boolean = () => !closed,
+  ): WatchInstallResult {
+    if (!isCurrent())
+      return { installed: false, coverageExpanded: false, closeFailures: [], retired: [] };
+
     const sourceRoot = join(root, "src");
-    const directories = new Map<string, { recursive: boolean; targets: Set<string> }>();
+    const publicRoot = join(root, "public");
+    const directories = new Map<
+      string,
+      {
+        recursive: boolean;
+        device: bigint;
+        inode: bigint;
+        parentDevice: bigint;
+        parentInode: bigint;
+        identityAvailable: boolean;
+        targets: WatchTarget[];
+      }
+    >();
+    const nextMissing = new Set<string>();
+    const newlyMissing = new Set<string>();
 
-    for (const directory of candidate.sources
-      .map(dirname)
-      .filter(
-        (directory) =>
-          directory !== root &&
-          directory !== sourceRoot &&
-          !directory.startsWith(`${sourceRoot}${sep}`),
-      ))
-      addDirectory(directory, false);
+    for (const target of scopedWatchTargets({ kind: "directory", path: publicRoot }))
+      addWatchTarget(target, target.kind === "directory", false);
 
-    for (const item of candidate.watch ?? []) {
-      const directory = item.kind === "file" ? dirname(item.file) : item.dir;
+    const sourceTargets = scopedWatchTargets({ kind: "directory", path: sourceRoot });
 
-      if (
-        directory === root ||
-        directory === sourceRoot ||
-        directory.startsWith(`${sourceRoot}${sep}`)
-      )
-        continue;
+    for (const target of sourceTargets) addWatchTarget(target, target.kind === "directory", false);
 
-      addDirectory(directory, item.kind === "directory");
+    const sourceRootContent = sourceTargets.find((target) => target.kind === "directory");
+    const sourceRootIdentity = sourceRootContent?.identityPath;
+    const sourceRootCovered =
+      sourceRootIdentity !== undefined && directories.get(sourceRootIdentity)?.recursive === true;
+
+    for (const directory of candidate.sources.map(dirname)) {
+      const targets = scopedWatchTargets({ kind: "directory", path: directory });
+      const coveredBySourceWatcher =
+        sourceRootCovered &&
+        sourceRootIdentity !== undefined &&
+        targets.every((target) =>
+          isWithin(
+            sourceRootIdentity,
+            target.identityPath ?? canonicalWatchPath(target.path, target.kind),
+          ),
+        );
+
+      if (coveredBySourceWatcher) continue;
+
+      for (const target of targets) {
+        if (target.kind === "directory" && target.identityPath === canonicalProjectRoot) continue;
+
+        addWatchTarget(target, false);
+      }
     }
 
-    function addDirectory(directory: string, recursive: boolean): void {
+    for (const item of [...(candidate.watch ?? []), ...failed]) {
+      const target: WatchTarget =
+        item.kind === "file"
+          ? { kind: "file", path: item.file }
+          : { kind: "directory", path: item.dir };
+
+      for (const scopedTarget of scopedWatchTargets(target))
+        addWatchTarget(scopedTarget, scopedTarget.kind === "directory");
+    }
+
+    function addWatchTarget(
+      target: WatchTarget,
+      recursive: boolean,
+      reportMissing = true,
+    ): void {
+      const scopedTargets = scopedWatchTargets(target);
+      const currentTarget = scopedTargets.find(
+        (scoped) => scoped.kind === target.kind && resolve(scoped.path) === resolve(target.path),
+      );
+
+      if (!currentTarget) {
+        for (const scoped of scopedTargets)
+          addScopedWatchTarget(scoped, scoped.kind === "directory", reportMissing);
+
+        return;
+      }
+
+      addScopedWatchTarget(currentTarget, recursive, reportMissing);
+    }
+
+    function addScopedWatchTarget(
+      target: WatchTarget,
+      recursive: boolean,
+      reportMissing: boolean,
+    ): void {
+      if (target.kind === "file") {
+        const identityPath = target.identityPath ?? canonicalWatchPath(target.path, "file");
+
+        addDirectory(
+          dirname(identityPath),
+          false,
+          { ...target, path: identityPath, identityPath },
+          reportMissing,
+        );
+        return;
+      }
+
+      const identityPath = target.identityPath ?? canonicalWatchPath(target.path, "directory");
+
+      if (identityPath !== canonicalProjectRoot) {
+        const entryPath = target.path;
+        const entryIdentityPath = canonicalWatchPath(entryPath, "file");
+
+        addDirectory(
+          dirname(entryIdentityPath),
+          false,
+          { kind: "file", path: entryIdentityPath, identityPath: entryIdentityPath },
+          reportMissing,
+        );
+      }
+
+      addDirectory(
+        identityPath,
+        recursive && identityPath !== canonicalProjectRoot,
+        { ...target, path: identityPath, identityPath },
+        reportMissing,
+      );
+    }
+
+    function addDirectory(
+      directory: string,
+      recursive: boolean,
+      target: WatchTarget,
+      reportMissing = true,
+    ): void {
+      const safeTarget = scopedWatchTargets(target).some(
+        (scoped) => scoped.kind === target.kind && resolve(scoped.path) === resolve(target.path),
+      );
+
+      if (!safeTarget) return;
+
       let ancestor = resolve(directory);
+      const requestedDirectory = resolve(directory);
 
       for (;;) {
+        let canonical: string | undefined;
+
         try {
-          const canonical = realpathSync(ancestor);
-          const targets = directories.get(canonical)?.targets ?? new Set<string>();
+          const resolvedAncestor = realpathSync(ancestor);
 
-          targets.add(resolve(canonical, relative(ancestor, directory)));
+          const stats = lstatSync(resolvedAncestor, { bigint: true });
 
-          directories.set(canonical, {
-            recursive: recursive || directories.get(canonical)?.recursive === true,
-            targets,
-          });
+          if (stats.isDirectory()) {
+            canonical = resolvedAncestor;
+            const parentStats = lstatSync(dirname(canonical), { bigint: true });
+            const targets = directories.get(canonical)?.targets ?? [];
+            const targetPath = resolve(target.path);
+            const targetIdentity = target.identityPath ?? canonicalWatchPath(targetPath, target.kind);
 
-          if (ancestor === resolve(directory)) missingDirectories.delete(resolve(directory));
-          else if (!missingDirectories.has(resolve(directory))) {
-            missingDirectories.add(resolve(directory));
-
-            report(
-              `Development watch directory is missing: ${directory}; watching for its creation`,
+            const existingTarget = targets.find(
+              (current) => current.kind === target.kind && resolve(current.path) === targetPath,
             );
+
+            if (existingTarget) {
+              const index = targets.indexOf(existingTarget);
+
+              targets[index] = { ...target, path: targetPath, identityPath: targetIdentity };
+            } else targets.push({ ...target, path: targetPath, identityPath: targetIdentity });
+
+            directories.set(canonical, {
+              recursive:
+                (ancestor === requestedDirectory && recursive) ||
+                directories.get(canonical)?.recursive === true,
+              device: stats.dev,
+              inode: stats.ino,
+              parentDevice: parentStats.dev,
+              parentInode: parentStats.ino,
+              identityAvailable: !sameFileIdentity(stats, parentStats),
+              targets,
+            });
+          }
+        } catch (error) {
+          if (!isMissingWatchPath(error)) throw error;
+        }
+
+        if (canonical !== undefined) {
+          if (ancestor === requestedDirectory) nextMissing.delete(requestedDirectory);
+          else {
+            nextMissing.add(requestedDirectory);
+
+            if (reportMissing && !missingDirectories.has(requestedDirectory))
+              newlyMissing.add(requestedDirectory);
           }
 
           return;
-        } catch (error) {
-          if (!isMissingFile(error)) throw error;
-
-          const parent = dirname(ancestor);
-
-          if (parent === ancestor) throw error;
-
-          ancestor = parent;
-          recursive = true;
         }
+
+        const parent = dirname(ancestor);
+
+        if (parent === ancestor)
+          throw new Error(`Unable to find a directory to watch for ${directory}`);
+
+        ancestor = parent;
       }
     }
 
-    for (const [directory, current] of dependencyWatchers) {
-      if (directories.get(directory)?.recursive !== current.recursive) {
-        current.watcher.close();
+    function sameWatchIdentity(
+      existing: WatcherRegistration,
+      requested: {
+        device: bigint;
+        inode: bigint;
+        parentDevice: bigint;
+        parentInode: bigint;
+        identityAvailable: boolean;
+      },
+    ): boolean {
+      return (
+        existing.identityAvailable === requested.identityAvailable &&
+        existing.device === requested.device &&
+        existing.inode === requested.inode &&
+        existing.parentDevice === requested.parentDevice &&
+        existing.parentInode === requested.parentInode
+      );
+    }
 
-        dependencyWatchers.delete(directory);
+    function targetIsDirectory(target: WatchTarget): boolean {
+      if (target.kind !== "directory") return false;
+
+      try {
+        return statSync(target.identityPath ?? target.path, { bigint: true }).isDirectory();
+      } catch (error) {
+        if (isMissingWatchPath(error)) return false;
+
+        throw error;
       }
     }
+
+    function targetEntryExists(target: WatchTarget): boolean {
+      try {
+        lstatSync(target.identityPath ?? target.path, { bigint: true });
+
+        return true;
+      } catch (error) {
+        if (isMissingWatchPath(error)) return false;
+
+        throw error;
+      }
+    }
+
+    function registrationCoversTarget(
+      directory: string,
+      registration: WatcherRegistration,
+      requestedDirectory: string,
+      target: WatchTarget,
+      recursive: boolean,
+    ): boolean {
+      const targetPath = resolve(target.identityPath ?? target.path);
+      const targetIsPresentDirectory = targetIsDirectory(target);
+      const filterCoversTarget = registration.targets.some((current) => {
+        const currentPath = resolve(current.identityPath ?? current.path);
+
+        return current.kind === "file"
+          ? target.kind === "file" && currentPath === targetPath
+          : isWithin(currentPath, targetPath);
+      });
+
+      if (!filterCoversTarget) return false;
+      if (registration.recursive && isWithin(directory, targetPath)) return true;
+      if (
+        !targetEntryExists(target) &&
+        directory === requestedDirectory &&
+        (!recursive || registration.recursive) &&
+        registration.targets.some(
+          (current) =>
+            current.kind === target.kind &&
+            resolve(current.identityPath ?? current.path) === targetPath,
+        )
+      )
+        return true;
+      if (target.kind === "file") return dirname(targetPath) === directory;
+      if (targetIsPresentDirectory)
+        return directory === targetPath && (!recursive || registration.recursive);
+
+      return directory === dirname(targetPath);
+    }
+
+    let coverageExpanded = false;
 
     for (const [directory, requested] of directories) {
       const existing = dependencyWatchers.get(directory);
 
-      if (existing) existing.targets = requested.targets;
-      else {
-        const current = {
-          ...requested,
-          watcher: watch(directory, { recursive: requested.recursive }, (_event, filename) => {
-            if (filename === null) return;
+      if (existing && !sameWatchIdentity(existing, requested)) coverageExpanded = true;
 
-            const changed = resolve(directory, filename.toString());
+      for (const target of requested.targets) {
+        const targetRecursive =
+          target.kind === "directory" && requested.recursive && targetIsDirectory(target);
+        const alreadyCovered = [...dependencyWatchers].some(([activeDirectory, registration]) =>
+          registrationCoversTarget(
+            activeDirectory,
+            registration,
+            directory,
+            target,
+            targetRecursive,
+          ),
+        );
 
-            if (
-              [...current.targets].some(
-                (target) =>
-                  changed === target ||
-                  changed.startsWith(`${target}${sep}`) ||
-                  target.startsWith(`${changed}${sep}`),
-              )
-            )
-              rebuild();
-          }),
-        };
-
-        dependencyWatchers.set(directory, current);
+        if (!alreadyCovered) coverageExpanded = true;
       }
     }
+
+    const nextWatchers = new Map<string, WatcherRegistration>();
+    const additions = new Set<WatcherRegistration>();
+
+    try {
+      for (const [directory, requested] of directories) {
+        const existing = dependencyWatchers.get(directory);
+
+        if (
+          existing &&
+          existing.recursive === requested.recursive &&
+          existing.identityAvailable &&
+          requested.identityAvailable &&
+          sameWatchIdentity(existing, requested)
+        ) {
+          nextWatchers.set(directory, existing);
+          continue;
+        }
+
+        let registration: WatcherRegistration | undefined;
+        const watcher = watch(directory, { recursive: requested.recursive }, (_event, filename) => {
+          if (!registration || dependencyWatchers.get(directory) !== registration) return;
+          if (filename === null) {
+            rebuild();
+            return;
+          }
+
+          try {
+            const changed = canonicalWatchPath(resolve(directory, filename.toString()), "file");
+
+            if (registration.targets.some((target) => targetMatches(target, changed))) rebuild();
+          } catch {
+            rebuild();
+          }
+        });
+        registration = {
+          watcher,
+          recursive: requested.recursive,
+          device: requested.device,
+          inode: requested.inode,
+          parentDevice: requested.parentDevice,
+          parentInode: requested.parentInode,
+          identityAvailable: requested.identityAvailable,
+          targets: requested.targets,
+        };
+        additions.add(registration);
+        nextWatchers.set(directory, registration);
+      }
+
+      for (const directory of newlyMissing) {
+        try {
+          report(
+            `Development watch directory is missing: ${directory}; watching for its creation`,
+          );
+        } catch {
+          // Reporting a missing directory must not invalidate the installed watch set.
+        }
+      }
+
+      if (!isCurrent()) {
+        const closeFailures: unknown[] = [];
+
+        for (const registration of additions) closeWatcher(registration.watcher, closeFailures);
+
+        return { installed: false, coverageExpanded: false, closeFailures, retired: [] };
+      }
+
+      for (const [directory, requested] of directories) {
+        const registration = nextWatchers.get(directory)!;
+
+        registration.targets = requested.targets;
+      }
+
+    } catch (error) {
+      const closeFailures: unknown[] = [];
+
+      for (const registration of additions) closeWatcher(registration.watcher, closeFailures);
+
+      if (closeFailures.length) {
+        reportWatchError(error);
+        reportWatchCloseFailures(closeFailures);
+
+        throw new AggregateError(
+          [error, ...closeFailures],
+          "Development watch registration and rollback failed",
+          { cause: error },
+        );
+      }
+
+      throw error;
+    }
+
+    const previousWatchers = [...dependencyWatchers.values()];
+    const retainedWatchers = new Set(nextWatchers.values());
+    const retired = previousWatchers.filter((registration) => !retainedWatchers.has(registration));
+
+    dependencyWatchers.clear();
+
+    for (const [directory, registration] of nextWatchers)
+      dependencyWatchers.set(directory, registration);
+
+    missingDirectories.clear();
+
+    for (const directory of nextMissing) missingDirectories.add(directory);
+
+    return { installed: true, coverageExpanded, closeFailures: [], retired };
   }
 
   function rebuild(): void {
@@ -271,39 +1048,133 @@ export async function devProject(
 
           if (!closed && !controller.signal.aborted && !pending) {
             if (fingerprint === published.fingerprint && !routeIds.length && !reloadAll) {
-              watchDependencies(candidate);
+              let watchInstall: WatchInstallResult;
 
-              published = { ...published, ...capture };
-              build = candidate;
+              try {
+                watchInstall = watchDependencies(candidate, [], () =>
+                  !closed && !controller.signal.aborted && !pending,
+                );
+
+                if (!watchInstall.installed) {
+                  reportWatchCloseFailures(watchInstall.closeFailures);
+                  continue;
+                }
+              } catch (watchError) {
+                reportWatchError(watchError);
+                continue;
+              }
+
+              const closeFailures = commitAndRetire(watchInstall.retired, () => {
+                published = publishDevelopmentCapture(capture, published.host, fingerprint);
+                build = candidate;
+                failedWatchDependencies = [];
+              });
+
+              reportWatchCloseFailures(closeFailures);
+
+              if (
+                watchInstall.coverageExpanded &&
+                !closed &&
+                !controller.signal.aborted &&
+                !pending
+              )
+                rebuild();
+
               continue;
             }
 
-            const host = await createHost({ hosting: capture.hosting, files: capture.files });
+            const host = await createHost(developmentHostInput(capture));
 
             if (!closed && !controller.signal.aborted && !pending) {
-              watchDependencies(candidate);
+              let watchInstall: WatchInstallResult;
 
-              published = { ...capture, host, fingerprint };
+              try {
+                watchInstall = watchDependencies(candidate, [], () =>
+                  !closed && !controller.signal.aborted && !pending,
+                );
 
-              rememberDevelopmentRoot(host);
+                if (!watchInstall.installed) {
+                  reportWatchCloseFailures(watchInstall.closeFailures);
+                  continue;
+                }
+              } catch (watchError) {
+                reportWatchError(watchError);
+                continue;
+              }
 
-              build = candidate;
+              const closeFailures = commitAndRetire(watchInstall.retired, () => {
+                published = publishDevelopmentCapture(capture, host, fingerprint);
+                build = candidate;
+                failedWatchDependencies = [];
 
-              if (routeIds.length || reloadAll)
-                publish({ type: "source-removal", routeIds, reloadAll });
+                rememberDevelopmentRoot(host);
 
-              publish(
-                styleOnly
-                  ? { type: "style-revision", plan: candidate.styleRevision!.plan }
-                  : "reload",
-              );
+                if (routeIds.length || reloadAll)
+                  publish({ type: "source-removal", routeIds, reloadAll });
+
+                publish(
+                  styleOnly
+                    ? { type: "style-revision", plan: candidate.styleRevision!.plan }
+                    : "reload",
+                );
+              });
+
+              reportWatchCloseFailures(closeFailures);
+
+              if (
+                watchInstall.coverageExpanded &&
+                !closed &&
+                !controller.signal.aborted &&
+                !pending
+              )
+                rebuild();
             }
           }
         } catch (error) {
           if (!closed && !controller.signal.aborted) {
-            report(String(error));
+            const attempted = error instanceof ProjectError ? (error.watch ?? []) : [];
+            let watchInstall: WatchInstallResult = {
+              installed: false,
+              coverageExpanded: false,
+              closeFailures: [],
+              retired: [],
+            };
 
-            publish(String(error));
+            try {
+              watchInstall = watchDependencies(build, attempted, () =>
+                !closed && !controller.signal.aborted && !pending,
+              );
+
+              const closeFailures = commitAndRetire(watchInstall.retired, () => {
+                if (watchInstall.installed) failedWatchDependencies = attempted;
+              });
+
+              reportWatchCloseFailures(closeFailures);
+              reportWatchCloseFailures(watchInstall.closeFailures);
+            } catch (watchError) {
+              reportWatchError(watchError);
+            }
+
+            if (closed || controller.signal.aborted || pending) continue;
+
+            const message = String(error);
+
+            if (closed || controller.signal.aborted || pending) continue;
+
+            report(message);
+
+            if (closed || controller.signal.aborted || pending) continue;
+
+            publish(message);
+
+            if (
+              watchInstall.installed &&
+              watchInstall.coverageExpanded &&
+              !closed &&
+              !controller.signal.aborted &&
+              !pending
+            )
+              rebuild();
           }
         } finally {
           if (buildAbort === controller) buildAbort = undefined;
@@ -394,44 +1265,87 @@ export async function devProject(
   const watchers: FSWatcher[] = [];
 
   try {
-    watchDependencies(build);
+    const initialWatchInstall = watchDependencies(build, failedWatchDependencies);
 
-    watchers.push(watch(join(root, "src"), { recursive: true }, rebuild));
+    if (!initialWatchInstall.installed) {
+      const error = new Error("Development dependency watches could not be installed");
+
+      if (initialWatchInstall.closeFailures.length)
+        throw new AggregateError(
+          [error, ...initialWatchInstall.closeFailures],
+          "Development dependency watch installation and cleanup failed",
+          { cause: error },
+        );
+
+      throw error;
+    }
+
+    const closeFailures = closeRetiredWatchers(initialWatchInstall.retired);
+
+    reportWatchCloseFailures(closeFailures);
+    reportWatchCloseFailures(initialWatchInstall.closeFailures);
 
     watchers.push(
       watch(root, (_event, filename) => {
-        const changed = filename?.toString();
-        const checkingInput =
-          changed !== undefined &&
-          build.sources.some(
-            (source) =>
-              dirname(source).toLowerCase() === root.toLowerCase() &&
-              resolve(source).toLowerCase() === resolve(root, changed).toLowerCase(),
-          );
-        const rootDirectoryWatch =
-          changed !== undefined &&
-          build.watch?.some((item) => item.kind === "directory" && resolve(item.dir) === root) ===
-            true;
-
-        if (
-          changed &&
-          changed !== "hesperia.d.ts" &&
-          (/\.(?:ts|tsx|mts)$/u.test(changed) ||
-            ["tsconfig.json", "hesperia.config.json"].includes(changed) ||
-            checkingInput ||
-            rootDirectoryWatch)
-        )
+        if (filename === null) {
           rebuild();
+          return;
+        }
+
+        try {
+          const changed = filename.toString();
+          const checkingInput = build.sources.some(
+            (source) =>
+              canonicalWatchPath(dirname(source), "directory") ===
+                canonicalWatchPath(root, "directory") &&
+              canonicalWatchPath(source, "file") ===
+                canonicalWatchPath(resolve(root, changed), "file"),
+          );
+          const rootDirectoryWatch =
+            build.watch?.some(
+              (item) =>
+                item.kind === "directory" &&
+                canonicalWatchPath(item.dir, "directory") ===
+                  canonicalWatchPath(root, "directory"),
+            ) === true;
+
+          if (
+            changed &&
+            changed !== "hesperia.d.ts" &&
+            (/\.(?:ts|tsx|mts)$/u.test(changed) ||
+              ["tsconfig.json", "hesperia.config.json"].includes(changed) ||
+              checkingInput ||
+              rootDirectoryWatch)
+          )
+            rebuild();
+        } catch {
+          rebuild();
+        }
       }),
     );
+
+    if (initialWatchInstall.coverageExpanded)
+      queueMicrotask(() => {
+        if (!closed && !pending) rebuild();
+      });
   } catch (error) {
     closed = true;
+    const failures: unknown[] = [];
 
-    for (const watcher of watchers) watcher.close();
+    for (const watcher of watchers) closeWatcher(watcher, failures);
 
-    for (const { watcher } of dependencyWatchers.values()) watcher.close();
+    closeDependencyWatchers(failures);
 
-    await server.stop(true);
+    try {
+      await server.stop(true);
+    } catch (cleanup) {
+      failures.push(cleanup);
+    }
+
+    if (failures.length)
+      throw new AggregateError([error, ...failures], "Development server startup and cleanup failed", {
+        cause: error,
+      });
 
     throw error;
   }
@@ -441,12 +1355,22 @@ export async function devProject(
 
     async close() {
       closed = true;
+      const activeBuild = building;
+      const buildSettlement = activeBuild?.then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      const failures: unknown[] = [];
 
-      buildAbort?.abort();
+      try {
+        buildAbort?.abort();
+      } catch (error) {
+        failures.push(error);
+      }
 
-      for (const watcher of watchers) watcher.close();
+      for (const watcher of watchers) closeWatcher(watcher, failures);
 
-      for (const { watcher } of dependencyWatchers.values()) watcher.close();
+      closeDependencyWatchers(failures);
 
       for (const client of clients) {
         try {
@@ -458,9 +1382,20 @@ export async function devProject(
 
       clients.clear();
 
-      await server.stop(true);
+      try {
+        await server.stop(true);
+      } catch (error) {
+        failures.push(error);
+      }
 
-      await building;
+      const result = await buildSettlement;
+
+      if (result && !result.ok) failures.push(result.error);
+      if (failures.length === 1) throw failures[0];
+      if (failures.length)
+        throw new AggregateError(failures, "Development server cleanup failed", {
+          cause: failures[0],
+        });
     },
   };
 }
@@ -503,12 +1438,10 @@ function developmentCapture(
     }
   }
 
-  const hosting: HostingRecordV1 = {
-    ...build.hosting,
-    assets: [...assets.values()].sort((left, right) => left.path.localeCompare(right.path)),
-  };
-  return {
-    hosting,
+  const managedAssets = [...assets.values()].sort((left, right) =>
+    left.path.localeCompare(right.path),
+  );
+  const metadata: DevelopmentCaptureMetadata = {
     files,
     sourceFiles: [
       ...new Set([
@@ -547,6 +1480,63 @@ function developmentCapture(
         }
       : {}),
   };
+
+  if ("publicFiles" in build) {
+    const currentHosting = snapshotDevelopmentHosting(build.hosting);
+
+    if (currentHosting.version !== 2)
+      throw new TypeError("A version 2 build must include its public-file hosting record");
+
+    return {
+      ...metadata,
+      hosting: { ...currentHosting, assets: managedAssets },
+      publicFiles: new Map(build.publicFiles),
+    };
+  }
+
+  const currentHosting = snapshotDevelopmentHosting(build.hosting);
+
+  if (currentHosting.version !== 1)
+    throw new TypeError("A version 1 build cannot include a public-file hosting record");
+
+  return { ...metadata, hosting: { ...currentHosting, assets: managedAssets } };
+}
+
+function snapshotDevelopmentHosting(
+  hosting: HostingRecordV1 | HostingRecordV2,
+): HostingRecordV1 | HostingRecordV2 {
+  const assets = Object.freeze(hosting.assets.map((asset) => Object.freeze({ ...asset })));
+
+  if (hosting.version === 2) {
+    const publicFiles: readonly HostingPublicFileRecord[] = Object.freeze(
+      hosting.publicFiles.map((file) => Object.freeze({ ...file })),
+    );
+
+    return Object.freeze({ ...hosting, assets, publicFiles });
+  }
+
+  return Object.freeze({ ...hosting, assets });
+}
+
+function developmentHostInput(capture: DevelopmentCapture) {
+  if ("publicFiles" in capture)
+    return {
+      hosting: capture.hosting,
+      files: capture.files,
+      publicFiles: capture.publicFiles,
+    };
+
+  return { hosting: capture.hosting, files: capture.files };
+}
+
+function publishDevelopmentCapture(
+  capture: DevelopmentCapture,
+  host: ApplicationHost,
+  fingerprint: string,
+): PublishedDevelopmentRevision {
+  if ("publicFiles" in capture) return { ...capture, host, fingerprint };
+
+  return { ...capture, host, fingerprint };
 }
 
 function canonicalSource(filename: string): string {
@@ -554,11 +1544,23 @@ function canonicalSource(filename: string): string {
   return process.platform === "win32" ? path.toLowerCase() : path;
 }
 
-function developmentFingerprint(build: BrowserBuild, hosting: HostingRecordV1): string {
+function developmentFingerprint(
+  build: BrowserBuild,
+  hosting: HostingRecordV1 | HostingRecordV2,
+): string {
+  const publicFiles =
+    hosting.version === 2
+      ? hosting.publicFiles
+          .map((file) => [file.urlPath, file.contentType, file.sha256] as const)
+          .sort((left, right) => (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0))
+      : [];
+
   return JSON.stringify({
+    hostingVersion: hosting.version,
     mount: hosting.standaloneMountURL,
     startup: hosting.startupAsset,
     assets: hosting.assets,
+    publicFiles,
     styleRevision: build.styleRevision
       ? { semanticKey: build.styleRevision.semanticKey, plan: build.styleRevision.plan }
       : null,
