@@ -33,6 +33,14 @@ export function createTask<Input = void, Output = unknown>(
   owner: Owner,
   factory: TaskFactory<Input, Output>,
 ): Task<Input, Output> {
+  return createTaskController<Input, Output>(owner, factory).task;
+}
+
+/** Create a task with an internal reset capability for owner-bound validation state. */
+export function createTaskController<Input = void, Output = unknown>(
+  owner: Owner,
+  factory: TaskFactory<Input, Output>,
+): { readonly task: Task<Input, Output>; readonly reset: () => void } {
   owner.assertActive();
 
   if (typeof factory !== "function") throw new TypeError("Task factory must be a function");
@@ -282,7 +290,22 @@ export function createTask<Input = void, Output = unknown>(
     error: (() => read(errorCell)) as Accessor<unknown>,
     status: (() => read(statusCell)) as Accessor<TaskStatus>,
   };
-  return Object.freeze(task);
+  const reset = (): void => {
+    owner.assertActive();
+
+    const previousId = nextId;
+    current?.cancel(cancellationReason("Form validation reset"));
+
+    if (disposed || nextId !== previousId) return;
+
+    try {
+      stateCell.set({ status: "idle", value: undefined, error: undefined });
+    } catch (error) {
+      reportPublicationFailure(error);
+    }
+  };
+
+  return Object.freeze({ task: Object.freeze(task), reset });
 }
 
 function isCancellationError(error: unknown): boolean {

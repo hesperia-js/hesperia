@@ -222,6 +222,7 @@ const CLIENT_OPERATIONS = new Set([
   "bind",
   "unsafeBind",
   "task",
+  "form",
   "unsafeHTML",
 ]);
 

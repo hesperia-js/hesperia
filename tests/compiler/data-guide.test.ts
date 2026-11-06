@@ -2,8 +2,15 @@ import { expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { compileProjectModules } from "../../packages/compiler/src/project-compilation.ts";
 
-test("data guide examples pass authored checking and executable emission", async () => {
+test("data and validation guide examples pass authored checking and executable emission", async () => {
   const guide = await Bun.file(resolve(import.meta.dir, "../../docs/data.md")).text();
+  const validationGuide = await Bun.file(
+    resolve(import.meta.dir, "../../packages/hesperia/docs/validation.md"),
+  ).text();
+  const validationSource = /```tsx\r?\n([\s\S]*?)```/u.exec(validationGuide)?.[1];
+
+  if (!validationSource) throw new Error("The validation guide has no TSX example");
+
   const componentExamples = [...guide.matchAll(/```tsx\r?\n([\s\S]*?)```/gu)];
   const apiExamples = [...guide.matchAll(/```ts\r?\n([\s\S]*?)```/gu)].filter((match) =>
     match[1]?.includes("withAeolia"),
@@ -27,6 +34,7 @@ test("data guide examples pass authored checking and executable emission", async
     { filename, source },
     { filename: "task-guide.tsx", source: taskSource },
     { filename: "api.ts", source: api },
+    { filename: "validation-guide.tsx", source: validationSource },
   ]);
 
   expect(compiled.checking.diagnostics).toStrictEqual([]);
@@ -36,6 +44,10 @@ test("data guide examples pass authored checking and executable emission", async
   expect(compiled.modules.get("task-guide.tsx")?.code).toBeDefined();
 
   expect(compiled.modules.get("api.ts")?.code).toContain("withAeolia");
+
+  expect(compiled.modules.get("validation-guide.tsx")?.diagnostics).toStrictEqual([]);
+
+  expect(compiled.modules.get("validation-guide.tsx")?.code.length).toBeGreaterThan(0);
 
   const projectionExample = findComponentExample("function Activity");
   const streamApi = `import { createGraph, createStream, defineContract } from "aeolia";
