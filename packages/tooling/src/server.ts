@@ -339,7 +339,7 @@ export async function devProject(
 
     const entries: WatchTarget[] = [];
     let current = canonicalProjectRoot;
-    let currentStats = lstatSync(current, { bigint: true });
+    let currentStats: BigIntWatchStats = lstatSync(current, { bigint: true });
 
     for (let index = 0; index < segments.length; index++) {
       const entryPath = resolve(current, segments[index]!);
