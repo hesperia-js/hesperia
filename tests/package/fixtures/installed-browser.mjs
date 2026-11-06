@@ -270,6 +270,23 @@ for (const [name, engine] of Object.entries(engines)) {
         document.querySelector("#installed-scheduling-result")?.textContent === "packed scheduling",
     );
 
+    const schedulingDocument = await page.evaluateHandle(() => document);
+    assert.equal(
+      await page.evaluate(() => document.documentElement.dataset.installedSchedulingCleanup),
+      undefined,
+    );
+    await page.locator("#remove-installed-scheduling").click();
+    await page.locator("#installed-scheduling-removed").waitFor();
+    assert.equal(await page.locator("#installed-scheduling-control").count(), 0);
+    await page.waitForFunction(
+      () => document.documentElement.dataset.installedSchedulingCleanup === "true",
+    );
+    assert.equal(
+      await page.evaluate((original) => original === document, schedulingDocument),
+      true,
+    );
+    await schedulingDocument.dispose();
+
     const leaveScheduling =
       name === "webkit"
         ? clickWithoutNavigationWait(page, "#leave-installed-scheduling")
@@ -277,10 +294,6 @@ for (const [name, engine] of Object.entries(engines)) {
 
     await Promise.all([page.waitForURL(schedulingTarget.href), leaveScheduling]);
     await page.locator("#count").waitFor();
-    await page.waitForFunction(
-      () => document.documentElement.dataset.installedSchedulingCleanup === "true",
-    );
-
     assert.deepEqual(errors, []);
 
     results.push(name);
