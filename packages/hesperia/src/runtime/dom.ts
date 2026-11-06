@@ -537,9 +537,10 @@ export function element(
       "Use Hesperia's official Embed component from hesperia/embed instead of creating embedded-document elements directly",
     );
 
-  const node = namespace !== undefined
-    ? owner.context.document.createElementNS(namespace, tag)
-    : owner.context.document.createElement(tag);
+  const node =
+    namespace !== undefined
+      ? owner.context.document.createElementNS(namespace, tag)
+      : owner.context.document.createElement(tag);
 
   owner.nodes.add(node);
 
