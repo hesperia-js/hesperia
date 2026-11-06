@@ -84,6 +84,6 @@ export function disposeGraphQLGraph(): void {
 
 let subscriptionSocketDisposal: Promise<void> | undefined;
 export function disposeGraphQLSocket(): Promise<void> {
-  subscriptionSocketDisposal ??= subscriptionSocket.dispose();
+  subscriptionSocketDisposal ??= Promise.resolve().then(() => subscriptionSocket.dispose());
   return subscriptionSocketDisposal;
 }

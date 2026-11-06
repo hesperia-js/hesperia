@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { affects, createGraph, defineContract, storeKey, subscribe } from "aeolia";
+import { affects, computed, createGraph, defineContract, storeKey, subscribe } from "aeolia";
 import type { Contract, Graph, OpenOptions } from "aeolia";
 import { ApolloLink } from "@apollo/client/link";
 import { HttpLink } from "@apollo/client/link/http";
@@ -507,6 +507,30 @@ async function stopChild(resource: ChildResource): Promise<void> {
 
     await resource.child.exited;
   }
+}
+
+function observed<T>(read: () => T, accept: (value: T) => boolean): Promise<T> {
+  const result = Promise.withResolvers<T>();
+  const value = computed(read);
+  let done = false;
+  let stop: (() => void) | undefined;
+
+  const check = (next: T): void => {
+    if (done || !accept(next)) return;
+
+    done = true;
+    stop?.();
+    result.resolve(next);
+  };
+
+  stop = subscribe(value, check);
+
+  if (done) stop();
+  else check(value.get());
+
+  subscriptions.push(stop);
+
+  return result.promise;
 }
 
 afterEach(async () => {
