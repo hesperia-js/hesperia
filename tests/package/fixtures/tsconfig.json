@@ -11,5 +11,11 @@
     "skipLibCheck": true,
     "types": ["bun"]
   },
-  "files": ["installed-browser.mjs", "installed-browser-globals.d.mts", "env-probe.mjs"]
+  "files": [
+    "installed-browser.mjs",
+    "installed-browser-globals.d.mts",
+    "env-probe.mjs",
+    "graphql.ts",
+    "graphql-runtime.mjs"
+  ]
 }
