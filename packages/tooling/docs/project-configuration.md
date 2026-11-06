@@ -54,6 +54,22 @@ Custom HTTP methods require support from both the client transport and the servi
 
 `allowUnsafeEmbed` permits an Embed instance to request sandbox relaxations beyond `allow-scripts`; the instance must explicitly list each requested permission. A nested imported component cannot change its host root's policy. Direct mounts without compiled project policy stay strict. The build carries this one boolean in private component metadata; the full project configuration and process environment are not exposed to the browser.
 
+## Public files
+
+Put files that the host should serve without importing them in `public/`. The development server captures their bytes at start and updates them when files change. A production build captures the same files. Hesperia serves each file at the same path under the selected application mount. An absent or empty `public/` directory adds no public-file inventory. Hesperia includes underscore-prefixed files such as `_status.bin`. These HTTP resources are separate from the compile-time `public` values exported through `hesperia/config/public`.
+
+`public/assets/logo.bin` is available at `/assets/logo.bin` at the root mount. With `mountURL: "/shop"`, it is available at `/shop/assets/logo.bin`. The host returns captured bytes and the recorded content type for `GET` and `HEAD`. Public paths use URL escaping. For example, `public/café #%.txt` is available at `/caf%C3%A9%20%23%25.txt`. A literal `%20` in a filename becomes `%2520`; the host does not decode the filename twice.
+
+Public paths share the application's mount. Generated browser assets stay under the managed `/_hesperia/` namespace. A public path that equals a literal static page route, `/_hesperia`, or one of its descendants fails the build before publication. A parameterized, optional, or rest route can match the same URL without creating a collision. After source files change or disappear, `readBuild` loads the captured public bytes from the build directory.
+
+Source links may select files or directories inside the project root, including targets outside `public/`. A linked `public/` directory follows the same rule. Each public URL comes from the link's path under `public/`, so two links to one target retain separate URLs. Broken links, directory cycles, and targets outside the project root fail the build. There is no option to admit an outside target. The build captures the resolved file bytes; later source-link or target changes do not alter that capture. These source rules are separate from `readBuild`, which continues to reject links in captured deployment paths.
+
+Before reading a public file, capture opens its resolved target, checks the opened regular file's filesystem identity, and resolves the authored path again under the same containment rules. It then reads once from that retained handle. Replacing the path between resolution and opening cannot substitute an outside file's bytes. The captured Blob and its digest use that same read; this check does not provide an atomic snapshot of concurrent in-place edits.
+
+Every followed link target must stay within the project. For example, `public/report.bin` cannot follow an outside link that points back to an in-project file. Relative targets keep native symlink-relative semantics, including `..`: Windows normalizes relative target components before following intervening links, while Unix follows each component before applying a later `..`. Development tracks contained link hops and target entries as well as directory contents, so target edits, link retargeting, and creation of a missing contained target can trigger recovery. An invalid rebuild keeps serving the last successful capture.
+
+The Fetch host and development server serve these URLs. The host API does not define browser-side navigation to public files, server rendering, or retention of previous published captures.
+
 ## Public values
 
 Application modules import only explicitly named values:

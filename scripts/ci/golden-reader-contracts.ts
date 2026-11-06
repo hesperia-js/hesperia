@@ -4,7 +4,7 @@ import { dependencyClosure, type SourceImpact } from "./source-impact.ts";
 // These readers are reviewed together with golden/server.ts's fixed fixture roots.
 // A changed reader needs a new review; filename identity alone grants no exemption.
 const REVIEWED_READERS: Readonly<Record<string, string>> = {
-  "golden/server.ts": "55e18a3017a4e871a5776052273aa2ec694590784bfb40ae713a9c6f398b7c84",
+  "golden/server.ts": "7a74fbc5b563e2627a16e272ce307b2761f259d6f047864d43256c8daa600dcf",
   "golden/tests/public-values.spec.ts":
     "dcc73a0e3e62d1f72f9963b9120041e12ff201b6005c9420e91caa1cb8e0c169",
   "golden/verify-aeolia-inputs.ts":
@@ -23,7 +23,7 @@ const REVIEWED_READERS: Readonly<Record<string, string>> = {
   "packages/elysia/src/effect-analysis.ts":
     "adf18283259f32f663d162bf6d3bcb02daf4994398c78db7b8fab22d09f193d7",
   "packages/hosting/src/read-build.ts":
-    "59345372a83d6f46481df0e9dc37172eacf6493d6def8992cd6cbdaad4174450",
+    "c8d06d2c745534ca16d2dd85b3b02547164bfa5aaa52140131b623f4ea3d83a6",
   "packages/tooling/src/configuration.ts":
     "fc8d0a967a20784941dd9ff50235ce0112087dc66803497100ad7110b6b889da",
   "packages/tooling/src/css-bundling.ts":
@@ -33,9 +33,11 @@ const REVIEWED_READERS: Readonly<Record<string, string>> = {
   "packages/tooling/src/plugin-pipeline.ts":
     "9e54fc94899412a7dc408c2162e3b8a498fb41b3b41afa2235026964d7842ec2",
   "packages/tooling/src/project-worker-client.ts":
-    "8886e4daee86bdf8543f62c8d900e24f7fc17824b9ff1d7be335b6f86dbcbe7c",
+    "8417d3983f0da4b302f69b5db413ccc764224309b6c4ad12b5000b3896df2fe7",
   "packages/tooling/src/project.ts":
-    "9f18929a3bdbb9e06735703731c2e56c2a8145174d1fac2898460c2504a0121a",
+    "963d4fdc97c6a8756855a3249f2b7d61b2718439b53dd777b683df92eca1c448",
+  "packages/tooling/src/public-files.ts":
+    "3041b3db6c77a1840036dfcd0331a9edd833999141283d4d585820548b960bf0",
 };
 
 // Server entrypoints and project roots are finite. Each domain owns every case in
