@@ -480,7 +480,10 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
     const cachePreparationManifest = {
       name: "hesperia-graphql-native-cache-preparation",
       private: true,
-      dependencies: nativeOverrides,
+      dependencies: {
+        ...nativeOverrides,
+        "@standard-schema/spec": exactVersion(hesperiaManifest, "@standard-schema/spec"),
+      },
       overrides: nativeOverrides,
     };
 
