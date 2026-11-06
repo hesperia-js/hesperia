@@ -449,7 +449,10 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
       overrides: nativeOverrides,
     };
 
-    await writePackageManifest(join(cachePreparationRoot, "package.json"), cachePreparationManifest);
+    await writePackageManifest(
+      join(cachePreparationRoot, "package.json"),
+      cachePreparationManifest,
+    );
 
     evidence.phase = "preparing-native-cache";
     evidence.cachePreparationManifest = cachePreparationManifest;
