@@ -123,6 +123,18 @@ test("packed packages serve a custom backend data flow in all three browser engi
       ),
     );
 
+    const formRoute = join(application, "src/routes/form");
+
+    await mkdir(formRoute, { recursive: true });
+
+    await writeFile(
+      join(formRoute, "+page.tsx"),
+      await readFile(
+        new URL("./fixtures/installed-app/src/routes/form/+page.tsx", import.meta.url),
+        "utf8",
+      ),
+    );
+
     const manifestPath = join(application, "package.json");
 
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
@@ -133,6 +145,8 @@ test("packed packages serve a custom backend data flow in all three browser engi
     };
 
     manifest.devDependencies["@hesperia/tooling"] = tarballs["@hesperia/tooling"];
+
+    manifest.devDependencies["@standard-schema/spec"] = "1.1.0";
 
     manifest.devDependencies["@hesperia/language-server"] = tarballs["@hesperia/language-server"];
 
@@ -172,7 +186,8 @@ test("packed packages serve a custom backend data flow in all three browser engi
         for (const path of [target.types, target.import]) if (path) await stat(join(root, path));
       }
 
-      if (name === "hesperia") expect(published.dependencies ?? {}).toEqual({});
+      if (name === "hesperia")
+        expect(published.dependencies ?? {}).toEqual({ "@standard-schema/spec": "1.1.0" });
     }
 
     await writeFile(
