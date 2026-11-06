@@ -398,18 +398,12 @@ test.each([
   },
   {
     name: "counts predefined, decimal, hexadecimal, and astral references at the exact limit",
-    svg: () =>
-      svgWithText(
-        repeatedText(logicalTextRunLimit - 5) + "&amp;&#65;&#x41;&#x1F600;",
-      ),
+    svg: () => svgWithText(repeatedText(logicalTextRunLimit - 5) + "&amp;&#65;&#x41;&#x1F600;"),
     rejects: false,
   },
   {
     name: "rejects a decoded reference beyond the exact limit",
-    svg: () =>
-      svgWithText(
-        repeatedText(logicalTextRunLimit - 4) + "&amp;&#65;&#x41;&#x1F600;",
-      ),
+    svg: () => svgWithText(repeatedText(logicalTextRunLimit - 4) + "&amp;&#65;&#x41;&#x1F600;"),
     rejects: true,
   },
   {
@@ -429,59 +423,38 @@ test.each([
   },
   {
     name: "joins CDATA and ordinary text at the exact limit",
-    svg: () =>
-      svgWithText(
-        `<![CDATA[${repeatedText(5_000_000)}]]>${repeatedText(5_000_000)}`,
-      ),
+    svg: () => svgWithText(`<![CDATA[${repeatedText(5_000_000)}]]>${repeatedText(5_000_000)}`),
     rejects: false,
   },
   {
     name: "rejects CDATA and ordinary text when their joined run exceeds the limit",
-    svg: () =>
-      svgWithText(
-        `<![CDATA[${repeatedText(5_000_001)}]]>${repeatedText(5_000_000)}`,
-      ),
+    svg: () => svgWithText(`<![CDATA[${repeatedText(5_000_001)}]]>${repeatedText(5_000_000)}`),
     rejects: true,
   },
   {
     name: "rejects ordinary text followed by CDATA when their joined run exceeds the limit",
-    svg: () =>
-      svgWithText(
-        `${repeatedText(5_000_000)}<![CDATA[${repeatedText(5_000_001)}]]>`,
-      ),
+    svg: () => svgWithText(`${repeatedText(5_000_000)}<![CDATA[${repeatedText(5_000_001)}]]>`),
     rejects: true,
   },
   {
     name: "resets at a nested element boundary",
-    svg: () =>
-      svgWithText(
-        `${repeatedText(5_000_001)}<tspan>${repeatedText(5_000_000)}</tspan>`,
-      ),
+    svg: () => svgWithText(`${repeatedText(5_000_001)}<tspan>${repeatedText(5_000_000)}</tspan>`),
     rejects: false,
   },
   {
     name: "resets at a comment boundary",
-    svg: () =>
-      svgWithText(
-        `${repeatedText(5_000_001)}<!-- split -->${repeatedText(5_000_000)}`,
-      ),
+    svg: () => svgWithText(`${repeatedText(5_000_001)}<!-- split -->${repeatedText(5_000_000)}`),
     rejects: false,
   },
   {
     name: "resets at a processing instruction boundary",
-    svg: () =>
-      svgWithText(
-        `${repeatedText(5_000_001)}<?split data?>${repeatedText(5_000_000)}`,
-      ),
+    svg: () => svgWithText(`${repeatedText(5_000_001)}<?split data?>${repeatedText(5_000_000)}`),
     rejects: false,
   },
   {
     name: "keeps attribute content outside the text-run limit",
     svg: () =>
-      svgWithText(
-        repeatedText(logicalTextRunLimit),
-        ' data-note="&amp;&#65;&#x41;&#x1F600;"',
-      ),
+      svgWithText(repeatedText(logicalTextRunLimit), ' data-note="&amp;&#65;&#x41;&#x1F600;"'),
     rejects: false,
   },
 ])(
