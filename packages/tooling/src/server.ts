@@ -1,4 +1,12 @@
-import { existsSync, lstatSync, readdirSync, realpathSync, statSync, watch, type FSWatcher } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+  watch,
+  type FSWatcher,
+} from "node:fs";
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import {
   createHost,
@@ -206,10 +214,7 @@ export async function devProject(
       try {
         const candidate = lstatSync(join(directory, entry), { bigint: true });
 
-        if (
-          sameFileIdentity(candidate, requested) &&
-          !sameFileIdentity(candidate, parent)
-        )
+        if (sameFileIdentity(candidate, requested) && !sameFileIdentity(candidate, parent))
           matches.push(entry);
       } catch (error) {
         if (!isMissingWatchPath(error)) throw error;
@@ -248,7 +253,10 @@ export async function devProject(
     }
   }
 
-  function pathParts(path: string): { readonly root: string; readonly segments: readonly string[] } {
+  function pathParts(path: string): {
+    readonly root: string;
+    readonly segments: readonly string[];
+  } {
     const absolute = resolve(path);
     const parsed = parse(absolute);
 
@@ -333,9 +341,7 @@ export async function devProject(
 
     if (segments === undefined) return [target];
     if (segments.length === 0)
-      return [
-        { ...target, path: canonicalProjectRoot, identityPath: canonicalProjectRoot },
-      ];
+      return [{ ...target, path: canonicalProjectRoot, identityPath: canonicalProjectRoot }];
 
     const entries: WatchTarget[] = [];
     let current = canonicalProjectRoot;
@@ -378,8 +384,7 @@ export async function devProject(
       if (sameFileIdentity(entryStats, currentStats))
         return uniqueWatchTargets([...entries, entryTarget]);
 
-      if (entryStats.isSymbolicLink())
-        entries.push(entryTarget);
+      if (entryStats.isSymbolicLink()) entries.push(entryTarget);
 
       if (index < segments.length - 1 && !entryStats.isSymbolicLink() && !entryStats.isDirectory())
         return uniqueWatchTargets([...entries, entryTarget]);
@@ -438,14 +443,8 @@ export async function devProject(
           ...entries,
           {
             kind: target.kind,
-            path:
-              target.kind === "file"
-                ? entryIdentityPath
-                : resolvedEntry,
-            identityPath:
-              target.kind === "file"
-                ? entryIdentityPath
-                : resolvedEntry,
+            path: target.kind === "file" ? entryIdentityPath : resolvedEntry,
+            identityPath: target.kind === "file" ? entryIdentityPath : resolvedEntry,
           },
         ]);
     }
@@ -483,7 +482,9 @@ export async function devProject(
     ]);
 
     if (target.kind === "file")
-      return [...targetPaths].some((targetPath) => changed === targetPath || isWithin(changed, targetPath));
+      return [...targetPaths].some(
+        (targetPath) => changed === targetPath || isWithin(changed, targetPath),
+      );
 
     return [...targetPaths].some(
       (targetPath) => isWithin(targetPath, changed) || isWithin(changed, targetPath),
@@ -651,11 +652,7 @@ export async function devProject(
         addWatchTarget(scopedTarget, scopedTarget.kind === "directory");
     }
 
-    function addWatchTarget(
-      target: WatchTarget,
-      recursive: boolean,
-      reportMissing = true,
-    ): void {
+    function addWatchTarget(target: WatchTarget, recursive: boolean, reportMissing = true): void {
       const scopedTargets = scopedWatchTargets(target);
       const currentTarget = scopedTargets.find(
         (scoped) => scoped.kind === target.kind && resolve(scoped.path) === resolve(target.path),
@@ -738,7 +735,8 @@ export async function devProject(
             const parentStats = lstatSync(dirname(canonical), { bigint: true });
             const targets = directories.get(canonical)?.targets ?? [];
             const targetPath = resolve(target.path);
-            const targetIdentity = target.identityPath ?? canonicalWatchPath(targetPath, target.kind);
+            const targetIdentity =
+              target.identityPath ?? canonicalWatchPath(targetPath, target.kind);
 
             const existingTarget = targets.find(
               (current) => current.kind === target.kind && resolve(current.path) === targetPath,
@@ -941,9 +939,7 @@ export async function devProject(
 
       for (const directory of newlyMissing) {
         try {
-          report(
-            `Development watch directory is missing: ${directory}; watching for its creation`,
-          );
+          report(`Development watch directory is missing: ${directory}; watching for its creation`);
         } catch {
           // Reporting a missing directory must not invalidate the installed watch set.
         }
@@ -962,7 +958,6 @@ export async function devProject(
 
         registration.targets = requested.targets;
       }
-
     } catch (error) {
       const closeFailures: unknown[] = [];
 
@@ -1051,8 +1046,10 @@ export async function devProject(
               let watchInstall: WatchInstallResult;
 
               try {
-                watchInstall = watchDependencies(candidate, [], () =>
-                  !closed && !controller.signal.aborted && !pending,
+                watchInstall = watchDependencies(
+                  candidate,
+                  [],
+                  () => !closed && !controller.signal.aborted && !pending,
                 );
 
                 if (!watchInstall.installed) {
@@ -1089,8 +1086,10 @@ export async function devProject(
               let watchInstall: WatchInstallResult;
 
               try {
-                watchInstall = watchDependencies(candidate, [], () =>
-                  !closed && !controller.signal.aborted && !pending,
+                watchInstall = watchDependencies(
+                  candidate,
+                  [],
+                  () => !closed && !controller.signal.aborted && !pending,
                 );
 
                 if (!watchInstall.installed) {
@@ -1141,8 +1140,10 @@ export async function devProject(
             };
 
             try {
-              watchInstall = watchDependencies(build, attempted, () =>
-                !closed && !controller.signal.aborted && !pending,
+              watchInstall = watchDependencies(
+                build,
+                attempted,
+                () => !closed && !controller.signal.aborted && !pending,
               );
 
               const closeFailures = commitAndRetire(watchInstall.retired, () => {
@@ -1305,8 +1306,7 @@ export async function devProject(
             build.watch?.some(
               (item) =>
                 item.kind === "directory" &&
-                canonicalWatchPath(item.dir, "directory") ===
-                  canonicalWatchPath(root, "directory"),
+                canonicalWatchPath(item.dir, "directory") === canonicalWatchPath(root, "directory"),
             ) === true;
 
           if (
@@ -1343,9 +1343,13 @@ export async function devProject(
     }
 
     if (failures.length)
-      throw new AggregateError([error, ...failures], "Development server startup and cleanup failed", {
-        cause: error,
-      });
+      throw new AggregateError(
+        [error, ...failures],
+        "Development server startup and cleanup failed",
+        {
+          cause: error,
+        },
+      );
 
     throw error;
   }

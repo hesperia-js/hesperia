@@ -153,8 +153,7 @@ export class ProjectError extends Error {
 }
 
 function pluginWatchKey(watch: PluginWatch): string {
-  if (watch.kind === "file")
-    return JSON.stringify([watch.kind, resolve(watch.file)]);
+  if (watch.kind === "file") return JSON.stringify([watch.kind, resolve(watch.file)]);
 
   return JSON.stringify([
     watch.kind,
@@ -163,15 +162,12 @@ function pluginWatchKey(watch: PluginWatch): string {
   ]);
 }
 
-function snapshotPluginWatches(
-  watches: readonly PluginWatch[],
-): readonly PluginWatch[] {
+function snapshotPluginWatches(watches: readonly PluginWatch[]): readonly PluginWatch[] {
   return Object.freeze(watches.map(snapshotPluginWatch));
 }
 
 function snapshotPluginWatch(watch: PluginWatch): PluginWatch {
-  if (watch.kind === "file")
-    return Object.freeze({ kind: "file", file: watch.file });
+  if (watch.kind === "file") return Object.freeze({ kind: "file", file: watch.file });
 
   return Object.freeze({
     kind: "directory",
@@ -203,9 +199,7 @@ function createPluginWatchAccumulator() {
   };
 }
 
-function mergePluginWatches(
-  ...groups: (readonly PluginWatch[])[]
-): readonly PluginWatch[] {
+function mergePluginWatches(...groups: (readonly PluginWatch[])[]): readonly PluginWatch[] {
   const accumulator = createPluginWatchAccumulator();
 
   for (const group of groups) {
@@ -215,10 +209,7 @@ function mergePluginWatches(
   return accumulator.snapshot();
 }
 
-function projectErrorWithWatches(
-  error: unknown,
-  watches: readonly PluginWatch[],
-): ProjectError {
+function projectErrorWithWatches(error: unknown, watches: readonly PluginWatch[]): ProjectError {
   if (error instanceof ProjectError) {
     return new ProjectError(error.message, error.diagnostics, {
       cause: error,

@@ -59,9 +59,7 @@ const assetContentTypes: Readonly<Record<string, string>> = {
   map: "application/json; charset=utf-8",
 };
 
-function captureHostingBuild(
-  build: Awaited<ReturnType<typeof prepareBuild>>,
-): CapturedBuild {
+function captureHostingBuild(build: Awaited<ReturnType<typeof prepareBuild>>): CapturedBuild {
   const files = new Map<string, Blob>();
 
   for (const asset of build.hosting.assets) {
