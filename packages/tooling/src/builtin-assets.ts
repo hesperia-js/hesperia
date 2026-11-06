@@ -1,5 +1,5 @@
 import { dirname, extname, resolve } from "node:path";
-import { SaxNamespaceParser, type QName } from "@federicocarboni/saxe";
+import { SaxNamespaceParser, type QName } from "./vendor/saxe/index.ts";
 import {
   GenMapping,
   maybeAddSegment,
