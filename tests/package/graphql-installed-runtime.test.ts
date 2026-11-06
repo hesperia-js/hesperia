@@ -95,11 +95,13 @@ async function runCommand(
   command: readonly string[],
   cwd: string,
   timeoutMs = 30_000,
+  env?: NodeJS.ProcessEnv,
 ): Promise<{ readonly stdout: string; readonly stderr: string }> {
   const child = Bun.spawn([...command], {
     cwd,
     stdout: "pipe",
     stderr: "pipe",
+    ...(env ? { env } : {}),
   });
   let timedOut = false;
   const timeout = setTimeout(() => {
@@ -439,8 +441,11 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
     };
 
     const cachePreparationRoot = join(workspace, "native-cache-preparation");
+    const nativeCacheRoot = join(workspace, "native-install-cache");
+    const nativeInstallEnv = { ...process.env, BUN_INSTALL_CACHE_DIR: nativeCacheRoot };
 
     await mkdir(cachePreparationRoot);
+    await mkdir(nativeCacheRoot);
 
     const cachePreparationManifest = {
       name: "hesperia-graphql-native-cache-preparation",
@@ -459,9 +464,10 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
     await saveEvidence();
 
     const cachePreparation = await runCommand(
-      [process.execPath, "install", "--ignore-scripts", "--lockfile-only"],
+      [process.execPath, "install", "--ignore-scripts"],
       cachePreparationRoot,
       boundedTimeout(25_000, deadlineAt),
+      nativeInstallEnv,
     );
     const cachePreparationLock = await readFile(join(cachePreparationRoot, "bun.lock"), "utf8");
 
@@ -518,6 +524,7 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
       [process.execPath, "install", "--ignore-scripts", "--offline"],
       application,
       boundedTimeout(25_000, deadlineAt),
+      nativeInstallEnv,
     );
     evidence.install = install;
 
