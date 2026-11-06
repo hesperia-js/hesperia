@@ -48,16 +48,21 @@
     "test:editor:installed": "bun run build && bun scripts/ci/prepare-release-candidate.ts --candidate-dir .hesperia/release-candidate && bun run package:editor && bun run --cwd editors/vscode build:test && bun scripts/ci/test-editor-package.ts"
   },
   "devDependencies": {
+    "@apollo/client": "4.3.5",
     "@elysia/eden": "1.4.10",
+    "@graphql-tools/executor": "2.1.0",
     "@hesperia/compiler": "workspace:*",
+    "@hesperia/graphql": "workspace:*",
     "@hesperia/language-server": "workspace:*",
     "@hesperia/tooling": "workspace:*",
     "@jridgewell/trace-mapping": "0.3.31",
-    "@playwright/test": "1.63.0",
+    "@playwright/test": "1.65.0",
     "@types/bun": "1.4.2",
     "@vscode/vsce": "4.0.0",
     "aeolia": "1.0.0-alpha.1",
     "elysia": "1.4.30",
+    "graphql": "17.0.2",
+    "graphql-yoga": "5.24.6",
     "happy-dom": "20.14.3",
     "hesperia": "workspace:*",
     "istanbul-lib-coverage": "3.2.2",
@@ -68,7 +73,8 @@
     "oxfmt": "0.67.0",
     "oxlint": "1.82.0",
     "parse5": "8.0.1",
-    "playwright": "1.63.0",
+    "playwright": "1.65.0",
+    "rxjs": "7.8.2",
     "typescript": "7.0.2",
     "vscode-languageserver": "10.1.1",
     "vscode-languageserver-textdocument": "1.0.14"
@@ -76,5 +82,5 @@
   "overrides": {
     "aeolia": "1.0.0-alpha.1"
   },
-  "packageManager": "bun@1.4.2"
+  "packageManager": "bun@1.4.4"
 }
