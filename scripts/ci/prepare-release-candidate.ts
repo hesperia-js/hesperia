@@ -33,7 +33,10 @@ export async function prepareReleaseCandidate(workspaceRoot: string, directory: 
 
     assert.equal(rootManifest.license, "MPL-2.0", "Expected the existing workspace license");
 
-    await cp(resolve(workspaceRoot, "package.json"), resolve(staging, "package.json"));
+    await writeFile(
+      resolve(staging, "package.json"),
+      `${JSON.stringify({ ...rootManifest, workspaces: ["packages/*"] }, null, 2)}\n`,
+    );
 
     await cp(resolve(workspaceRoot, "bun.lock"), resolve(staging, "bun.lock"));
 
