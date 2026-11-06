@@ -34,7 +34,6 @@
     "build": "bunx tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@federicocarboni/saxe": "0.8.0",
     "@hesperia/compiler": "workspace:*",
     "@hesperia/hosting": "workspace:*",
     "@jridgewell/gen-mapping": "0.3.13",

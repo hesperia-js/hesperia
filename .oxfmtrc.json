@@ -5,6 +5,7 @@
     "**/dist/**",
     "**/build/**",
     "hesperia.d.ts",
+    "packages/tooling/src/vendor/saxe/**",
     "tests/browser/fixtures/imported-markup/src/native.css",
     "tests/browser/fixtures/imported-markup/src/native-nested.css"
   ],
