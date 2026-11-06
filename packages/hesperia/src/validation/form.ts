@@ -84,6 +84,10 @@ type FormInvocation<Input> =
       readonly options: FormRunOptions | undefined;
     };
 
+type PreparedFormInvocation<Input> =
+  | { readonly kind: "input"; readonly input: Input }
+  | { readonly kind: "form"; readonly formData: FormData };
+
 /**
  * Create one owner-bound form-validation controller backed by the Task engine.
  *
@@ -100,18 +104,18 @@ export function createForm<Input, Output>(
 ): Form<Input, Output> {
   owner.assertActive();
 
-  const controller = createTaskController<FormInvocation<Input>, StandardSchemaV1.Result<Output>>(
+  const controller = createTaskController<
+    FormInvocation<Input>,
+    StandardSchemaV1.Result<Output>,
+    PreparedFormInvocation<Input>
+  >(
     owner,
     () => (invocation) => {
       if (invocation.kind === "input") {
         return validateStandardSchema(schema, invocation.input);
       }
 
-      const submitter = invocation.options?.submitter;
-      const formData =
-        submitter === undefined
-          ? new FormData(invocation.form)
-          : new FormData(invocation.form, submitter);
+      const formData = invocation.formData;
       const mapFormData = options.map;
       let input: unknown;
 
@@ -126,6 +130,17 @@ export function createForm<Input, Output>(
       }
 
       return validateStandardSchema(schema, input);
+    },
+    (invocation) => {
+      if (invocation.kind === "input") return invocation;
+
+      const submitter = invocation.options?.submitter;
+      const formData =
+        submitter === undefined
+          ? new FormData(invocation.form)
+          : new FormData(invocation.form, submitter);
+
+      return { kind: "form", formData };
     },
   );
 

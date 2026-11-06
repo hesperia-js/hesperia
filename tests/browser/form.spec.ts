@@ -81,6 +81,36 @@ test("client.form captures native successful controls and submitter", async ({ p
   });
 });
 
+test("a native formdata listener can start a newer validation during capture", async ({ page }) => {
+  await page.goto("/form");
+
+  await expect(page.locator("html")).toHaveAttribute("data-ready", "true");
+  await page.locator("#run-reentrant-capture").click();
+
+  await expect(page.locator("#reentrant-outer")).toHaveText("cancelled");
+  await expect(page.locator("#validation-status")).toHaveText("success");
+  await expect(page.locator("#schema-calls")).toHaveText("1");
+  expect(JSON.parse((await page.locator("#validation-result").textContent()) ?? "")).toStrictEqual({
+    required: "nested",
+    intent: "reentrant",
+  });
+});
+
+test("capture precedes the previous run's abort listener", async ({ page }) => {
+  await page.goto("/form");
+
+  await expect(page.locator("html")).toHaveAttribute("data-ready", "true");
+  await page.locator("#required").fill("before-abort");
+  await page.locator("#run-abort-mutation-capture").click();
+
+  await expect(page.locator("#required")).toHaveValue("after-abort");
+  await expect(page.locator("#validation-status")).toHaveText("success");
+  await expect(page.locator("#schema-calls")).toHaveText("2");
+  expect(JSON.parse((await page.locator("#validation-result").textContent()) ?? "")).toMatchObject({
+    required: "before-abort",
+  });
+});
+
 test("form mapping faults and direct runs share the form task's latest authority", async ({
   page,
 }) => {
