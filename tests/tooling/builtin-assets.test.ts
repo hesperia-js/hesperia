@@ -323,7 +323,7 @@ test("checked SVG imports preserve XML names and normalized attributes", async (
   await writeFile(
     join(root, "icon.svg"),
     [
-      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
       "<!--prolog-->",
       "<?tool data?>",
       '<svg:svg xmlns:svg="http://www.w3.org/2000/svg" viewBox="0 0 1 1">',
@@ -528,9 +528,19 @@ test("checked SVG imports report distinct XML and namespace errors", async () =>
       message: "Attribute 'b:value' appears multiple times",
     },
     {
+      asset: "overlong-xml-declaration.svg",
+      contents: `<?xml version="1.0" ${" ".repeat(2_000)}standalone="yes"?><svg xmlns="http://www.w3.org/2000/svg"/>`,
+      message: "Limit exceeded",
+    },
+    {
       asset: "invalid-xml-declaration-order.svg",
       contents: '<?xml encoding="UTF-8" version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"/>',
       message: "XML declaration is not well-formed",
+    },
+    {
+      asset: "invalid-character-in-comment.svg",
+      contents: '<svg xmlns="http://www.w3.org/2000/svg"><!--bad\u0001comment--></svg>',
+      message: "Content contains an invalid character",
     },
     {
       asset: "invalid-comment.svg",
