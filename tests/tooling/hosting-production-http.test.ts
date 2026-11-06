@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { prepareBuild, writeBuild } from "../../packages/tooling/src/project.ts";
@@ -13,12 +13,52 @@ import { linkFrameworkPackages, unlinkFrameworkPackages } from "./fixture-depend
 const roots: string[] = [];
 
 afterEach(async () => {
-  for (const root of roots.splice(0)) {
-    await unlinkFrameworkPackages(root);
+  const errors: unknown[] = [];
 
-    await rm(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    try {
+      await unlinkFrameworkPackages(root);
+
+      await rm(root, { recursive: true, force: true });
+    } catch (error) {
+      errors.push(error);
+    }
   }
+
+  if (errors.length) throw new AggregateError(errors, "Fixture root cleanup failed");
 });
+
+async function withFixtureCleanup(
+  body: () => Promise<void>,
+  cleanup: readonly (() => void | Promise<void> | undefined)[],
+): Promise<void> {
+  let failed = false;
+  let failure: unknown;
+
+  try {
+    await body();
+  } catch (error) {
+    failed = true;
+    failure = error;
+  }
+
+  const errors: unknown[] = [];
+
+  for (const action of cleanup) {
+    try {
+      await action();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+
+  if (failed && errors.length)
+    throw new AggregateError([failure, ...errors], "Fixture and cleanup failed");
+
+  if (failed) throw failure;
+
+  if (errors.length) throw new AggregateError(errors, "Fixture cleanup failed");
+}
 
 function sha256(bytes: Uint8Array): string {
   return new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
@@ -120,13 +160,82 @@ async function writePublicFiles(root: string): Promise<void> {
   }
 }
 
-function expectedPublicRecords() {
-  return publicFiles.map((file) => ({
+function expectedPublicRecords(files: readonly PublicFileFixture[] = publicFiles) {
+  return files.map((file) => ({
     relativePath: file.relativePath,
     urlPath: file.urlPath,
     sha256: sha256(file.bytes),
     contentType: file.contentType,
   }));
+}
+
+async function writeLinkedPublicFiles(root: string): Promise<readonly PublicFileFixture[]> {
+  const publicRoot = join(root, "public");
+  const sourceRoot = join(root, "source-public");
+  const targets = join(root, "source-files");
+  const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
+
+  await mkdir(sourceRoot);
+
+  await mkdir(targets);
+
+  await symlink(sourceRoot, publicRoot, directoryLinkType);
+
+  await writePublicFiles(root);
+
+  await rename(join(sourceRoot, "assets"), join(targets, "assets"));
+
+  await symlink(join(targets, "assets"), join(sourceRoot, "assets"), directoryLinkType);
+
+  await symlink(join(targets, "assets"), join(sourceRoot, "mirrored-assets"), directoryLinkType);
+
+  const original = publicFiles.find((file) => file.urlPath === "/objects/data.bin")!;
+  const target = join(targets, "shared.bin");
+  const chain = join(targets, "chain.bin");
+
+  await writeFile(target, original.bytes);
+
+  await unlink(join(publicRoot, "objects", "data.bin"));
+
+  await symlink(target, join(publicRoot, "objects", "data.bin"), "file");
+
+  await symlink(target, chain, "file");
+
+  await symlink(chain, join(publicRoot, "objects", "alias.bin"), "file");
+
+  const relativeBytes = new Uint8Array([0x72, 0x65, 0x6c]);
+
+  await mkdir(join(targets, "branch", "deep"), { recursive: true });
+
+  await writeFile(join(targets, "branch", "shared.bin"), relativeBytes);
+
+  await symlink(join(targets, "branch", "deep"), join(targets, "through"), directoryLinkType);
+
+  await symlink(
+    "../../source-files/through/../shared.bin",
+    join(publicRoot, "objects", "native-relative.bin"),
+    "file",
+  );
+
+  return [
+    ...publicFiles,
+    { ...original, relativePath: "objects/alias.bin", urlPath: "/objects/alias.bin" },
+    {
+      relativePath: "objects/native-relative.bin",
+      urlPath: "/objects/native-relative.bin",
+      bytes: process.platform === "win32" ? original.bytes : relativeBytes,
+      contentType: "application/octet-stream",
+    },
+    ...publicFiles
+      .filter((file) => file.relativePath.startsWith("assets/"))
+      .map((file) => ({
+        ...file,
+        relativePath: file.relativePath.replace("assets/", "mirrored-assets/"),
+        urlPath: file.urlPath.replace("/assets/", "/mirrored-assets/"),
+      })),
+  ].sort((left, right) =>
+    left.urlPath < right.urlPath ? -1 : left.urlPath > right.urlPath ? 1 : 0,
+  );
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
@@ -457,19 +566,24 @@ test("one production capture serves exact assets at root and a nested mount", as
 
 test("production captures public bytes through worker and in-process builds", async () => {
   const projects = [
-    { format: "typescript" as const, mountURL: "/shop" },
-    { format: "json" as const, mountURL: "/shop" },
+    { format: "typescript" as const, mountURL: "/shop", linked: false },
+    { format: "json" as const, mountURL: "/shop", linked: false },
+    { format: "typescript" as const, mountURL: "/shop", linked: true },
+    { format: "json" as const, mountURL: "/shop", linked: true },
   ];
 
   for (const project of projects) {
+    const label = `${project.format}${project.linked ? "-linked" : ""}`;
     const root = await createProjectRoot(
-      `hesperia-public-${project.format}-`,
+      `hesperia-public-${label}-`,
       project.format,
       project.mountURL,
     );
     const publicRoot = join(root, "public");
 
-    await writePublicFiles(root);
+    const files = project.linked ? await writeLinkedPublicFiles(root) : publicFiles;
+
+    if (!project.linked) await writePublicFiles(root);
 
     await mkdir(join(root, "src", "routes", "objects", "[name]"), { recursive: true });
 
@@ -485,10 +599,10 @@ test("production captures public bytes through worker and in-process builds", as
     if (build.hosting.version !== 2 || !("publicFiles" in build))
       throw new Error("A nonempty public directory must produce a version 2 build");
 
-    expect(build.hosting.publicFiles).toStrictEqual(expectedPublicRecords());
+    expect(build.hosting.publicFiles).toStrictEqual(expectedPublicRecords(files));
 
     expect([...build.publicFiles.keys()].sort()).toStrictEqual(
-      publicFiles.map((file) => file.urlPath).sort(),
+      files.map((file) => file.urlPath).sort(),
     );
 
     expect(build.files.has("/hesperia-build.json")).toBe(true);
@@ -499,6 +613,12 @@ test("production captures public bytes through worker and in-process builds", as
     );
 
     await rm(publicRoot, { recursive: true, force: true });
+
+    if (project.linked) {
+      await rm(join(root, "source-public"), { recursive: true, force: true });
+
+      await rm(join(root, "source-files"), { recursive: true, force: true });
+    }
 
     await writeBuild(root, build);
 
@@ -516,7 +636,7 @@ test("production captures public bytes through worker and in-process builds", as
 
     let dashboardServer: ProjectServer | undefined;
 
-    try {
+    await withFixtureCleanup(async () => {
       rootServer = await previewProject(root, 0, { mountURL: "/" });
 
       dashboardServer = await previewProject(root, 0, { mountURL: "/shop" });
@@ -525,7 +645,7 @@ test("production captures public bytes through worker and in-process builds", as
         { server: rootServer, prefix: "" },
         { server: dashboardServer, prefix: "/shop" },
       ]) {
-        for (const file of publicFiles) {
+        for (const file of files) {
           const url = new URL(mount.prefix + file.urlPath, mount.server.url);
           const response = await fetch(url, {
             headers: {
@@ -556,13 +676,9 @@ test("production captures public bytes through worker and in-process builds", as
             .status,
         ).toBe(404);
       }
-    } finally {
-      await dashboardServer?.close();
-
-      await rootServer?.close();
-    }
+    }, [() => dashboardServer?.close(), () => rootServer?.close()]);
   }
-}, 75_000);
+}, 150_000);
 
 test("public collisions reject before replacing the last published build", async () => {
   const root = await createProjectRoot("hesperia-public-collision-", "json");
@@ -610,6 +726,84 @@ test("public collisions reject before replacing the last published build", async
   expect(reservedCollision).toContain("/_hesperia");
 
   expect(await readFile(recordPath)).toEqual(publishedRecord);
+
+  await rm(join(publicRoot, "_hesperia"), { recursive: true, force: true });
+
+  const outside = await mkdtemp(`${root}-outside-`);
+
+  roots.push(outside);
+
+  await writeFile(join(outside, "secret.bin"), "outside project");
+
+  const link = join(publicRoot, "link.bin");
+  const hop = join(root, "hop.bin");
+  const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
+
+  for (const kind of [
+    "broken",
+    "escape",
+    "escape-and-return",
+    "file-cycle",
+    "directory-cycle",
+  ] as const) {
+    let linkCreated = false;
+    let hopCreated = false;
+    let returnCreated = false;
+
+    await withFixtureCleanup(async () => {
+      if (kind === "broken") await symlink(join(root, "missing.bin"), link, "file");
+      else if (kind === "escape") await symlink(join(outside, "secret.bin"), link, "file");
+      else if (kind === "escape-and-return") {
+        await symlink(join(publicRoot, "retained.bin"), join(outside, "return.bin"), "file");
+        returnCreated = true;
+        await symlink(join(outside, "return.bin"), link, "file");
+      } else if (kind === "file-cycle") {
+        await symlink(link, hop, "file");
+        hopCreated = true;
+        await symlink(hop, link, "file");
+      } else await symlink(publicRoot, link, directoryLinkType);
+      linkCreated = true;
+
+      const failure = await buildFailure(root);
+
+      expect(failure).toContain("public/link.bin");
+
+      expect(failure).toContain(
+        kind === "escape" || kind === "escape-and-return"
+          ? "escapes the project root"
+          : kind === "directory-cycle" || kind === "file-cycle"
+            ? "cycle"
+            : "could not be resolved",
+      );
+
+      if (kind === "escape" || kind === "escape-and-return")
+        expect(failure).toContain(outside.replaceAll("\\", "/"));
+
+      expect(await readFile(recordPath)).toEqual(publishedRecord);
+    }, [
+      () => (linkCreated ? unlink(link) : undefined),
+      () => (hopCreated ? unlink(hop) : undefined),
+      () => (returnCreated ? unlink(join(outside, "return.bin")) : undefined),
+    ]);
+  }
+
+  const savedPublic = join(root, "saved-public");
+  let publicSaved = false;
+  let brokenRootCreated = false;
+
+  await withFixtureCleanup(async () => {
+    await rename(publicRoot, savedPublic);
+    publicSaved = true;
+    await symlink(join(root, "missing-public"), publicRoot, directoryLinkType);
+    brokenRootCreated = true;
+
+    expect(await buildFailure(root)).toContain("public source could not be resolved");
+
+    expect(await readFile(recordPath)).toEqual(publishedRecord);
+  }, [
+    () => (brokenRootCreated ? unlink(publicRoot) : undefined),
+    () => (publicSaved ? rename(savedPublic, publicRoot) : undefined),
+  ]);
 
   let server: ProjectServer | undefined;
 
