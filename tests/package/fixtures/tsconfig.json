@@ -15,6 +15,7 @@
     "installed-browser.mjs",
     "installed-browser-globals.d.mts",
     "env-probe.mjs",
+    "scheduling-probe.mjs",
     "graphql.ts",
     "graphql-runtime.mjs"
   ]

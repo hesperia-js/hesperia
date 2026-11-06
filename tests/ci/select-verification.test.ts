@@ -78,6 +78,123 @@ test("product impact selects owner and static dependent roots without unrelated 
   });
 });
 
+test.each(["packages/hesperia/src/scheduling.ts", "packages/hesperia/src/scheduling/node.ts"])(
+  "conditional workspace export selects consumers of %s",
+  async (changed) => {
+    await withRepo(async (repo) => {
+      await put(
+        repo,
+        "packages/hesperia/package.json",
+        JSON.stringify({
+          name: "hesperia",
+          exports: {
+            "./scheduling": {
+              types: "./dist/scheduling.d.ts",
+              node: { import: "./dist/scheduling/node.js", default: "./dist/scheduling/node.js" },
+              default: "./dist/scheduling.js",
+            },
+          },
+        }),
+      );
+      await put(repo, "packages/hesperia/src/scheduling.ts", "export const value = 1;");
+      await put(repo, "packages/hesperia/src/scheduling/node.ts", "export const value = 1;");
+      await put(
+        repo,
+        "tests/tooling/scheduling.test.ts",
+        'import { value } from "hesperia/scheduling"; export { value };',
+      );
+      const base = commit(repo);
+      await put(repo, changed, "export const value = 2;");
+      const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
+
+      expect(result.full, JSON.stringify(result.fallbackReasons)).toBe(false);
+      expect(result.roots).toContain("runtime");
+      expect(result.roots).toContain("tooling");
+      expect(
+        result.reasons.some((reason) => reason.includes("tests/tooling/scheduling.test.ts")),
+      ).toBe(true);
+    });
+  },
+);
+
+test.each(["missing target", "ambiguous target", "duplicate owner", "fallback array"] as const)(
+  "unsafe workspace exports stay full: %s",
+  async (scenario) => {
+    await withRepo(async (repo) => {
+      const changed = "packages/hesperia/src/scheduling.ts";
+      const node = "packages/hesperia/src/scheduling/node.ts";
+      const targets = {
+        types: "./dist/scheduling.d.ts",
+        node: "./dist/scheduling/node.js",
+        default: "./dist/scheduling.js",
+      };
+      await put(
+        repo,
+        "packages/hesperia/package.json",
+        JSON.stringify({
+          name: "hesperia",
+          exports: {
+            "./scheduling": scenario === "fallback array" ? Object.values(targets) : targets,
+          },
+        }),
+      );
+      await put(repo, changed, "export const value = 1;");
+      if (scenario !== "missing target") await put(repo, node, "export const value = 1;");
+      if (scenario === "ambiguous target")
+        await put(repo, "packages/hesperia/src/scheduling.tsx", "export const value = 1;");
+      if (scenario === "duplicate owner")
+        await put(repo, "packages/duplicate/package.json", JSON.stringify({ name: "hesperia" }));
+      await put(
+        repo,
+        "tests/tooling/scheduling.test.ts",
+        'import { value } from "hesperia/scheduling"; export { value };',
+      );
+      const base = commit(repo);
+      await put(repo, changed, "export const value = 2;");
+      const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
+
+      expect(result.full).toBe(true);
+      expect(
+        result.fallbackReasons.some((reason) =>
+          reason.includes('local import "hesperia/scheduling"'),
+        ),
+      ).toBe(true);
+    });
+  },
+);
+
+test("single-source workspace exports retain legacy selection", async () => {
+  await withRepo(async (repo) => {
+    const changed = "packages/hesperia/src/single.ts";
+    await put(
+      repo,
+      "packages/hesperia/package.json",
+      JSON.stringify({
+        name: "hesperia",
+        exports: {
+          "./single": "./dist/single.js",
+          "./conditional-single": {
+            types: "./dist/single.d.ts",
+            default: "./dist/single.js",
+          },
+        },
+      }),
+    );
+    await put(repo, changed, "export const value = 1;");
+    await put(
+      repo,
+      "tests/tooling/single.test.ts",
+      'import "hesperia/single"; import "hesperia/conditional-single";',
+    );
+    const base = commit(repo);
+    await put(repo, changed, "export const value = 2;");
+    const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
+
+    expect(result.full, JSON.stringify(result.fallbackReasons)).toBe(false);
+    expect(result.roots).toContain("tooling");
+  });
+});
+
 test("owned application fixtures include cross-root opaque readers and local configuration", async () => {
   await withRepo(async (repo) => {
     const path = "tests/tooling/fixtures/applications/example/tsconfig.json";

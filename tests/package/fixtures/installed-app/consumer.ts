@@ -1,5 +1,6 @@
 import * as client from "hesperia/client";
 import { client as clientCapability } from "hesperia/client";
+import { debounce, throttle } from "hesperia/scheduling";
 import { beforeLeave, navigation, type HesperiaNavigation } from "hesperia/navigation";
 // @ts-expect-error beforeLeave is exposed by hesperia/navigation, not hesperia/routing.
 import { beforeLeave as legacyBeforeLeave } from "hesperia/routing"; // oxlint-disable-line no-unused-vars
@@ -8,6 +9,32 @@ import { env } from "hesperia/env";
 import { SETTINGS } from "hesperia/config/public";
 import { defineConfig, type Plugin } from "@hesperia/tooling";
 import { checkProjectModules, type ProjectCheckingResult } from "@hesperia/compiler";
+
+const scheduledOptional = debounce((value = "default") => value.length, 10);
+const scheduledNumber: Promise<number> = scheduledOptional();
+const scheduledRest = throttle(
+  async (first: string, ...rest: number[]) => first.length + rest.length,
+  2,
+  100,
+);
+const scheduledAsyncNumber: Promise<number> = scheduledRest("value", 1, 2);
+const scheduledSame: typeof scheduledRest = scheduledRest.unref().ref();
+const scheduledPending: Promise<number> | null = scheduledRest.pending;
+
+// @ts-expect-error the callback's required first argument stays required
+scheduledRest();
+
+// @ts-expect-error callback argument types remain checked
+scheduledRest(42);
+
+// @ts-expect-error throttle has no flush control
+scheduledRest.flush();
+
+// @ts-expect-error the awaited callback result remains numeric
+const scheduledWrong: Promise<string> = scheduledOptional();
+
+void [scheduledNumber, scheduledAsyncNumber, scheduledSame, scheduledPending, scheduledWrong];
+
 const plugin: Plugin<{ value: string }> = { name: "typed" };
 const configured = defineConfig({ plugins: [plugin] });
 const palette: "packed plugin data" = SETTINGS.palette;

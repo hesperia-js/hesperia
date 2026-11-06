@@ -39,6 +39,14 @@
       "import": "./dist/events.js",
       "default": "./dist/events.js"
     },
+    "./scheduling": {
+      "types": "./dist/scheduling.d.ts",
+      "node": {
+        "import": "./dist/scheduling/node.js",
+        "default": "./dist/scheduling/node.js"
+      },
+      "default": "./dist/scheduling.js"
+    },
     "./embed": {
       "types": "./dist/embed.d.ts",
       "import": "./dist/embed.js",
