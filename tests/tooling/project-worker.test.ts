@@ -77,6 +77,10 @@ export default defineConfig({
 
   const build = await buildInProjectProcess(root, false);
 
+  expect(build.hosting.version).toBe(1);
+
+  expect("publicFiles" in build).toBe(false);
+
   expect(build.hosting.standaloneMountURL).toBe("/worker");
 
   expect(build.hosting.assets.map((asset) => asset.path)).toStrictEqual(
@@ -93,7 +97,39 @@ export default defineConfig({
 
   expect(scripts.includes("second")).toBe(true);
 
-  expect((await prepareBuild(root)).files.size).toBeGreaterThan(0);
+  const binary = new Uint8Array([0x00, 0x80, 0xff, 0xc3, 0x28]);
+
+  await mkdir(join(root, "public"));
+
+  await writeFile(join(root, "public", "worker.bin"), binary);
+
+  const captured = await prepareBuild(root);
+
+  expect(captured.files.size).toBeGreaterThan(0);
+
+  expect(captured.hosting.version).toBe(2);
+
+  expect("publicFiles" in captured).toBe(true);
+
+  if (!("publicFiles" in captured)) throw new Error("Expected a version 2 public capture");
+
+  expect(captured.hosting.publicFiles).toHaveLength(1);
+
+  expect(captured.hosting.publicFiles[0]).toMatchObject({
+    relativePath: "worker.bin",
+    urlPath: "/worker.bin",
+    contentType: "application/octet-stream",
+  });
+
+  expect(captured.files.has("/worker.bin")).toBe(false);
+
+  const publicBlob = captured.publicFiles.get("/worker.bin");
+
+  expect(publicBlob).toBeInstanceOf(Blob);
+
+  expect(publicBlob!.type).toBe("application/octet-stream");
+
+  expect([...new Uint8Array(await publicBlob!.arrayBuffer())]).toStrictEqual([...binary]);
 
   await writeFile(
     join(root, "hesperia.config.ts"),
