@@ -148,7 +148,7 @@ async function readCapture(output: string, recordSource: string): Promise<Captur
     files.set(item.path, new Blob([await readFile(current)], { type: item.contentType }));
   }
 
-  if (version === 1) {
+  if (hosting.version === 1) {
     const build: CapturedBrowserBuild = { hosting, files };
     const snapshot = captureInput(build);
 
