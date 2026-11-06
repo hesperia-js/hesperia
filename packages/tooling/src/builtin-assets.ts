@@ -165,9 +165,6 @@ export async function interpretBuiltinAsset(
   const knownMime = mediaTypes[extension];
 
   if (type === "html" || type === "svg") {
-    if (!options.allowUnsafeHTML)
-      throw new TypeError(`Imported ${type} components require allowUnsafeHTML: true`);
-
     const source = await decodeText(file, origin);
     const roots = type === "html" ? parseHTMLFragment(source) : parseSVGDocument(source);
     const markup = validateMarkup(roots, type, file.filename, origin);

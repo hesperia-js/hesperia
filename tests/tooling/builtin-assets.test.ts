@@ -247,7 +247,7 @@ test("untyped SVG is source text while explicit image/svg+xml is a Blob", async 
 });
 
 test(
-  "HTML and SVG imports lower through the checked component projection only when enabled",
+  "HTML and SVG imports build as checked components with the default permission",
   async () => {
     const root = await mkdtemp(join(tmpdir(), "hesperia-markup-assets-"));
 
@@ -268,8 +268,6 @@ test(
       join(root, "icon.svg"),
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><path d="M0 0"/></svg>',
     );
-
-    await writeFile(join(root, "hesperia.config.json"), '{"allowUnsafeHTML":true}');
 
     await writeFile(
       filename,
@@ -406,7 +404,7 @@ export default function App() {
   expect((await checkProject(root)).filter((item) => item.severity === "error")).toStrictEqual([]);
 });
 
-test("markup imports enforce the gate and reject active markup after parsing", async () => {
+test("markup imports reject active content with either unsafe HTML permission", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-markup-assets-"));
 
   roots.push(root);
@@ -472,34 +470,36 @@ test("markup imports enforce the gate and reject active markup after parsing", a
     ],
   ] as const;
 
-  for (const [asset, contents, expected] of cases) {
-    await writeFile(join(root, asset), contents);
+  for (const allowUnsafeHTML of [false, true]) {
+    for (const [asset, contents, expected] of cases) {
+      await writeFile(join(root, asset), contents);
 
-    const result = await new PluginPipeline([], { allowUnsafeHTML: true }).prepareImports(
-      new Map([
-        [
+      const result = await new PluginPipeline([], { allowUnsafeHTML }).prepareImports(
+        new Map([
+          [
+            filename,
+            `import markup from "./${asset}" with { type: "${asset.endsWith(".svg") ? "svg" : "html"}" };`,
+          ],
+        ]),
+        root,
+      );
+
+      expect(result.projections).toHaveLength(1);
+
+      expect(result.projections[0]?.result.declaration.code).toContain("unknown");
+
+      expect(result.projections[0]?.result.diagnostics?.[0]?.message).toContain(expected);
+
+      if (asset.endsWith(".svg"))
+        expect(result.projections[0]?.result.diagnostics?.[0]?.origin).toStrictEqual({
+          filename: join(root, asset),
+        });
+      else
+        expect(result.projections[0]?.result.diagnostics?.[0]?.origin).toMatchObject({
           filename,
-          `import markup from "./${asset}" with { type: "${asset.endsWith(".svg") ? "svg" : "html"}" };`,
-        ],
-      ]),
-      root,
-    );
-
-    expect(result.projections).toHaveLength(1);
-
-    expect(result.projections[0]?.result.declaration.code).toContain("unknown");
-
-    expect(result.projections[0]?.result.diagnostics?.[0]?.message).toContain(expected);
-
-    if (asset.endsWith(".svg"))
-      expect(result.projections[0]?.result.diagnostics?.[0]?.origin).toStrictEqual({
-        filename: join(root, asset),
-      });
-    else
-      expect(result.projections[0]?.result.diagnostics?.[0]?.origin).toMatchObject({
-        filename,
-        start: 0,
-      });
+          start: 0,
+        });
+    }
   }
 
   await writeFile(
@@ -507,7 +507,7 @@ test("markup imports enforce the gate and reject active markup after parsing", a
     '<script type="application/ld+json">{"ok":true}</script><img src="data:image/png;base64,AA==" srcset="/small.png 1x, /large.png 2x" style="background-image:url(#local)"><x-widget data-value="ok"></x-widget><svg><use href="#local"></use></svg>',
   );
 
-  const pipeline = new PluginPipeline([], { allowUnsafeHTML: true });
+  const pipeline = new PluginPipeline();
   const safe = await pipeline.prepareImports(
     new Map([[filename, 'import Markup from "./safe.html" with { type: "html" };']]),
     root,
@@ -516,18 +516,6 @@ test("markup imports enforce the gate and reject active markup after parsing", a
   expect(pipeline.diagnostics).toStrictEqual([]);
 
   expect(safe.projections[0]?.result.browser.code).toContain("x-widget");
-
-  await writeFile(join(root, "gate.html"), "<button>ok</button>");
-
-  const gated = new PluginPipeline().prepareImports(
-    new Map([[filename, 'import Markup from "./gate.html" with { type: "html" };']]),
-    root,
-  );
-  const blocked = await gated;
-
-  expect(blocked.projections[0]?.result.diagnostics?.[0]?.message).toContain(
-    "allowUnsafeHTML: true",
-  );
 });
 
 test("SVG DOCTYPE rejection happens before any external entity request", async () => {
@@ -552,15 +540,17 @@ test("SVG DOCTYPE rejection happens before any external entity request", async (
       `<!DOCTYPE svg [<!ENTITY xxe SYSTEM "${server.url.href}entity">]><svg xmlns="http://www.w3.org/2000/svg">&xxe;</svg>`,
     );
 
-    const pipeline = new PluginPipeline([], { allowUnsafeHTML: true });
-    const prepared = await pipeline.prepareImports(
-      new Map([[filename, 'import Icon from "./external.svg" with { type: "svg" };']]),
-      root,
-    );
+    for (const allowUnsafeHTML of [false, true]) {
+      const pipeline = new PluginPipeline([], { allowUnsafeHTML });
+      const prepared = await pipeline.prepareImports(
+        new Map([[filename, 'import Icon from "./external.svg" with { type: "svg" };']]),
+        root,
+      );
 
-    expect(prepared.projections[0]?.result.diagnostics?.[0]?.message).toContain("DOCTYPE");
+      expect(prepared.projections[0]?.result.diagnostics?.[0]?.message).toContain("DOCTYPE");
 
-    expect(requests).toBe(0);
+      expect(requests).toBe(0);
+    }
   } finally {
     server.stop(true);
   }
