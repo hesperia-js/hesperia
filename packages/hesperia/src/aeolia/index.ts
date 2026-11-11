@@ -30,3 +30,12 @@ export function reset(api: object): Promise<void> {
 
 export type { ImportedApi } from "../data/api.ts";
 export type { Feed, FeedPolicy, FeedProjection } from "../data/types.ts";
+
+export type {
+  ChannelCarrier,
+  ChannelDeclaration,
+  ChannelProjection,
+  ChannelSendOptions,
+  ChannelView,
+  StandaloneChannel,
+} from "../data/channel-types.ts";

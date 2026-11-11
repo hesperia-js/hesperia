@@ -50,8 +50,13 @@ export interface Client {
   /** Register an ordered, auto-tracked post-DOM effect. */
   effect(run: Effect): void;
 
-  /** Register untracked cleanup before descendant destruction. */
-  cleanup(run: () => void): void;
+  /**
+   * Register untracked cleanup before descendant destruction. Primitive returns
+   * are ignored. Object and function returns are observed as native Promises
+   * without thenable assimilation and may make retirement incomplete. Revocation
+   * remains synchronous; owner-bound writes are unavailable after an await.
+   */
+  cleanup(run: () => unknown): void;
 
   /** Create a required binding with an explicit published target type. */
   bind<T>(): Binding<T>;

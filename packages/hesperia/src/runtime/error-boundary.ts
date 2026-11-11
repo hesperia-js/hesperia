@@ -1,6 +1,12 @@
 import type { Accessor } from "../client.ts";
 import { prepareTree, type Rendered } from "./dom.ts";
-import { Owner, RenderFault, reportFault, runComponentBody } from "./owner.ts";
+import {
+  disposeOwnerSyncPreservingFailure,
+  Owner,
+  RenderFault,
+  reportFault,
+  runComponentBody,
+} from "./owner.ts";
 
 /**
  * Internal error-view composition for filesystem boundaries. The first fault
@@ -42,7 +48,7 @@ export function errorBoundary(
     try {
       reportFault(parent, error);
     } finally {
-      if (owner.state !== "cleaning" && owner.state !== "destroyed") owner.dispose(error);
+      if (owner.state !== "cleaning" && owner.state !== "destroyed") owner.disposeSync(error);
     }
   };
 
@@ -58,7 +64,7 @@ export function errorBoundary(
 
     owner.errorHandler = undefined;
 
-    contentOwner.dispose(error);
+    contentOwner.disposeSync(error);
 
     if (owner.signal.aborted) return;
 
@@ -106,7 +112,7 @@ export function errorBoundary(
       const insertionParent = rangeParent();
 
       if (!insertionParent) {
-        viewOwner.dispose(error);
+        viewOwner.disposeSync(error);
 
         disposeAfterForwarding(error);
 
@@ -122,7 +128,7 @@ export function errorBoundary(
           owner.context.scheduler.requestEffects();
         }
       } catch (fallbackError) {
-        viewOwner.dispose(fallbackError);
+        viewOwner.disposeSync(fallbackError);
 
         // A boundary's own view is outside its recovery scope. Forward its
         // failure through the enclosing owner instead of selecting itself again.
@@ -207,7 +213,7 @@ export function errorBoundary(
 
     return fragment;
   } catch (error) {
-    owner.dispose(error);
+    disposeOwnerSyncPreservingFailure(owner, error);
 
     throw error;
   }

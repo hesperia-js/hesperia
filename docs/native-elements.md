@@ -149,6 +149,13 @@ application removes the installed shell and revokes its component lifetimes.
 Document mounts use the same binding, effect, async-boundary, and application
 data rules as element mounts.
 
+`application.dispose()` revokes the application and removes its nodes
+synchronously. Its promise settles after owned cleanup work finishes and rejects
+if cleanup fails. Return a native Promise from `client.cleanup` when disposal
+must wait for that work. `application.disposeSync()` starts the same revocation
+and reports cleanup failures through the owner's error route. `settled()` waits
+for scheduled rendering and effects; it is not a cleanup barrier.
+
 Native handles can be passed to browser constructors. For example, `FormData`
 reads the form's current controls when the user submits it:
 

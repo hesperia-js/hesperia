@@ -1,10 +1,17 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { Signal } from "aeolia";
+import {
+  createDataApplication,
+  createDataSecurityPartition,
+  type DataBindingRootControl,
+} from "../../packages/hesperia/src/index.ts";
 import { createClient, type State } from "../../packages/hesperia/src/client.ts";
+import { bootstrapDataBindingRoot } from "../../packages/hesperia/src/data/environment.ts";
 import {
   child,
   component,
+  createRuntimeRoot,
   defineComponent,
   dynamic,
   element,
@@ -478,9 +485,9 @@ describe("browser component lifetimes", () => {
 
     await app.settled();
 
-    app.dispose();
+    app.disposeSync();
 
-    app.dispose();
+    app.disposeSync();
 
     expect(order).toStrictEqual(["parent last", "parent first", "child"]);
 
@@ -503,11 +510,197 @@ describe("browser component lifetimes", () => {
 
     await app.settled();
 
-    app.dispose();
+    app.disposeSync();
 
     expect(raw.get()).toBe(0);
 
     expect(errors).toHaveLength(1);
+  });
+
+  test("disposal revokes immediately and joins cleanup before reporting its original failure", async () => {
+    const target = container();
+    const errors: unknown[] = [];
+    const failure = new Error("cleanup failed");
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let state!: State<number>;
+    const App = defineComponent((owner) => {
+      const client = createClient(owner);
+      state = client.state(0);
+      client.cleanup(() => pending);
+      client.cleanup(() => {
+        throw failure;
+      });
+      return element(owner, "span");
+    });
+    const app = mount(target, App, {}, { onError: (error) => errors.push(error) });
+    await app.settled();
+
+    const disposal = app.dispose();
+    const result = disposal.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    try {
+      expect(app.dispose()).toBe(disposal);
+      expect(target.childNodes.length).toBe(0);
+      expect(() => state.set(1)).toThrow();
+      expect(await Promise.race([result, Promise.resolve("pending")])).toBe("pending");
+      expect(errors).toStrictEqual([]);
+    } finally {
+      release();
+    }
+
+    const error = await result;
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toStrictEqual([failure]);
+    expect(errors).toStrictEqual([]);
+  });
+
+  test("root disposal fences a pending security replacement and detaches authentication", async () => {
+    const target = container();
+    const partition = createDataSecurityPartition();
+    const events: string[] = [];
+    let control!: DataBindingRootControl;
+    let release!: () => void;
+    const apply = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const app = mount(
+      target,
+      defineComponent(() => "ready"),
+      {},
+      {
+        dataBinding: {
+          application: createDataApplication(),
+          security: () => ({ kind: "none" }),
+          attach(value) {
+            control = value;
+            return () => events.push("detached");
+          },
+        },
+      },
+    );
+    const generation = control.generation;
+    const replacement = control.replaceSecurity(
+      generation,
+      { kind: "partition", partition },
+      () => apply,
+    );
+    const outcome = replacement.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    let staleApplyCalled = false;
+
+    try {
+      await expect(
+        control.replaceSecurity(generation, { kind: "none" }, () => {
+          staleApplyCalled = true;
+        }),
+      ).rejects.toBeDefined();
+      expect(staleApplyCalled).toBe(false);
+
+      const reason = new Error("root closed");
+      const disposal = app.dispose(reason);
+      expect(control.signal.aborted).toBe(true);
+      expect(control.signal.reason).toBe(reason);
+      expect(events).toStrictEqual(["detached"]);
+      expect(await outcome).toBe(reason);
+
+      release();
+      await disposal;
+      expect(control.generation).toBe(generation);
+      expect(target.childNodes.length).toBe(0);
+    } finally {
+      release();
+      await app.dispose();
+    }
+  });
+
+  test("cleanup observation does not assimilate an arbitrary thenable", async () => {
+    let reads = 0;
+    // The rejected cleanup object deliberately exposes a thenable getter.
+    // oxlint-disable-next-line unicorn/no-thenable
+    const thenable = Object.defineProperty({}, "then", {
+      get() {
+        reads++;
+        throw new Error("then must not be read");
+      },
+    });
+    const App = defineComponent((owner) => {
+      createClient(owner).cleanup(() => thenable);
+      return null;
+    });
+    const app = mount(container(), App, {});
+    const result = await app.dispose().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(reads).toBe(0);
+    expect(result).toBeInstanceOf(AggregateError);
+    const failure = (result as AggregateError).errors[0];
+    expect(failure).toMatchObject({ kind: "cleanup-observation", incomplete: true });
+    expect(failure.cause).toBeInstanceOf(TypeError);
+  });
+
+  test("cleanup cannot wait for its own mounted application disposal", async () => {
+    let app!: ReturnType<typeof mount>;
+    const App = defineComponent((owner) => {
+      createClient(owner).cleanup(() => app.dispose());
+      return null;
+    });
+    app = mount(container(), App, {});
+
+    const result = await app.dispose().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(result).toBeInstanceOf(AggregateError);
+    expect((result as AggregateError).errors[0]).toMatchObject({
+      kind: "cleanup-retirement-cycle",
+      incomplete: true,
+    });
+  });
+
+  test("a root disposed inside authentication attachment drains the late returned detach", async () => {
+    const runtime = createRuntimeRoot(container());
+    const failure = new Error("detach failed");
+    let detachCalls = 0;
+    let setupFailure: unknown;
+
+    try {
+      bootstrapDataBindingRoot(runtime.owner, {
+        application: createDataApplication(),
+        security: () => ({ kind: "none" }),
+        attach() {
+          runtime.owner.disposeSync();
+
+          return () => {
+            detachCalls++;
+            throw failure;
+          };
+        },
+      });
+    } catch (cause) {
+      setupFailure = cause;
+    }
+
+    expect(detachCalls).toBe(1);
+    expect(setupFailure).toBeInstanceOf(AggregateError);
+    expect((setupFailure as AggregateError).errors).toContain(failure);
+
+    const retirement = await runtime.owner.dispose().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(retirement).toBeInstanceOf(AggregateError);
+    expect((retirement as AggregateError).errors).toContain(failure);
   });
 
   test("invalidating an effect after its turn defers its second run until the next DOM/effect pass", async () => {
