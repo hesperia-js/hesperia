@@ -1,6 +1,15 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { checkSaxeIntegrationCoverage } from "../../scripts/ci/check-saxe-integration-coverage.ts";
@@ -425,6 +434,19 @@ test("accepts a capture under an alternate path to its repository parent", async
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
+});
+
+test("rejects a run root redirected outside its expected directory", async () => {
+  const fixture = await createCaptureFixture(7);
+  const runs = dirname(fixture.runRoot);
+  const relocated = join(dirname(runs), "relocated-runs");
+
+  await rename(runs, relocated);
+  await symlink(relocated, runs, "junction");
+
+  await expect(checkSaxeIntegrationCoverage(checkerOptions(fixture))).rejects.toThrow(
+    "run root resolves through a reparse point or symlink",
+  );
 });
 
 test("rejects stale candidates and non-integration evidence", async () => {
