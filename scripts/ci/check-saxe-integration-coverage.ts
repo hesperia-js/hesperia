@@ -1,7 +1,17 @@
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  closeSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   inventoryCoverageSources,
   mergeCoverageArtifacts,
@@ -984,21 +994,161 @@ export async function checkSaxeIntegrationCoverage(options: {
   };
 }
 
+async function captureSaxeIntegrationCoverage(repoPath: string): Promise<void> {
+  if (
+    process.env.BUN_OPTIONS ||
+    process.env.NODE_OPTIONS ||
+    process.env.NODE_PATH ||
+    Object.entries(process.env).some(
+      ([name, value]) => name.startsWith("HESPERIA_COVERAGE_") && value,
+    )
+  )
+    throw new Error("Saxe coverage cannot inherit runtime or coverage preload options");
+
+  const candidate = gitOutput(repoPath, ["rev-parse", "HEAD"]);
+
+  if (gitOutput(repoPath, ["status", "--porcelain=v1", "--untracked-files=all"]))
+    throw new Error("Saxe coverage requires a clean candidate");
+
+  const lockSha256 = sha256(readFileSync(join(repoPath, "bun.lock")));
+  const testSha256 = sha256(readFileSync(join(repoPath, integrationTestPath)));
+  const evidenceRoot = join(repoPath, ".hesperia", "saxe-integration-coverage");
+
+  mkdirSync(evidenceRoot, { recursive: true });
+
+  const evidence = mkdtempSync(join(evidenceRoot, "capture-"));
+  const stdoutPath = join(evidence, "stdout.log");
+  const stderrPath = join(evidence, "stderr.log");
+  const stdoutFd = openSync(stdoutPath, "wx");
+  const stderrFd = openSync(stderrPath, "wx");
+  let result: ReturnType<typeof spawnSync>;
+
+  try {
+    result = spawnSync(process.execPath, expectedCommand.slice(1), {
+      cwd: repoPath,
+      stdio: ["ignore", stdoutFd, stderrFd],
+      env: process.env,
+      windowsHide: true,
+    });
+  } finally {
+    closeSync(stdoutFd);
+
+    closeSync(stderrFd);
+  }
+
+  if (result.error || result.signal || result.status !== 0)
+    throw new Error(`Saxe coverage owner failed; logs retained at ${evidence}`, {
+      cause: result.error,
+    });
+
+  const stdout = readFileSync(stdoutPath);
+  const stderr = readFileSync(stderrPath);
+  const summaries: Record<string, unknown>[] = [];
+
+  for (const line of stdout.toString("utf8").split(/\r?\n/u)) {
+    try {
+      const value: unknown = JSON.parse(line);
+
+      if (
+        value &&
+        typeof value === "object" &&
+        "status" in value &&
+        value.status === "completed" &&
+        "ownerId" in value &&
+        value.ownerId === "bun-tests"
+      )
+        summaries.push(value as Record<string, unknown>);
+    } catch {}
+  }
+
+  const summary = summaries[0];
+  const runId = summary?.runId;
+
+  if (
+    summaries.length !== 1 ||
+    typeof runId !== "string" ||
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u.test(runId)
+  )
+    throw new Error(
+      `Saxe coverage owner did not produce one valid run; logs retained at ${evidence}`,
+    );
+
+  const runRoot = join(repoPath, ".hesperia", "coverage", "runs", runId);
+  const names = readdirSync(runRoot).sort();
+  const seedName = names.find((name) => name.includes("-bun-tests-coverage-runner-seed-"));
+
+  if (!seedName) throw new Error(`Saxe coverage run has no seed; logs retained at ${evidence}`);
+
+  const seed: unknown = JSON.parse(readFileSync(join(runRoot, seedName), "utf8"));
+
+  if (
+    !seed ||
+    typeof seed !== "object" ||
+    !("populationFingerprint" in seed) ||
+    typeof seed.populationFingerprint !== "string"
+  )
+    throw new Error(`Saxe coverage seed has no population identity; logs retained at ${evidence}`);
+
+  const classification = { schema: 1, supportedFiles: supportedSaxeFiles, exclusions: [] };
+  const inputs = {
+    format: "hesperia-saxe-integration-capture-inputs",
+    version: 1,
+    candidate,
+    lockSha256,
+    testInputs: [{ path: integrationTestPath, sha256: testSha256 }],
+    execution: {
+      command: expectedCommand,
+      testPaths: [integrationTestPath],
+      exitCode: result.status,
+      runId,
+      ownerId: "bun-tests",
+      platform: process.platform,
+      runtime: { name: "bun", version: process.versions.bun },
+      stdout: { file: "stdout.log", sha256: sha256(stdout) },
+      stderr: { file: "stderr.log", sha256: sha256(stderr) },
+    },
+    populationFingerprint: seed.populationFingerprint,
+    classification: { ...classification, sha256: sha256(JSON.stringify(classification)) },
+    artifacts: names.map((name) => ({ name, sha256: sha256(readFileSync(join(runRoot, name))) })),
+  };
+  const inputsPath = join(evidence, "capture-inputs.json");
+
+  writeFileSync(inputsPath, `${JSON.stringify(inputs, null, 2)}\n`, { flag: "wx" });
+
+  const report = await checkSaxeIntegrationCoverage({ repoPath, runRoot, inputsPath });
+
+  writeFileSync(join(evidence, "report.json"), `${JSON.stringify(report, null, 2)}\n`, {
+    flag: "wx",
+  });
+
+  console.log(JSON.stringify({ evidence, runRoot, report }));
+
+  if (!report.supportedFive.floorPassed) process.exitCode = 1;
+}
+
 function parseArguments(
   args: readonly string[],
 ):
   | { readonly help: true }
-  | { readonly help: false; readonly runRoot: string; readonly inputsPath: string } {
+  | { readonly help: false; readonly capture: true }
+  | {
+      readonly help: false;
+      readonly capture: false;
+      readonly runRoot: string;
+      readonly inputsPath: string;
+    } {
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) return { help: true };
+
+  if (args.length === 1 && args[0] === "--capture") return { help: false, capture: true };
 
   if (args.length !== 3 || args[1] !== "--inputs") {
     throw new Error(
       "Usage: bun run scripts/ci/check-saxe-integration-coverage.ts " +
-        "<run-root> --inputs <capture-inputs.json>",
+        "--capture | <run-root> --inputs <capture-inputs.json>",
     );
   }
 
-  return { help: false, runRoot: args[0]!, inputsPath: args[2]! };
+  return { help: false, capture: false, runRoot: args[0]!, inputsPath: args[2]! };
 }
 
 if (import.meta.main) {
@@ -1008,11 +1158,13 @@ if (import.meta.main) {
     if (args.help) {
       console.log(
         "Usage: bun run scripts/ci/check-saxe-integration-coverage.ts " +
-          "<run-root> --inputs <capture-inputs.json>\n" +
+          "--capture | <run-root> --inputs <capture-inputs.json>\n" +
           "Checks the direct, non-worker tests/tooling/builtin-assets.test.ts capture in " +
           ".hesperia/coverage/runs/<runId>. The retained envelope and adjacent logs bind " +
           "the command and capture inputs.",
       );
+    } else if (args.capture) {
+      await captureSaxeIntegrationCoverage(resolve(import.meta.dir, "../.."));
     } else {
       const repoPath = resolve(import.meta.dir, "../..");
       const report = await checkSaxeIntegrationCoverage({

@@ -49,7 +49,7 @@ test.each([
   "packages/tooling/src/vendor/saxe/parser.ts",
   "packages/tooling/src/builtin-assets.ts",
   "tests/tooling/builtin-assets.test.ts",
-])("Saxe integration owner changes select the full coverage gate: %s", async (path) => {
+])("Saxe integration owner changes select tooling verification: %s", async (path) => {
   await withRepo(async (repo) => {
     await put(repo, path, "export const value = 1;");
 
@@ -59,9 +59,9 @@ test.each([
 
     const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
 
-    expect(result.full).toBe(true);
+    expect(result.full).toBe(false);
 
-    expect(result.fallbackReasons).toContain(`Saxe integration coverage owner changed: ${path}`);
+    expect(result.roots).toContain("tooling");
   });
 });
 

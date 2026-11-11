@@ -180,6 +180,20 @@ jobs:
       - name: "Test tooling"
         if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'"
         run: "bun test --timeout=45000 tests/tooling"
+      - name: "Check Saxe supported-mode coverage"
+        if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'"
+        run: "bun run scripts/ci/check-saxe-integration-coverage.ts --capture"
+      - name: "Retain Saxe coverage evidence"
+        if: "always() && needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "hesperia-saxe-coverage-${{ matrix.platform }}-${{ github.run_attempt }}"
+          if-no-files-found: ignore
+          include-hidden-files: true
+          path: |
+            .hesperia/saxe-integration-coverage/
+            .hesperia/coverage/runs/
+          retention-days: 14
       - name: "Test routing"
         if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.routing == 'true'"
         run: "bun test --timeout=45000 tests/routing"
@@ -252,7 +266,7 @@ jobs:
         run: "python3 -B editors/vscode/tests/test_linux_observer.py -v"
       - name: "Check Saxe supported-mode coverage"
         if: "matrix.group == 'bun-tests-ordinary'"
-        run: "bun run scripts/ci/capture-saxe-integration-coverage.ts"
+        run: "bun run scripts/ci/check-saxe-integration-coverage.ts --capture"
       - name: "Retain Saxe coverage evidence"
         if: "always() && matrix.group == 'bun-tests-ordinary'"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

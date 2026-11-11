@@ -81,7 +81,9 @@ test("full coverage retains Saxe evidence and fails the ordinary group when its 
 
   expect(steps[gateIndex]?.if).toBe("matrix.group == 'bun-tests-ordinary'");
 
-  expect(steps[gateIndex]?.run).toBe("bun run scripts/ci/capture-saxe-integration-coverage.ts");
+  expect(steps[gateIndex]?.run).toBe(
+    "bun run scripts/ci/check-saxe-integration-coverage.ts --capture",
+  );
 
   expect(steps[gateIndex]?.["continue-on-error"]).not.toBe(true);
 
@@ -99,6 +101,38 @@ test("full coverage retains Saxe evidence and fails the ordinary group when its 
 
   expect(steps[evidenceIndex]?.with?.path).toContain(".hesperia/saxe-integration-coverage/");
 
+  expect(steps[evidenceIndex]?.with?.path).toContain(".hesperia/coverage/runs/");
+});
+
+test("selected tooling verification runs the Saxe gate and retains its evidence", () => {
+  const steps = workflow.jobs["source-quality"]!.steps as {
+    name?: string;
+    if?: string;
+    run?: string;
+    uses?: string;
+    "continue-on-error"?: boolean;
+    with?: { path?: string; "include-hidden-files"?: boolean };
+  }[];
+  const gateIndex = steps.findIndex((step) => step.name === "Check Saxe supported-mode coverage");
+  const evidenceIndex = steps.findIndex((step) => step.name === "Retain Saxe coverage evidence");
+
+  expect(gateIndex).toBeGreaterThanOrEqual(0);
+  expect(steps[gateIndex]?.if).toBe(
+    "needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'",
+  );
+  expect(steps[gateIndex]?.run).toBe(
+    "bun run scripts/ci/check-saxe-integration-coverage.ts --capture",
+  );
+  expect(steps[gateIndex]?.["continue-on-error"]).not.toBe(true);
+  expect(evidenceIndex).toBeGreaterThan(gateIndex);
+  expect(steps[evidenceIndex]?.if).toBe(
+    "always() && needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'",
+  );
+  expect(steps[evidenceIndex]?.uses).toBe(
+    "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+  );
+  expect(steps[evidenceIndex]?.with?.["include-hidden-files"]).toBe(true);
+  expect(steps[evidenceIndex]?.with?.path).toContain(".hesperia/saxe-integration-coverage/");
   expect(steps[evidenceIndex]?.with?.path).toContain(".hesperia/coverage/runs/");
 });
 
