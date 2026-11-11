@@ -13,7 +13,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { prepareBuild, writeBuild } from "../../packages/tooling/src/project.ts";
 import {
   devProject,
@@ -384,7 +384,12 @@ interface ObservedWatch {
 function observePublicWatches(root: string, context: () => unknown) {
   const originalWatch = filesystem.watch;
   const originalOpen = filesystemPromises.open;
-  const canonicalRoot = String(filesystem.realpathSync(root));
+  const nativeDirectory = (path: string): string => String(filesystem.realpathSync.native(path));
+  const entryPath = (path: string): string => {
+    const absolute = resolve(path);
+    return join(nativeDirectory(dirname(absolute)), basename(absolute));
+  };
+  const canonicalRoot = nativeDirectory(root);
   const records: ObservedWatch[] = [];
   const requests: { raw: string; canonical?: string; state: string }[] = [];
   const waiting: { directory: string; after: number; resolve(record: ObservedWatch): void }[] = [];
@@ -399,7 +404,7 @@ function observePublicWatches(root: string, context: () => unknown) {
   let forwardedNativeCallbacks = 0;
 
   const isWithinFixture = (path: string): boolean => {
-    const relativePath = relative(canonicalRoot, resolve(path));
+    const relativePath = relative(canonicalRoot, path);
 
     return (
       relativePath === "" ||
@@ -413,12 +418,18 @@ function observePublicWatches(root: string, context: () => unknown) {
     openSpy.mockImplementation(((...args: Parameters<typeof filesystemPromises.open>) => {
       const filename = args[0];
 
-      if (
-        typeof filename !== "string" ||
-        !isWithinFixture(filename) ||
-        !afterRead ||
-        filename !== afterRead.filename
-      )
+      if (typeof filename !== "string" || !afterRead)
+        return Reflect.apply(originalOpen, filesystemPromises, args);
+
+      let entry: string;
+
+      try {
+        entry = entryPath(filename);
+      } catch {
+        return Reflect.apply(originalOpen, filesystemPromises, args);
+      }
+
+      if (!isWithinFixture(entry) || entry !== afterRead.filename)
         return Reflect.apply(originalOpen, filesystemPromises, args);
 
       return (async () => {
@@ -438,7 +449,7 @@ function observePublicWatches(root: string, context: () => unknown) {
               bytes = await Reflect.apply(originalRead, handle, readArguments);
               const action = afterRead;
 
-              if (action && filename === action.filename) {
+              if (action && entry === action.filename) {
                 afterRead = undefined;
                 readIntercepted = true;
                 action.run();
@@ -502,15 +513,13 @@ function observePublicWatches(root: string, context: () => unknown) {
 
       if (typeof raw !== "string") return Reflect.apply(originalWatch, filesystem, args);
 
-      const request = { raw, canonical: undefined as string | undefined, state: "outside fixture" };
+      const request = { raw, canonical: undefined as string | undefined, state: "unresolved" };
       requests.push(request);
-
-      if (!isWithinFixture(raw)) return Reflect.apply(originalWatch, filesystem, args);
 
       let directory: string;
 
       try {
-        directory = String(filesystem.realpathSync(raw));
+        directory = nativeDirectory(raw);
       } catch {
         request.state = "unresolved";
         return Reflect.apply(originalWatch, filesystem, args);
@@ -544,7 +553,15 @@ function observePublicWatches(root: string, context: () => unknown) {
         ...args.slice(0, callbackIndex),
         function (this: filesystem.FSWatcher, event: string, filename: string | Buffer | null) {
           if (filename !== null) {
-            const changed = resolve(directory, filename.toString());
+            let changed: string;
+
+            try {
+              changed = entryPath(resolve(directory, filename.toString()));
+            } catch {
+              forwardedNativeCallbacks++;
+              Reflect.apply(callback, this, [event, filename]);
+              return;
+            }
             const controlled = [...heldNotifications].some((target) => {
               const fromTarget = relative(target, changed);
               const fromChange = relative(changed, target);
@@ -611,10 +628,13 @@ function observePublicWatches(root: string, context: () => unknown) {
   return {
     records,
     holdNotifications(...paths: string[]): void {
-      for (const path of paths) heldNotifications.add(resolve(path));
+      for (const path of paths)
+        heldNotifications.add(
+          filesystem.lstatSync(path).isDirectory() ? nativeDirectory(path) : entryPath(path),
+        );
     },
     registration(directory: string): ObservedWatch {
-      const canonical = String(filesystem.realpathSync(directory));
+      const canonical = nativeDirectory(directory);
       const record = records.find((item) => !item.closed && item.directory === canonical);
 
       if (!record)
@@ -633,7 +653,7 @@ function observePublicWatches(root: string, context: () => unknown) {
       return record;
     },
     waitFor(directory: string, after: number): Promise<ObservedWatch> {
-      const canonical = String(filesystem.realpathSync(directory));
+      const canonical = nativeDirectory(directory);
       const found = records
         .slice(after)
         .find((item) => !item.closed && item.directory === canonical);
@@ -643,17 +663,16 @@ function observePublicWatches(root: string, context: () => unknown) {
       return new Promise((resolve) => waiting.push({ directory: canonical, after, resolve }));
     },
     failAt(directory?: string): void {
-      failDirectory =
-        directory === undefined ? undefined : String(filesystem.realpathSync(directory));
+      failDirectory = directory === undefined ? undefined : nativeDirectory(directory);
     },
     notifyDuringRegistration(directory: string): void {
-      earlyNotificationDirectory = String(filesystem.realpathSync(directory));
+      earlyNotificationDirectory = nativeDirectory(directory);
     },
     beforeRegistration(directory: string, run: () => void): void {
-      beforeRegistration = { directory: String(filesystem.realpathSync(directory)), run };
+      beforeRegistration = { directory: nativeDirectory(directory), run };
     },
     afterRead(filename: string, run: () => void): void {
-      afterRead = { filename: String(filesystem.realpathSync(filename)), run };
+      afterRead = { filename: entryPath(filename), run };
     },
     forwardedNativeCallbacks(): number {
       return forwardedNativeCallbacks;
@@ -2139,7 +2158,8 @@ test("public dependency replacement and rollback use the existing native watcher
         .slice(beforeStaleFailure)
         .some(
           (record) =>
-            record.directory === String(filesystem.realpathSync(directories["held-failure"]!)),
+            record.directory ===
+            String(filesystem.realpathSync.native(directories["held-failure"]!)),
         ),
     ).toBe(false);
 
