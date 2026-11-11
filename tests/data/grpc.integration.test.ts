@@ -344,12 +344,16 @@ test("unary callbacks run after response and callback failures keep their phase 
       onHeader: (headers) => {
         events.push("success-header");
 
-        expect(headers).toBe(response?.header);
+        if (!response) throw new Error("Header callback ran before its transport response");
+
+        expect(headers).toBe(response.header);
       },
       onTrailer: (trailers) => {
         events.push("success-trailer");
 
-        expect(trailers).toBe(response?.trailer);
+        if (!response) throw new Error("Trailer callback ran before its transport response");
+
+        expect(trailers).toBe(response.trailer);
       },
     }),
   });
@@ -362,7 +366,9 @@ test("unary callbacks run after response and callback failures keep their phase 
       onHeader: (headers) => {
         events.push("header");
 
-        expect(headers).toBe(response?.header);
+        if (!response) throw new Error("Header callback ran before its transport response");
+
+        expect(headers).toBe(response.header);
 
         throw callFailure;
       },
@@ -491,12 +497,16 @@ test("server-stream callbacks preserve message order and keep terminal callback 
       onHeader: (headers) => {
         events.push("header");
 
-        expect(headers).toBe(response?.header);
+        if (!response) throw new Error("Header callback ran before its transport response");
+
+        expect(headers).toBe(response.header);
       },
       onTrailer: (trailers) => {
         events.push("trailer");
 
-        expect(trailers).toBe(response?.trailer);
+        if (!response) throw new Error("Trailer callback ran before its transport response");
+
+        expect(trailers).toBe(response.trailer);
 
         parent.abort(terminalFailure);
 
