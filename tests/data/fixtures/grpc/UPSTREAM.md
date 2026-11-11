@@ -2,11 +2,11 @@
 
 The files in this directory are copied byte-for-byte from the `bufbuild/protobuf-es` repository at commit [`b3b232f7f466eda27c66e8f63c82f930578b6cc6`](https://github.com/bufbuild/protobuf-es/tree/b3b232f7f466eda27c66e8f63c82f930578b6cc6).
 
-| Local file | Upstream path | SHA-256 |
-| --- | --- | --- |
-| `service-all.proto` | [`packages/protobuf-test/extra/service-all.proto`](https://github.com/bufbuild/protobuf-es/blob/b3b232f7f466eda27c66e8f63c82f930578b6cc6/packages/protobuf-test/extra/service-all.proto) | `655d31f2f6c6844bec5dbee0c972c34fef9cc0a83f84c8e8bbeed110ce7beb6f` |
+| Local file          | Upstream path                                                                                                                                                                                                  | SHA-256                                                            |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `service-all.proto` | [`packages/protobuf-test/extra/service-all.proto`](https://github.com/bufbuild/protobuf-es/blob/b3b232f7f466eda27c66e8f63c82f930578b6cc6/packages/protobuf-test/extra/service-all.proto)                       | `655d31f2f6c6844bec5dbee0c972c34fef9cc0a83f84c8e8bbeed110ce7beb6f` |
 | `service-all_pb.ts` | [`packages/protobuf-test/src/gen/ts/extra/service-all_pb.ts`](https://github.com/bufbuild/protobuf-es/blob/b3b232f7f466eda27c66e8f63c82f930578b6cc6/packages/protobuf-test/src/gen/ts/extra/service-all_pb.ts) | `88d7e722b98152e182699e43263d5e7cb75c8eeb52aa8f4ff33cd588e8af3c17` |
-| `LICENSE` | [`LICENSE`](https://github.com/bufbuild/protobuf-es/blob/b3b232f7f466eda27c66e8f63c82f930578b6cc6/LICENSE) | `c04b4216f1cd4c5a4f7fb2f2a1b0ae70d847e9e0cac7c9dee9bf8cc03177c449` |
+| `LICENSE`           | [`LICENSE`](https://github.com/bufbuild/protobuf-es/blob/b3b232f7f466eda27c66e8f63c82f930578b6cc6/LICENSE)                                                                                                     | `c04b4216f1cd4c5a4f7fb2f2a1b0ae70d847e9e0cac7c9dee9bf8cc03177c449` |
 
 The schema and generated descriptor carry the Apache-2.0 notice and Buf Technologies attribution. Keep the generated header and `LICENSE` with these fixture files.
 

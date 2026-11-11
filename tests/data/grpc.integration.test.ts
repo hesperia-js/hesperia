@@ -200,7 +200,9 @@ test("unary descriptors preserve message values, native options, explicit effect
     transport,
     method: ServiceAll.method.unary,
     name: "grpc.fixture.save",
-    affects: [affects(query, { select: (mutationInput: UnaryInput) => mutationInput, on: "revalidate" })],
+    affects: [
+      affects(query, { select: (mutationInput: UnaryInput) => mutationInput, on: "revalidate" }),
+    ],
     nativeOptions: (_input, context) => {
       mutationContexts.push(context);
 
@@ -289,10 +291,12 @@ test("graph cancellation owns the unary signal even if JavaScript supplies a sig
     method: ServiceAll.method.unary,
     name: "grpc.fixture.signal-owner",
     key: ({ value }) => `signal:${value ?? ""}`,
-    nativeOptions: () =>
-      ({ signal: override.signal } as unknown as GrpcNativeCallOptions),
+    nativeOptions: () => ({ signal: override.signal }) as unknown as GrpcNativeCallOptions,
   });
-  const contract = defineContract({ namespace: "grpc-fixture-signal-owner", operations: { query } });
+  const contract = defineContract({
+    namespace: "grpc-fixture-signal-owner",
+    operations: { query },
+  });
   const graph = createGraph({ contract, abortSignal: external.signal });
   const store = graph.api.query(input);
   const ready = store.ready.catch(() => undefined);
@@ -310,13 +314,17 @@ test("graph cancellation owns the unary signal even if JavaScript supplies a sig
 
     expect(override.signal.aborted).toBe(false);
 
-    resolveResponse?.(unaryResponse(ServiceAll.method.unary, create(ServiceAll.method.unary.output, { value: 10 })));
+    resolveResponse?.(
+      unaryResponse(ServiceAll.method.unary, create(ServiceAll.method.unary.output, { value: 10 })),
+    );
 
     await ready;
   } finally {
     if (!external.signal.aborted) graph.dispose();
 
-    resolveResponse?.(unaryResponse(ServiceAll.method.unary, create(ServiceAll.method.unary.output, { value: 10 })));
+    resolveResponse?.(
+      unaryResponse(ServiceAll.method.unary, create(ServiceAll.method.unary.output, { value: 10 })),
+    );
 
     await ready;
   }
@@ -570,12 +578,14 @@ test("server-stream native failure after an item is unchanged and skips trailers
   const graph = createGraph({
     contract: defineContract({ namespace: "grpc-late-native-failure", operations: { stream } }),
   });
-  const iterator = stream.open(input, {
-    abortSignal: parent.signal,
-    graph: graph.id,
-    key: storeKey("late:late-failure"),
-    reportGap: () => undefined,
-  })[Symbol.asyncIterator]();
+  const iterator = stream
+    .open(input, {
+      abortSignal: parent.signal,
+      graph: graph.id,
+      key: storeKey("late:late-failure"),
+      reportGap: () => undefined,
+    })
+    [Symbol.asyncIterator]();
 
   try {
     await expect(iterator.next()).resolves.toStrictEqual({ done: false, value: item });
@@ -659,7 +669,8 @@ test("stream iterators skip pre-pull work and cancel pending opens on return, pa
 
     await starts[0]!.promise;
 
-    if (returnIterator.return === undefined) throw new Error("stream iterator does not expose return");
+    if (returnIterator.return === undefined)
+      throw new Error("stream iterator does not expose return");
 
     const returning = returnIterator.return();
     pendingCalls.push(returning);
@@ -674,9 +685,9 @@ test("stream iterators skip pre-pull work and cancel pending opens on return, pa
 
     expect(trailerCalls).toBe(0);
 
-    const parentIterator = stream.open(input, { ...options, abortSignal: externalParent.signal })[
-      Symbol.asyncIterator
-    ]();
+    const parentIterator = stream
+      .open(input, { ...options, abortSignal: externalParent.signal })
+      [Symbol.asyncIterator]();
     const parentWait = parentIterator.next();
     pendingCalls.push(parentWait);
 
@@ -706,7 +717,8 @@ test("stream iterators skip pre-pull work and cancel pending opens on return, pa
 
     const thrownReason = new Error("consumer threw into stream");
 
-    if (thrownIterator.throw === undefined) throw new Error("stream iterator does not expose throw");
+    if (thrownIterator.throw === undefined)
+      throw new Error("stream iterator does not expose throw");
 
     const throwing = thrownIterator.throw(thrownReason);
     pendingCalls.push(throwing);
@@ -775,7 +787,11 @@ test("stream setup failures preserve reasons and abort unfinished native calls",
       if (input.value === "resolver-failure") throw resolverFailure;
 
       if (input.value === "header-failure") {
-        return { onHeader: () => { throw headerFailure; } };
+        return {
+          onHeader: () => {
+            throw headerFailure;
+          },
+        };
       }
 
       return undefined;
@@ -785,12 +801,14 @@ test("stream setup failures preserve reasons and abort unfinished native calls",
     contract: defineContract({ namespace: "grpc-stream-setup-failures", operations: { stream } }),
   });
   const open = (value: string, parent: AbortController): AsyncIterator<unknown, void, unknown> => {
-    const iterator = stream.open(create(ServiceAll.method.serverStream.input, { value }), {
-      abortSignal: parent.signal,
-      graph: graph.id,
-      key: storeKey(`setup:${value}`),
-      reportGap: () => undefined,
-    })[Symbol.asyncIterator]();
+    const iterator = stream
+      .open(create(ServiceAll.method.serverStream.input, { value }), {
+        abortSignal: parent.signal,
+        graph: graph.id,
+        key: storeKey(`setup:${value}`),
+        reportGap: () => undefined,
+      })
+      [Symbol.asyncIterator]();
 
     iterators.push(iterator);
 
@@ -942,15 +960,14 @@ test("consumer cancellation interrupts a server stream waiting for its next nati
 
     parents[mode] = parent;
 
-    const iterator = stream.open(
-      create(ServiceAll.method.serverStream.input, { value: mode }),
-      {
+    const iterator = stream
+      .open(create(ServiceAll.method.serverStream.input, { value: mode }), {
         abortSignal: parent.signal,
         graph: graph.id,
         key: storeKey(`pending-item:${mode}`),
         reportGap: () => undefined,
-      },
-    )[Symbol.asyncIterator]();
+      })
+      [Symbol.asyncIterator]();
 
     iterators.push(iterator);
 
@@ -987,7 +1004,8 @@ test("consumer cancellation interrupts a server stream waiting for its next nati
 
         await expect(pendingItem).rejects.toBe(reason);
       } else if (mode === "return") {
-        if (iterator.return === undefined) throw new Error("stream iterator does not expose return");
+        if (iterator.return === undefined)
+          throw new Error("stream iterator does not expose return");
 
         const closing = iterator.return();
 
@@ -1068,12 +1086,14 @@ test("normal stream exhaustion detaches the completed child from its parent", as
     contract: defineContract({ namespace: "grpc-normal-completion", operations: { stream } }),
   });
   const pendingCalls: Promise<unknown>[] = [];
-  const iterator = stream.open(input, {
-    abortSignal: parent.signal,
-    graph: graph.id,
-    key: storeKey("complete:complete"),
-    reportGap: () => undefined,
-  })[Symbol.asyncIterator]();
+  const iterator = stream
+    .open(input, {
+      abortSignal: parent.signal,
+      graph: graph.id,
+      key: storeKey("complete:complete"),
+      reportGap: () => undefined,
+    })
+    [Symbol.asyncIterator]();
 
   try {
     const firstItem = iterator.next();

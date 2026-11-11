@@ -47,17 +47,12 @@ export function grpcStream<
   });
 }
 
-function createStreamIterator<
-  Input extends DescMessage,
-  Output extends DescMessage,
->(
+function createStreamIterator<Input extends DescMessage, Output extends DescMessage>(
   transport: Transport,
   method: DescMethodServerStreaming<Input, Output>,
   input: MessageInitShape<Input>,
   context: GrpcStreamOpenContext,
-  resolver:
-    | GrpcNativeOptionsResolver<MessageInitShape<Input>, GrpcStreamOpenContext>
-    | undefined,
+  resolver: GrpcNativeOptionsResolver<MessageInitShape<Input>, GrpcStreamOpenContext> | undefined,
 ): AsyncIterableIterator<MessageShape<Output>, void, unknown> {
   const controller = new AbortController();
   const parentSignal = context.abortSignal;

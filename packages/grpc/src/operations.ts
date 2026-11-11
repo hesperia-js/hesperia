@@ -40,8 +40,7 @@ export function grpcQuery<
 
   return createQuery<MessageInitShape<Input>, MessageShape<Output>, Key>({
     ...definition,
-    fetch: (input, context) =>
-      invokeUnary(transport, method, input, context, nativeOptions),
+    fetch: (input, context) => invokeUnary(transport, method, input, context, nativeOptions),
   });
 }
 
@@ -68,8 +67,7 @@ export function grpcMutation<Input extends DescMessage, Output extends DescMessa
 
   return createMutation<MessageInitShape<Input>, MessageShape<Output>>({
     ...definition,
-    run: (input, context) =>
-      invokeUnary(transport, method, input, context, nativeOptions),
+    run: (input, context) => invokeUnary(transport, method, input, context, nativeOptions),
   });
 }
 

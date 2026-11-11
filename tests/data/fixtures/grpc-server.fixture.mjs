@@ -389,7 +389,8 @@ function splitGrpcFrames(bytes) {
     const messageLength = bytes.readUInt32BE(offset + 1);
     const end = offset + 5 + messageLength;
 
-    if (compressionFlag !== 0) throw new Error("compressed gRPC requests are not in this fixture profile");
+    if (compressionFlag !== 0)
+      throw new Error("compressed gRPC requests are not in this fixture profile");
 
     if (end > bytes.length) throw new Error("incomplete gRPC envelope payload");
 
@@ -421,11 +422,7 @@ function encodeVarintField(fieldNumber, value) {
 }
 
 function encodeBytesField(fieldNumber, value) {
-  return Buffer.concat([
-    encodeVarint((fieldNumber << 3) | 2),
-    encodeVarint(value.length),
-    value,
-  ]);
+  return Buffer.concat([encodeVarint((fieldNumber << 3) | 2), encodeVarint(value.length), value]);
 }
 
 function encodeVarint(value) {

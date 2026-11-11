@@ -91,10 +91,7 @@ export type GrpcQueryDescriptor<
   /** Unary Protobuf method used to resolve the query value. */
   readonly method: DescMethodUnary<Input, Output>;
   /** Per-fetch options resolver; called once immediately before each native call. */
-  readonly nativeOptions?: GrpcNativeOptionsResolver<
-    MessageInitShape<Input>,
-    GrpcQueryContext
-  >;
+  readonly nativeOptions?: GrpcNativeOptionsResolver<MessageInitShape<Input>, GrpcQueryContext>;
 };
 
 /**
@@ -107,19 +104,16 @@ export type GrpcQueryDescriptor<
  * @typeParam Input - Protobuf input message descriptor.
  * @typeParam Output - Protobuf output message descriptor.
  */
-export type GrpcMutationDescriptor<
-  Input extends DescMessage,
-  Output extends DescMessage,
-> = Omit<CreateMutationInput<MessageInitShape<Input>, MessageShape<Output>>, "run"> & {
+export type GrpcMutationDescriptor<Input extends DescMessage, Output extends DescMessage> = Omit<
+  CreateMutationInput<MessageInitShape<Input>, MessageShape<Output>>,
+  "run"
+> & {
   /** Connect protocol transport used for this unary call. */
   readonly transport: Transport;
   /** Unary Protobuf method used to perform the mutation. */
   readonly method: DescMethodUnary<Input, Output>;
   /** Per-run options resolver; called once immediately before each native call. */
-  readonly nativeOptions?: GrpcNativeOptionsResolver<
-    MessageInitShape<Input>,
-    GrpcMutationContext
-  >;
+  readonly nativeOptions?: GrpcNativeOptionsResolver<MessageInitShape<Input>, GrpcMutationContext>;
 };
 
 /**

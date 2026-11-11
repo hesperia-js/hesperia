@@ -4,30 +4,12 @@ import { pathToFileURL } from "node:url";
 import { Code, ConnectError } from "@connectrpc/connect";
 import { Http2SessionManager } from "@connectrpc/connect-node";
 import { create, type MessageShape } from "@bufbuild/protobuf";
-import {
-  affects,
-  createGraph,
-  defineContract,
-  storeKey,
-  subscribe,
-  type Readable,
-} from "aeolia";
-import {
-  grpcMutation,
-  grpcQuery,
-  grpcStream,
-} from "@hesperia/grpc";
-import {
-  createGrpcTransport,
-  type GrpcTransportOptions,
-} from "@hesperia/grpc/native";
+import { affects, createGraph, defineContract, storeKey, subscribe, type Readable } from "aeolia";
+import { grpcMutation, grpcQuery, grpcStream } from "@hesperia/grpc";
+import { createGrpcTransport, type GrpcTransportOptions } from "@hesperia/grpc/native";
 import { ServiceAll } from "../../data/fixtures/grpc/service-all_pb.js";
 
-type FixtureEvent =
-  | "deadline-observed"
-  | "unary-held"
-  | "unary-cancelled"
-  | "stream-cancelled";
+type FixtureEvent = "deadline-observed" | "unary-held" | "unary-cancelled" | "stream-cancelled";
 
 type RecordedCall = {
   readonly id: number;
@@ -185,11 +167,7 @@ function hex(frames: readonly string[]): string[] {
   return frames.map((value) => value.replaceAll(/[\s:]/g, "").toLowerCase());
 }
 
-function callFor(
-  calls: readonly RecordedCall[],
-  path: string,
-  requestFrame: string,
-): RecordedCall {
+function callFor(calls: readonly RecordedCall[], path: string, requestFrame: string): RecordedCall {
   const call = calls.find(
     (item) => item.path === path && hex(item.requestFrames).join("") === requestFrame,
   );
@@ -199,11 +177,7 @@ function callFor(
   return call;
 }
 
-function expectConnectError(
-  value: unknown,
-  code: Code,
-  rawMessage?: string,
-): ConnectError {
+function expectConnectError(value: unknown, code: Code, rawMessage?: string): ConnectError {
   assert.ok(value instanceof ConnectError, `Expected ConnectError, received ${String(value)}`);
   assert.equal(value.code, code);
 
@@ -280,8 +254,7 @@ async function main(): Promise<void> {
         streamEvents.set(mode, events);
 
         return {
-          onHeader: (headers) =>
-            events.push(`header:${headers.get("x-fixture-header") ?? ""}`),
+          onHeader: (headers) => events.push(`header:${headers.get("x-fixture-header") ?? ""}`),
           onTrailer: (trailers) => {
             const status = trailers.get("grpc-status") ?? "";
             const fixtureTrailer = trailers.get("x-fixture-trailer") ?? "";
@@ -352,9 +325,7 @@ async function main(): Promise<void> {
     const unaryCalls = fixture.observations.calls.filter((call) => call.path === unaryPath);
     const initialQueryCall = callFor(unaryCalls, unaryPath, frame.q);
     const mutationCall = callFor(unaryCalls, unaryPath, frame.m);
-    const refreshCalls = unaryCalls.filter(
-      (call) => hex(call.requestFrames).join("") === frame.q,
-    );
+    const refreshCalls = unaryCalls.filter((call) => hex(call.requestFrames).join("") === frame.q);
 
     assert.equal(refreshCalls.length, 2);
 
@@ -380,9 +351,7 @@ async function main(): Promise<void> {
 
     checks.push("query-mutation-effects");
 
-    const failureStore = graph.api.query(
-      create(ServiceAll.method.unary.input, { value: "F" }),
-    );
+    const failureStore = graph.api.query(create(ServiceAll.method.unary.input, { value: "F" }));
     const failure = await captureFailure(failureStore.ready);
     const connectFailure = expectConnectError(failure, Code.PermissionDenied, "permission denied");
     const details = connectFailure.findDetails(ServiceAll.method.unary.input);
@@ -413,9 +382,7 @@ async function main(): Promise<void> {
 
     checks.push("error-details");
 
-    const deadlineStore = graph.api.query(
-      create(ServiceAll.method.unary.input, { value: "D" }),
-    );
+    const deadlineStore = graph.api.query(create(ServiceAll.method.unary.input, { value: "D" }));
     const deadlineOutcome = captureFailure(deadlineStore.ready);
     pendingCalls.push(deadlineOutcome);
 
@@ -429,10 +396,7 @@ async function main(): Promise<void> {
       deadlineOutcome,
       deadlineEventOutcome,
     ]);
-    const deadlineError = expectConnectError(
-      deadlineFailure,
-      Code.DeadlineExceeded,
-    );
+    const deadlineError = expectConnectError(deadlineFailure, Code.DeadlineExceeded);
 
     assert.ok(deadlineError instanceof ConnectError);
 
@@ -509,15 +473,14 @@ async function main(): Promise<void> {
     parents.push(streamParent);
 
     const open = (value: string): StreamIterator => {
-      const iterator = stream.open(
-        create(ServiceAll.method.serverStream.input, { value }),
-        {
+      const iterator = stream
+        .open(create(ServiceAll.method.serverStream.input, { value }), {
           abortSignal: streamParent.signal,
           graph: graph.id,
           key: storeKey(`native-stream:${value}`),
           reportGap: () => undefined,
-        },
-      )[Symbol.asyncIterator]();
+        })
+        [Symbol.asyncIterator]();
 
       iterators.push(iterator);
 

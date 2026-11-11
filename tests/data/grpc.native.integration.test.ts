@@ -428,7 +428,16 @@ async function runBoundedProcess(
     cleanupError = [cleanupError, errorText(error)].filter(Boolean).join("; ");
   }
 
-  return { command, pid: child.pid, exitCode, timedOut, timeoutError, cleanupError, stdout, stderr };
+  return {
+    command,
+    pid: child.pid,
+    exitCode,
+    timedOut,
+    timeoutError,
+    cleanupError,
+    stdout,
+    stderr,
+  };
 }
 
 function remainingBudget(deadline: number, label: string): number {
@@ -443,10 +452,13 @@ function requireProcessSuccess(run: ProcessRun, label: string): void {
   if (run.timedOut) throw new Error(`${label} timed out: ${run.timeoutError}`);
 
   if (run.exitCode !== 0) {
-    throw new Error(`${label} exited with ${String(run.exitCode)}\n${run.stdout.text()}\n${run.stderr.text()}`);
+    throw new Error(
+      `${label} exited with ${String(run.exitCode)}\n${run.stdout.text()}\n${run.stderr.text()}`,
+    );
   }
 
-  if (run.cleanupError !== undefined) throw new Error(`${label} cleanup failed: ${run.cleanupError}`);
+  if (run.cleanupError !== undefined)
+    throw new Error(`${label} cleanup failed: ${run.cleanupError}`);
 
   for (const [channel, capture] of [
     ["stdout", run.stdout],
@@ -585,7 +597,9 @@ test("native gRPC works through the emitted package on Node 22.23.2", async () =
   let exitCode: number | null = null;
   let nativeTimedOut = false;
   let moduleResolutions: ModuleResolutionRecord | undefined;
-  let nodeProbeRecord: { readonly nodeExecutable: string; readonly nodeVersion: string } | undefined;
+  let nodeProbeRecord:
+    | { readonly nodeExecutable: string; readonly nodeVersion: string }
+    | undefined;
   let expectedPackageDistPaths: { readonly root: string; readonly native: string } | undefined;
   let validatedPackageModulePaths: { readonly root: string; readonly native: string } | undefined;
 
@@ -630,9 +644,16 @@ test("native gRPC works through the emitted package on Node 22.23.2", async () =
     await writeFile(configPath, `${JSON.stringify(nodeNextConfig, null, 2)}\n`, "utf8");
 
     const compilerCommand = [process.execPath, compilerPath, "--project", configPath];
-    const compilerBudget = Math.min(compilerTimeoutMs, remainingBudget(workDeadline, "TypeScript emission"));
+    const compilerBudget = Math.min(
+      compilerTimeoutMs,
+      remainingBudget(workDeadline, "TypeScript emission"),
+    );
 
-    compilerRun = await runBoundedProcess(compilerCommand, compilerBudget, "NodeNext consumer compiler");
+    compilerRun = await runBoundedProcess(
+      compilerCommand,
+      compilerBudget,
+      "NodeNext consumer compiler",
+    );
 
     requireProcessSuccess(compilerRun, "NodeNext consumer compiler");
 
@@ -660,18 +681,24 @@ test("native gRPC works through the emitted package on Node 22.23.2", async () =
       }
 
       if (!freshDescriptor.equals(diagnosticDescriptor)) {
-        throw new Error("HESPERIA_GRPC_CONSUMER companion descriptor differs from this run's emission");
+        throw new Error(
+          "HESPERIA_GRPC_CONSUMER companion descriptor differs from this run's emission",
+        );
       }
 
       selectedConsumerPath = diagnosticConsumerPath;
-      consumerMode = comparablePath(diagnosticConsumerPath) === comparablePath(freshConsumerPath)
-        ? "fresh-emit"
-        : "verified-diagnostic-copy";
+      consumerMode =
+        comparablePath(diagnosticConsumerPath) === comparablePath(freshConsumerPath)
+          ? "fresh-emit"
+          : "verified-diagnostic-copy";
     }
 
     const probeSource =
       'process.stdout.write(JSON.stringify({ nodeExecutable: process.execPath, nodeVersion: process.versions.node }) + "\\n");';
-    const probeBudget = Math.min(nodeProbeTimeoutMs, remainingBudget(workDeadline, "Node version probe"));
+    const probeBudget = Math.min(
+      nodeProbeTimeoutMs,
+      remainingBudget(workDeadline, "Node version probe"),
+    );
 
     nodeProbeRun = await runBoundedProcess(
       [selectedNodeCommand, "-e", probeSource],
@@ -683,15 +710,12 @@ test("native gRPC works through the emitted package on Node 22.23.2", async () =
 
     const probeLines = nodeProbeRun.stdout.text().trim().split(/\r?\n/u);
 
-    if (probeLines.length !== 1) throw new Error("Node version probe did not emit exactly one JSON record");
+    if (probeLines.length !== 1)
+      throw new Error("Node version probe did not emit exactly one JSON record");
 
     const probeValue = JSON.parse(probeLines[0]!) as unknown;
 
-    if (
-      typeof probeValue !== "object" ||
-      probeValue === null ||
-      Array.isArray(probeValue)
-    ) {
+    if (typeof probeValue !== "object" || probeValue === null || Array.isArray(probeValue)) {
       throw new Error("Node version probe returned a malformed identity record");
     }
 
@@ -713,7 +737,9 @@ test("native gRPC works through the emitted package on Node 22.23.2", async () =
     }
 
     if (!isAbsolute(nodeProbeRecord.nodeExecutable)) {
-      throw new Error(`Node probe returned a non-absolute executable path: ${nodeProbeRecord.nodeExecutable}`);
+      throw new Error(
+        `Node probe returned a non-absolute executable path: ${nodeProbeRecord.nodeExecutable}`,
+      );
     }
 
     const selectedNodeExecutable = await realpath(nodeProbeRecord.nodeExecutable);
@@ -724,12 +750,17 @@ test("native gRPC works through the emitted package on Node 22.23.2", async () =
       nodeOverride !== undefined &&
       comparablePath(selectedNodeExecutable) !== comparablePath(await realpath(nodeOverride))
     ) {
-      throw new Error("The Node version probe did not use the configured HESPERIA_GRPC_NODE executable");
+      throw new Error(
+        "The Node version probe did not use the configured HESPERIA_GRPC_NODE executable",
+      );
     }
 
     command = [selectedNodeExecutable, selectedConsumerPath, serverFixture];
 
-    const nativeBudget = Math.min(nativeTimeoutMs, remainingBudget(workDeadline, "native gRPC consumer"));
+    const nativeBudget = Math.min(
+      nativeTimeoutMs,
+      remainingBudget(workDeadline, "native gRPC consumer"),
+    );
     const nativeDeadline = Date.now() + nativeBudget;
 
     child = Bun.spawn(command, {
@@ -777,7 +808,11 @@ test("native gRPC works through the emitted package on Node 22.23.2", async () =
     moduleResolutions = requireResolutionRecord(completed.moduleResolutions);
 
     validatedPackageModulePaths = {
-      root: await requireCanonicalFileUrl(moduleResolutions.hesperiaGrpc, publicIndexPath, "@hesperia/grpc"),
+      root: await requireCanonicalFileUrl(
+        moduleResolutions.hesperiaGrpc,
+        publicIndexPath,
+        "@hesperia/grpc",
+      ),
       native: await requireCanonicalFileUrl(
         moduleResolutions.hesperiaGrpcNative,
         publicNativePath,
