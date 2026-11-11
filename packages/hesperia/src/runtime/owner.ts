@@ -1,5 +1,6 @@
 import { Signal, withoutWrites } from "aeolia";
 import type { Graph, QueryStore } from "aeolia";
+import { retireDataBindingRoot } from "../data/environment.ts";
 import type { Scheduler } from "./scheduler.ts";
 
 /** Lifecycle phases distinguish cleanup access from final destruction. */
@@ -7,6 +8,10 @@ export type OwnerState = "building" | "mounted" | "suspended" | "cleaning" | "de
 
 let bodyDepth = 0;
 let cleanupDepth = 0;
+
+const nativePromiseConstructor = Promise;
+const nativePromiseThen = Promise.prototype.then;
+const nativeReflectApply = Reflect.apply;
 
 interface RenderExecution {
   readonly owner: Owner;
@@ -112,6 +117,421 @@ export interface RuntimeContext {
   readonly container: Element | Document;
 }
 
+type CleanupSlotState = "pending" | "fulfilled" | "rejected";
+
+interface CleanupFailureSlot {
+  asynchronous: boolean;
+  incomplete: boolean;
+  state: CleanupSlotState;
+  reason?: unknown;
+  causes?: readonly unknown[];
+  reportable?: boolean;
+}
+
+type OwnerRetirementMode = "sync" | "join";
+
+interface OwnerRetirementOperation {
+  readonly initiator: Owner;
+  readonly mode: OwnerRetirementMode;
+  readonly reportSynchronous: boolean;
+  readonly failures: CleanupFailureSlot[];
+  readonly synchronousFailures: unknown[];
+  readonly promise: Promise<void>;
+  readonly dependencies: Set<OwnerRetirementOperation>;
+  readonly dependencySlots: Map<OwnerRetirementOperation, CleanupFailureSlot>;
+  readonly resolve: () => void;
+  readonly reject: (reason: unknown) => void;
+  pending: number;
+  teardownFinished: boolean;
+  incomplete: boolean;
+  settled: boolean;
+  synchronousReported: boolean;
+  asynchronousReported: boolean;
+  reporterFault?: unknown;
+}
+
+class CleanupObservationFault extends Error {
+  readonly kind = "cleanup-observation";
+  readonly incomplete = true;
+  readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super("Cleanup observation failed; retirement is incomplete");
+
+    this.name = "CleanupObservationFault";
+    this.cause = cause;
+  }
+}
+
+class CleanupRetirementCycleFault extends Error {
+  readonly kind = "cleanup-retirement-cycle";
+  readonly incomplete = true;
+
+  constructor() {
+    super("Cleanup cannot wait for its own retirement operation");
+
+    this.name = "CleanupRetirementCycleFault";
+  }
+}
+
+const ownerRetirementOperations = new WeakMap<RuntimeContext, Set<OwnerRetirementOperation>>();
+const ownerRetirementByPromise = new WeakMap<Promise<void>, OwnerRetirementOperation>();
+const ownerRetirementByOwner = new WeakMap<Owner, OwnerRetirementOperation>();
+const ownerRetirementAliasesByOwner = new WeakMap<Owner, Set<Promise<void>>>();
+const actualOwnerInstances = new WeakSet<Owner>();
+
+function bindOwnerRetirementAliases(owner: Owner, operation: OwnerRetirementOperation): void {
+  ownerRetirementByOwner.set(owner, operation);
+
+  const aliases = ownerRetirementAliasesByOwner.get(owner);
+
+  if (!aliases) return;
+
+  for (const alias of aliases) ownerRetirementByPromise.set(alias, operation);
+
+  ownerRetirementAliasesByOwner.delete(owner);
+}
+
+function observeSyncRetirementPromise(operation: OwnerRetirementOperation): void {
+  nativeReflectApply(nativePromiseThen, operation.promise, [undefined, () => undefined]);
+}
+
+function cleanupFailureAggregate(
+  failures: readonly CleanupFailureSlot[],
+  message: string,
+): AggregateError | undefined {
+  const reasons = failures
+    .filter((failure) => failure.state === "rejected")
+    .flatMap((failure) => failure.causes ?? [failure.reason]);
+
+  return reasons.length ? new AggregateError(reasons, message) : undefined;
+}
+
+function reportRetirementFailures(
+  operation: OwnerRetirementOperation,
+  failures: readonly CleanupFailureSlot[],
+): { readonly threw: boolean; readonly reason?: unknown } {
+  const aggregate = cleanupFailureAggregate(failures, "Component cleanup failed");
+
+  if (!aggregate) return { threw: false };
+
+  try {
+    reportFault(operation.initiator, aggregate);
+
+    return { threw: false };
+  } catch (reason) {
+    if (!Object.hasOwn(operation, "reporterFault")) operation.reporterFault = reason;
+
+    return { threw: true, reason };
+  }
+}
+
+function finishOwnerRetirement(operation: OwnerRetirementOperation): void {
+  if (operation.settled || !operation.teardownFinished || operation.pending !== 0) return;
+
+  operation.settled = true;
+  const aggregate = cleanupFailureAggregate(operation.failures, "Component cleanup failed");
+  const active = ownerRetirementOperations.get(operation.initiator.context);
+
+  active?.delete(operation);
+
+  if (active?.size === 0) ownerRetirementOperations.delete(operation.initiator.context);
+  operation.dependencies.clear();
+  operation.dependencySlots.clear();
+
+  if (aggregate) operation.reject(aggregate);
+  else operation.resolve();
+
+  if (operation.mode !== "sync" || operation.asynchronousReported) return;
+
+  const asynchronousFailures = operation.failures.filter(
+    (failure) => failure.asynchronous && failure.reportable !== false,
+  );
+
+  if (asynchronousFailures.length) {
+    operation.asynchronousReported = true;
+    reportRetirementFailures(operation, asynchronousFailures);
+  }
+}
+
+function retirementDependsOn(
+  operation: OwnerRetirementOperation,
+  target: OwnerRetirementOperation,
+  visited = new Set<OwnerRetirementOperation>(),
+): boolean {
+  if (operation === target) return true;
+  if (visited.has(operation)) return false;
+
+  visited.add(operation);
+
+  for (const dependency of operation.dependencies)
+    if (retirementDependsOn(dependency, target, visited)) return true;
+
+  return false;
+}
+
+function ownerAncestorDistance(ancestor: Owner, descendant: Owner): number | undefined {
+  let distance = 0;
+
+  for (let current: Owner | null = descendant; current; current = current.parent) {
+    if (current === ancestor) return distance;
+
+    distance++;
+  }
+
+  return undefined;
+}
+
+function storeSynchronousIncompleteFailure(
+  operation: OwnerRetirementOperation,
+  slot: CleanupFailureSlot,
+  reason: unknown,
+): void {
+  let synchronousIndex = 0;
+
+  for (const current of operation.failures) {
+    if (current === slot) break;
+    if (!current.asynchronous && current.state === "rejected") synchronousIndex++;
+  }
+
+  slot.asynchronous = false;
+  slot.incomplete = true;
+  slot.state = "rejected";
+  slot.reason = reason;
+  operation.synchronousFailures.splice(synchronousIndex, 0, reason);
+  operation.incomplete = true;
+}
+
+function dependOnOwnerRetirement(
+  operation: OwnerRetirementOperation,
+  dependency: OwnerRetirementOperation,
+  dependencySlot?: CleanupFailureSlot,
+): void {
+  if (operation.settled || operation.dependencies.has(dependency)) return;
+
+  const slot: CleanupFailureSlot = dependencySlot ?? {
+    asynchronous: false,
+    incomplete: false,
+    state: "pending",
+  };
+
+  if (!dependencySlot) operation.failures.push(slot);
+
+  if (operation === dependency || retirementDependsOn(dependency, operation)) {
+    storeSynchronousIncompleteFailure(operation, slot, new CleanupRetirementCycleFault());
+
+    return;
+  }
+
+  slot.asynchronous = true;
+  slot.incomplete = dependency.incomplete;
+  slot.reportable = dependency.mode !== "sync";
+  operation.incomplete ||= dependency.incomplete;
+  operation.dependencies.add(dependency);
+  operation.dependencySlots.set(dependency, slot);
+  operation.pending++;
+
+  try {
+    nativeReflectApply(nativePromiseThen, dependency.promise, [
+      () => {
+        slot.state = "fulfilled";
+        operation.pending--;
+        finishOwnerRetirement(operation);
+      },
+      (reason: unknown) => {
+        slot.state = "rejected";
+        slot.reason = reason;
+        slot.incomplete = dependency.incomplete;
+        slot.causes =
+          reason instanceof AggregateError && reason.message === "Component cleanup failed"
+            ? [...reason.errors]
+            : [reason];
+        operation.incomplete ||= dependency.incomplete;
+        operation.pending--;
+        finishOwnerRetirement(operation);
+      },
+    ]);
+  } catch (reason) {
+    operation.pending--;
+    storeSynchronousIncompleteFailure(operation, slot, new CleanupObservationFault(reason));
+  }
+}
+
+function registerOwnerRetirement(operation: OwnerRetirementOperation): void {
+  const active =
+    ownerRetirementOperations.get(operation.initiator.context) ??
+    new Set<OwnerRetirementOperation>();
+  const pending = [...active].filter((candidate) => !candidate.settled);
+  const ancestors = pending
+    .map((candidate) => ({
+      operation: candidate,
+      distance: ownerAncestorDistance(candidate.initiator, operation.initiator),
+    }))
+    .filter(
+      (candidate): candidate is { operation: OwnerRetirementOperation; distance: number } =>
+        candidate.distance !== undefined,
+    )
+    .sort((left, right) => left.distance - right.distance);
+
+  active.add(operation);
+  ownerRetirementOperations.set(operation.initiator.context, active);
+
+  if (ancestors.length) {
+    dependOnOwnerRetirement(ancestors[0]!.operation, operation);
+
+    return;
+  }
+
+  for (const candidate of pending) {
+    if (ownerAncestorDistance(operation.initiator, candidate.initiator) === undefined) continue;
+
+    const hasIntermediateOperation = pending.some(
+      (intermediate) =>
+        intermediate !== candidate &&
+        ownerAncestorDistance(operation.initiator, intermediate.initiator) !== undefined &&
+        ownerAncestorDistance(intermediate.initiator, candidate.initiator) !== undefined,
+    );
+
+    if (!hasIntermediateOperation) dependOnOwnerRetirement(operation, candidate);
+  }
+}
+
+function makeOwnerRetirementOperation(
+  initiator: Owner,
+  mode: OwnerRetirementMode,
+  reportSynchronous: boolean,
+): OwnerRetirementOperation {
+  let resolve!: () => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new nativePromiseConstructor<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+
+  const operation: OwnerRetirementOperation = {
+    initiator,
+    mode,
+    reportSynchronous,
+    failures: [],
+    synchronousFailures: [],
+    promise,
+    dependencies: new Set(),
+    dependencySlots: new Map(),
+    resolve: resolve!,
+    reject: reject!,
+    pending: 0,
+    teardownFinished: false,
+    incomplete: false,
+    settled: false,
+    synchronousReported: false,
+    asynchronousReported: false,
+  };
+
+  ownerRetirementByPromise.set(promise, operation);
+
+  return operation;
+}
+
+function recordCleanupFailure(operation: OwnerRetirementOperation, reason: unknown): void {
+  const slot: CleanupFailureSlot = {
+    asynchronous: false,
+    incomplete: false,
+    state: "rejected",
+    reason,
+  };
+
+  operation.failures.push(slot);
+  operation.synchronousFailures.push(reason);
+}
+
+function recordCleanupFailureAtSlot(
+  operation: OwnerRetirementOperation,
+  slot: CleanupFailureSlot,
+  reason: unknown,
+): void {
+  let synchronousIndex = 0;
+
+  for (const current of operation.failures) {
+    if (current === slot) break;
+    if (!current.asynchronous && current.state === "rejected") synchronousIndex++;
+  }
+
+  slot.asynchronous = false;
+  slot.state = "rejected";
+  slot.reason = reason;
+  operation.synchronousFailures.splice(synchronousIndex, 0, reason);
+}
+
+function storeCleanupObservationFault(
+  operation: OwnerRetirementOperation,
+  slot: CleanupFailureSlot,
+  reason: unknown,
+): void {
+  storeSynchronousIncompleteFailure(operation, slot, new CleanupObservationFault(reason));
+}
+
+function observeCleanupReturn(
+  operation: OwnerRetirementOperation,
+  slot: CleanupFailureSlot,
+  value: unknown,
+): void {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
+    slot.state = "fulfilled";
+
+    return;
+  }
+
+  const dependency = ownerRetirementByPromise.get(value as Promise<void>);
+
+  if (dependency) {
+    const dependencySlot = operation.dependencySlots.get(dependency);
+
+    if (dependencySlot) {
+      dependencySlot.asynchronous = true;
+      dependencySlot.incomplete = dependency.incomplete;
+      dependencySlot.reportable = dependency.mode !== "sync";
+      operation.incomplete ||= dependency.incomplete;
+      const callbackIndex = operation.failures.indexOf(slot);
+      const dependencyIndex = operation.failures.indexOf(dependencySlot);
+
+      if (callbackIndex >= 0 && dependencyIndex >= 0 && callbackIndex < dependencyIndex) {
+        operation.failures.splice(dependencyIndex, 1);
+        operation.failures.splice(callbackIndex, 1, dependencySlot);
+      } else if (callbackIndex >= 0) {
+        operation.failures.splice(callbackIndex, 1);
+      }
+
+      return;
+    }
+
+    dependOnOwnerRetirement(operation, dependency, slot);
+
+    return;
+  }
+
+  slot.asynchronous = true;
+  operation.pending++;
+
+  try {
+    nativeReflectApply(nativePromiseThen, value, [
+      () => {
+        slot.state = "fulfilled";
+        operation.pending--;
+        finishOwnerRetirement(operation);
+      },
+      (reason: unknown) => {
+        slot.state = "rejected";
+        slot.reason = reason;
+        operation.pending--;
+        finishOwnerRetirement(operation);
+      },
+    ]);
+  } catch (reason) {
+    operation.pending--;
+    storeCleanupObservationFault(operation, slot, reason);
+  }
+}
+
 export type QueryReadKind = "metadata" | "value";
 
 /** Waiting-state capability inherited by descendants of an explicit async boundary. */
@@ -123,10 +543,15 @@ export interface AsyncBoundaryHost {
   capture(owner: Owner, promise: Promise<void>): void;
 
   /** Retain a source and observe value only when the owner consumes its value or awaits it. */
-  consumeQuery<T>(owner: Owner, graph: Graph, store: QueryStore<T>, kind: QueryReadKind): void;
+  consumeQuery<T>(
+    owner: Owner,
+    graph: Graph,
+    store: QueryStore<T, unknown>,
+    kind: QueryReadKind,
+  ): void;
 
   /** Route reset-unavailable scheduled reads to loading; reject callback reads clearly. */
-  assertQueryReadable<T>(owner: Owner, graph: Graph, store: QueryStore<T>): void;
+  assertQueryReadable<T>(owner: Owner, graph: Graph, store: QueryStore<T, unknown>): void;
 }
 
 /** Internal style activation follows the same Owner transitions as effects. */
@@ -187,8 +612,8 @@ export class Owner {
   /** Internal route-host preparation flag; authored trees retain eager structural setup. */
   deferStructural = false;
   private readonly controller = new AbortController();
-  private readonly cleanups: (() => void)[] = [];
-  private readonly releases: (() => void)[] = [];
+  private readonly cleanups: (() => unknown)[] = [];
+  private readonly releases: (() => unknown)[] = [];
   private readonly commits: (() => void)[] = [];
   private styleLifecycle:
     | { readonly lifecycle: OwnerStyleLifecycle; readonly ownerId: string }
@@ -205,6 +630,7 @@ export class Owner {
     parent?.assertActive();
 
     parent?.children.push(this);
+    actualOwnerInstances.add(this);
   }
 
   /** Parent lifetime; route hosts may reparent only a suspended retained subtree. */
@@ -294,15 +720,15 @@ export class Owner {
     this.context.scheduler.resume(this);
   }
 
-  /** Register author cleanup, executed before descendants and in reverse order. */
-  onCleanup(cleanup: () => void): void {
+  /** Register cleanup before descendants in reverse order; returned Promises join disposal. */
+  onCleanup(cleanup: () => unknown): void {
     this.assertActive();
 
     this.cleanups.push(cleanup);
   }
 
-  /** Register a resource release after descendant destruction. */
-  onRelease(release: () => void): void {
+  /** Register release after descendants; returned Promises join disposal. */
+  onRelease(release: () => unknown): void {
     this.assertActive();
 
     this.releases.push(release);
@@ -385,43 +811,111 @@ export class Owner {
   }
 
   /**
-   * Revoke publication, run parent cleanup, destroy descendants, release native
-   * nodes, and finally destroy this owner. Teardown continues after failures.
+   * Revoke synchronously, then join every cleanup Promise and descendant retirement.
+   * @returns A Promise that rejects with ordered cleanup failures after retirement completes.
    */
-  dispose(reason: unknown = new RenderFault("cancelled", "Component removed")): void {
-    if (this.state === "cleaning" || this.state === "destroyed") return;
-
-    const errors: unknown[] = [];
-
-    this.destroy(reason, errors);
-
-    if (errors.length) reportFault(this, new AggregateError(errors, "Component cleanup failed"));
+  dispose(reason: unknown = new RenderFault("cancelled", "Component removed")): Promise<void> {
+    return this.startRetirement("join", reason, false).promise;
   }
 
-  private destroy(reason: unknown, errors: unknown[]): void {
-    if (this.state === "cleaning" || this.state === "destroyed") return;
+  /**
+   * Revoke synchronously and report synchronous failures through the Owner route.
+   * Async cleanup failures use the same route when they settle; call `dispose` to join them.
+   */
+  disposeSync(reason: unknown = new RenderFault("cancelled", "Component removed")): void {
+    this.startRetirement("sync", reason, true);
+  }
 
-    this.state = "cleaning";
+  /** @internal Dispose synchronously while a host retains immediate failures. */
+  disposeWithErrors(reason: unknown): readonly unknown[] {
+    return this.startRetirement("sync", reason, false).synchronousFailures.slice();
+  }
 
-    this.controller.abort(reason);
+  private startRetirement(
+    mode: OwnerRetirementMode,
+    reason: unknown,
+    reportSynchronous: boolean,
+  ): OwnerRetirementOperation {
+    const existing = ownerRetirementByOwner.get(this);
 
-    for (const cleanup of this.cleanups.splice(0).reverse()) {
+    if (existing) {
+      if (this.parentOwner === null) this.retireDataBinding(existing, reason);
+
+      return existing;
+    }
+
+    const operation = makeOwnerRetirementOperation(this, mode, reportSynchronous);
+    bindOwnerRetirementAliases(this, operation);
+
+    if (mode === "sync") observeSyncRetirementPromise(operation);
+
+    registerOwnerRetirement(operation);
+
+    this.destroy(reason, operation);
+    operation.teardownFinished = true;
+
+    if (
+      operation.mode === "sync" &&
+      operation.reportSynchronous &&
+      !operation.synchronousReported &&
+      operation.synchronousFailures.length
+    ) {
+      operation.synchronousReported = true;
+      const report = reportRetirementFailures(
+        operation,
+        operation.failures.filter((failure) => !failure.asynchronous),
+      );
+
+      finishOwnerRetirement(operation);
+
+      if (report.threw) throw report.reason;
+    }
+
+    finishOwnerRetirement(operation);
+
+    return operation;
+  }
+
+  private destroy(reason: unknown, operation: OwnerRetirementOperation): void {
+    const existing = ownerRetirementByOwner.get(this);
+    const ownerOperation = existing ?? operation;
+    const wasRetiring = this.state === "cleaning" || this.state === "destroyed";
+
+    if (existing && existing !== operation) {
+      if (this.parentOwner === null) this.retireDataBinding(ownerOperation, reason);
+
+      bindOwnerRetirementAliases(this, existing);
+      dependOnOwnerRetirement(operation, existing);
+
+      return;
+    }
+
+    if (!wasRetiring) {
+      bindOwnerRetirementAliases(this, operation);
+      this.state = "cleaning";
+    }
+
+    if (this.parentOwner === null) this.retireDataBinding(ownerOperation, reason);
+
+    if (wasRetiring) return;
+
+    try {
+      this.controller.abort(reason);
+    } catch (error) {
+      recordCleanupFailure(operation, error);
+    }
+
+    for (const cleanup of this.cleanups.splice(0).reverse()) this.invokeCleanup(cleanup, operation);
+
+    for (const child of this.children.slice()) {
       try {
-        runCleanup(cleanup);
+        child.destroy(reason, operation);
       } catch (error) {
-        errors.push(error);
+        recordCleanupFailure(operation, error);
       }
     }
 
-    for (const child of this.children.slice()) child.destroy(reason, errors);
-
-    for (const release of this.releases.splice(0).reverse()) {
-      try {
-        release();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
+    for (const release of this.releases.splice(0).reverse()) this.invokeRelease(release, operation);
 
     if (this.styleLifecycle) {
       const binding = this.styleLifecycle;
@@ -430,20 +924,22 @@ export class Owner {
       try {
         binding.lifecycle.released(this, binding.ownerId);
       } catch (error) {
-        errors.push(error);
+        recordCleanupFailure(operation, error);
       }
     }
 
-    for (const node of this.nodes) node.parentNode?.removeChild(node);
+    for (const node of this.nodes) {
+      try {
+        node.parentNode?.removeChild(node);
+      } catch (error) {
+        recordCleanupFailure(operation, error);
+      }
+    }
 
     this.nodes.clear();
-
     this.publicationChecks.clear();
-
     this.commits.length = 0;
-
     resourceLifecycles.delete(this);
-
     this.state = "destroyed";
 
     if (this.parentOwner) {
@@ -451,6 +947,80 @@ export class Owner {
 
       if (index >= 0) this.parentOwner.children.splice(index, 1);
     }
+  }
+
+  private invokeCleanup(cleanup: () => unknown, operation: OwnerRetirementOperation): void {
+    const slot: CleanupFailureSlot = {
+      asynchronous: false,
+      incomplete: false,
+      state: "pending",
+    };
+
+    operation.failures.push(slot);
+
+    try {
+      observeCleanupReturn(operation, slot, runCleanup(cleanup));
+    } catch (reason) {
+      recordCleanupFailureAtSlot(operation, slot, reason);
+    }
+  }
+
+  private invokeRelease(release: () => unknown, operation: OwnerRetirementOperation): void {
+    const slot: CleanupFailureSlot = {
+      asynchronous: false,
+      incomplete: false,
+      state: "pending",
+    };
+
+    operation.failures.push(slot);
+
+    try {
+      observeCleanupReturn(operation, slot, release());
+    } catch (reason) {
+      recordCleanupFailureAtSlot(operation, slot, reason);
+    }
+  }
+
+  private retireDataBinding(operation: OwnerRetirementOperation, reason: unknown): void {
+    try {
+      for (const error of retireDataBindingRoot(this, reason))
+        recordCleanupFailure(operation, error);
+    } catch (error) {
+      recordCleanupFailure(operation, error);
+    }
+  }
+}
+
+/** @internal Associate a wrapper Promise with the Owner retirement it returns. */
+export function registerOwnerDisposalPromiseAlias(owner: Owner, alias: Promise<void>): void {
+  if (!actualOwnerInstances.has(owner))
+    throw new TypeError("Owner disposal aliases require an actual Runtime Owner");
+
+  if ((typeof alias !== "object" || alias === null) && typeof alias !== "function")
+    throw new TypeError("Owner disposal aliases require a Promise object");
+
+  const operation = ownerRetirementByOwner.get(owner);
+
+  if (operation) {
+    ownerRetirementByPromise.set(alias, operation);
+
+    return;
+  }
+
+  const aliases = ownerRetirementAliasesByOwner.get(owner) ?? new Set<Promise<void>>();
+  aliases.add(alias);
+  ownerRetirementAliasesByOwner.set(owner, aliases);
+}
+
+/** @internal Retain an original failure when synchronous cleanup reporting also throws. */
+export function disposeOwnerSyncPreservingFailure(owner: Owner, originalFailure: unknown): void {
+  try {
+    owner.disposeSync(originalFailure);
+  } catch (cleanupFailure) {
+    throw new AggregateError(
+      [originalFailure, cleanupFailure],
+      "Operation and synchronous cleanup reporting both failed",
+    );
   }
 }
 
@@ -534,12 +1104,12 @@ export function resumeOwnerResources(owner: Owner): void {
 }
 
 /** Run cleanup without adding dependencies to a surrounding render or effect. */
-export function runCleanup(cleanup: () => void): void {
+export function runCleanup<T>(cleanup: () => T): T {
   const priorRenderOwners = renderOwners.splice(0);
   cleanupDepth++;
 
   try {
-    Signal.subtle.untrack(() => withoutWrites(cleanup));
+    return Signal.subtle.untrack(() => withoutWrites(cleanup));
   } finally {
     cleanupDepth--;
 

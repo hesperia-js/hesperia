@@ -11,6 +11,14 @@ export type {
   Rendered,
 } from "./runtime/dom.ts";
 export type { AppConfiguration } from "./application.ts";
+export { createDataApplication, createDataSecurityPartition } from "./data/environment.ts";
+export type {
+  DataApplication,
+  DataBindingBootstrap,
+  DataBindingRootControl,
+  DataSecurity,
+  DataSecurityPartition,
+} from "./data/environment.ts";
 export type { Page } from "./runtime/page.ts";
 export { RenderFault } from "./runtime/owner.ts";
 export { AsyncBoundary } from "./runtime/async.ts";

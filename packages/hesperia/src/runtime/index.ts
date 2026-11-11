@@ -29,6 +29,26 @@ export type { ComponentItem, RegionValue, NativeFactory, NativeScope } from "./s
 export { createClient } from "../client.ts";
 export { bindImported, markImportedApi } from "../data/api.ts";
 export { registerModuleImport } from "../data/protocol.ts";
+export {
+  nativeQueryRegistration,
+  registerNativeQueryObservation,
+  registerNativeQueryProfile,
+} from "../data/native-observation.ts";
+export type {
+  MappedObservation,
+  NativeObservationReceiver,
+  NativeQueryDefinition,
+  NativeQueryObservation,
+  NativeQueryProfile,
+  NativeQuerySchemas,
+} from "../data/native-observation.ts";
+export { createNativeOperationPolicy } from "../validation/native-operation.ts";
+export type {
+  NativeCallSelection,
+  NativeOperationCompletion,
+  NativeOperationPolicy,
+  OperationSchemaSelection,
+} from "../validation/native-operation.ts";
 export { bootstrapApplication } from "./application.ts";
 export { registerProjectPolicy } from "./project-policy.ts";
 export type { CompiledProjectPolicy } from "./project-policy.ts";

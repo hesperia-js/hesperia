@@ -1,7 +1,12 @@
 import { signal, type WritableSignal } from "aeolia";
 import { attachNativeEventListener, attribute } from "./runtime/dom.ts";
 import { defineComponent, type Component } from "./runtime/components.ts";
-import { Owner, RenderFault, registerOwnerResourceLifecycle } from "./runtime/owner.ts";
+import {
+  disposeOwnerSyncPreservingFailure,
+  Owner,
+  RenderFault,
+  registerOwnerResourceLifecycle,
+} from "./runtime/owner.ts";
 import { allowUnsafeEmbedFor } from "./runtime/project-policy.ts";
 
 type EmbedEventHandler = { handle(this: HTMLIFrameElement, event: Event): unknown }["handle"];
@@ -303,7 +308,7 @@ export const Embed: Component<EmbedProps> = defineComponent<EmbedProps>(
           assignedSrcdoc: inputs.srcdoc,
         };
       } catch (error) {
-        frameOwner.dispose(error);
+        disposeOwnerSyncPreservingFailure(frameOwner, error);
 
         throw error;
       }
@@ -336,7 +341,7 @@ export const Embed: Component<EmbedProps> = defineComponent<EmbedProps>(
         const previous = resource;
 
         try {
-          previous?.owner.dispose();
+          previous?.owner.disposeSync();
 
           wrapper.appendChild(next.element);
 
@@ -344,7 +349,7 @@ export const Embed: Component<EmbedProps> = defineComponent<EmbedProps>(
 
           if (owner.state === "mounted") next.owner.commit();
         } catch (error) {
-          next.owner.dispose(error);
+          next.owner.disposeSync(error);
 
           resource = undefined;
 
@@ -381,7 +386,7 @@ export const Embed: Component<EmbedProps> = defineComponent<EmbedProps>(
 
         resource = undefined;
 
-        current?.owner.dispose();
+        current?.owner.disposeSync();
       },
 
       resumed() {
