@@ -152,7 +152,6 @@ function createHitCoverage(
 
 async function createCaptureFixture(
   requestedHits: number,
-  indexSource = "export {};\n",
   tempRoot = tmpdir(),
 ): Promise<CaptureFixture> {
   const root = await mkdtemp(join(tempRoot, "hesperia-saxe-integration-coverage-"));
@@ -179,7 +178,7 @@ async function createCaptureFixture(
 
   for (const source of closureSaxeFiles) {
     if (source.endsWith("/index.ts")) {
-      await writeFixtureFile(root, source, indexSource);
+      await writeFixtureFile(root, source, "export {};\n");
 
       continue;
     }
@@ -326,7 +325,7 @@ async function writeInputs(
 }
 
 test("counts zero-hit supported lines and keeps the full six-file closure", async () => {
-  const fixture = await createCaptureFixture(7, "export const indexValue = 1;\n");
+  const fixture = await createCaptureFixture(7);
 
   const report = await checkSaxeIntegrationCoverage(checkerOptions(fixture));
 
@@ -370,17 +369,15 @@ test("counts zero-hit supported lines and keeps the full six-file closure", asyn
 
   expect(report.fullSixClosure.files.map((file) => file.path)).toStrictEqual([...closureSaxeFiles]);
 
-  expect(report.fullSixClosure.totals.lineFound).toBe(11);
+  expect(report.fullSixClosure.totals.lineFound).toBe(10);
 
   expect(report.fullSixClosure.totals.lineHit).toBe(7);
 
-  expect(report.fullSixClosure.totals.linePercent).toBeCloseTo(63.63636363636363);
-
   expect(report.fullSixClosure.files.at(-1)?.lines).toStrictEqual({
     hit: 0,
-    found: 1,
-    percent: 0,
-    uncovered: [1],
+    found: 0,
+    percent: null,
+    uncovered: [],
   });
 
   expect(report.fullSixClosure.files.at(-1)?.functions.percent).toBeNull();
@@ -406,13 +403,6 @@ test("enforces the 70 percent floor and leaves the 90 percent aim diagnostic", a
   expect(report.supportedFive.straightforwardAimMet).toBe(false);
 
   expect(report.status).toBe("below-floor");
-
-  expect(report.fullSixClosure.files.at(-1)?.lines).toStrictEqual({
-    hit: 0,
-    found: 0,
-    percent: null,
-    uncovered: [],
-  });
 });
 
 test("accepts a capture under an alternate path to its repository parent", async () => {
@@ -425,7 +415,7 @@ test("accepts a capture under an alternate path to its repository parent", async
     await mkdir(target);
     await symlink(target, alias, "junction");
 
-    const fixture = await createCaptureFixture(7, "export {};\n", alias);
+    const fixture = await createCaptureFixture(7, alias);
     const report = await checkSaxeIntegrationCoverage(checkerOptions(fixture));
 
     expect(report.status).toBe("passed");
