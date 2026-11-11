@@ -164,6 +164,7 @@ jobs:
         run: "bun run build"
       - name: "Install browser engines and system dependencies"
         if: "runner.os == 'Linux'"
+        timeout-minutes: 15
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install browser engines"
         if: "runner.os == 'Windows'"
@@ -228,16 +229,20 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
+        with:
+          prefer-ubuntu-archive: ${{ runner.os == 'Linux' }}
       - name: "Build workspace packages"
         run: "bun run build"
       - name: "Install ordinary test browser engines and system dependencies"
         if: "matrix.group == 'bun-tests-ordinary' && runner.os == 'Linux'"
+        timeout-minutes: 15
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install ordinary test browser engines"
         if: "matrix.group == 'bun-tests-ordinary' && runner.os == 'Windows'"
         run: "node node_modules/playwright/cli.js install chromium firefox webkit"
       - name: "Install CSS capture Chromium and system dependencies"
         if: "matrix.group == 'browser-css' && runner.os == 'Linux'"
+        timeout-minutes: 15
         run: "node node_modules/playwright/cli.js install --with-deps chromium"
       - name: "Install CSS capture Chromium"
         if: "matrix.group == 'browser-css' && runner.os == 'Windows'"
@@ -395,6 +400,7 @@ jobs:
         run: "bun run build"
       - name: "Install all browser engines"
         if: "runner.os == 'Linux'"
+        timeout-minutes: 15
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install all browser engines"
         if: "runner.os == 'Windows'"
@@ -461,6 +467,7 @@ jobs:
         run: "bun run build"
       - name: "Install browser engines and system dependencies"
         if: "runner.os == 'Linux'"
+        timeout-minutes: 15
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install browser engines"
         if: "runner.os == 'Windows'"
@@ -539,6 +546,7 @@ jobs:
         run: "bun run build"
       - name: "Install all browser engines"
         if: "runner.os == 'Linux'"
+        timeout-minutes: 15
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install all browser engines"
         if: "runner.os == 'Windows'"
