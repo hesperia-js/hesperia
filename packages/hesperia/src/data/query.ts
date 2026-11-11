@@ -173,8 +173,10 @@ export function createQueryView<T, P = never>(
     },
   } as QueryView<T, P>;
 
+  Object.freeze(view);
+
   return registerFrameworkAwaitable(
-    Object.freeze(view),
+    view,
     owner,
     "query",
     (awaitingOwner) => {
@@ -550,10 +552,10 @@ export function createPreparedQueryView<Input, T, P = never>(
       return wait(owner, false).then(onfulfilled, onrejected);
     },
   } as ValidationQueryView<T, P>;
-  const frozenView = Object.freeze(view);
+  Object.freeze(view);
 
   registerFrameworkAwaitable(
-    frozenView,
+    view,
     owner,
     "query",
     (awaitingOwner) => {
@@ -618,7 +620,7 @@ export function createPreparedQueryView<Input, T, P = never>(
     settlePreparation();
   }
 
-  return frozenView;
+  return view;
 }
 
 function isPreparedPromise<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
