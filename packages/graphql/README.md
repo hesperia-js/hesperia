@@ -1,6 +1,6 @@
 # @hesperia/graphql
 
-Declare typed finite GraphQL queries and mutations through Apollo's native
+Declare typed GraphQL queries, mutations and incoming subscriptions through Apollo's native
 transport links. Aeolia owns their shared result state and declared optimistic
 effects. Hesperia binds the resulting handles to each consuming component.
 
@@ -56,7 +56,7 @@ default and retain available response details on the ordinary Error's `result`.
 Native failure details remain available through `cause`.
 
 See [GraphQL operations](docs/graphql.md) for error policies, explicit mutation
-effects, context/key ownership, cancellation and cleanup.
+effects, incoming subscriptions, context/key ownership, cancellation and cleanup.
 
 ## License
 

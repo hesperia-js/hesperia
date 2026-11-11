@@ -155,7 +155,8 @@ export function createGraphQLResultError<TData = unknown>(
   return error;
 }
 
-function snapshotGraphQLResult<TData>(result: ApolloLink.Result): GraphQLResult<TData> {
+/** @internal Copy the available envelope before native processing mutates it. */
+export function snapshotGraphQLResult<TData>(result: ApolloLink.Result): GraphQLResult<TData> {
   const source = result as GraphQLResult<TData>;
   const snapshot: GraphQLResult<TData> = {};
 

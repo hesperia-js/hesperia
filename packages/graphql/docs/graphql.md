@@ -1,6 +1,6 @@
 # GraphQL operations
 
-`createGraphQLClient` builds public Aeolia query and mutation definitions over
+`createGraphQLClient` builds public Aeolia query, mutation and stream definitions over
 an adapter-owned Apollo Client. Supplying a link or declaring an operation does
 not dispatch a request. Put those definitions in a contract, create a graph
 with `createGraph({ contract })`, and adapt that same graph/contract pair with
@@ -29,6 +29,101 @@ Native calls use `fetchPolicy: "no-cache"` and disable Apollo query deduplicatio
 The required native cache object does not become a second result-cache owner.
 The graph's operation signal supplies the native HTTP fetch signal; a signal in
 the configured native context cannot replace that operation authority.
+
+## Incoming subscriptions
+
+Supply an Apollo subscription link and declare an ordinary keyed stream with
+`graphql.subscription()`. For the experimental `graphql-transport-ws` profile,
+use `graphql-ws@6.4.1` with Apollo Client 4.3.5 and GraphQL 17.0.2. Add
+`graphql-ws` to the application that configures the socket:
+
+```ts
+import { GraphQLWsLink } from "@apollo/client/link/subscriptions";
+import type { TypedDocumentNode } from "@apollo/client";
+import { createGraphQLClient } from "@hesperia/graphql/client";
+import { createGraph, defineContract } from "aeolia";
+import { parse } from "graphql";
+import { createClient } from "graphql-ws";
+import { withAeolia } from "hesperia/aeolia";
+
+const socket = createClient({ url: "wss://example.com/graphql" });
+const graphql = createGraphQLClient({ link: new GraphQLWsLink(socket) });
+const document = parse(`
+  subscription Events($room: ID!) {
+    event(room: $room) { message }
+  }
+`) as TypedDocumentNode<{ event: { message: string } }, { room: string }>;
+const events = graphql.subscription({
+  name: "events",
+  document,
+  key: ({ room }) => room,
+});
+const contract = defineContract({ namespace: "chat", operations: { events } });
+const graph = createGraph({ contract });
+
+export const api = withAeolia(graph, contract);
+
+export async function disposeChat(): Promise<void> {
+  graph.dispose();
+  graphql.stop();
+
+  await socket.dispose();
+}
+```
+
+Declaring a subscription performs no native work. An owner-bound Feed activates
+through the ordinary Hesperia component lifecycle. Inputs with the same key in
+the same graph share one stream source and its native operation. Include all
+response-relevant variables in the key and scope graphs to the factory's fixed
+authority context, as for queries. Each Feed's projection has its own state;
+removing one consumer does not dispose the caller's socket.
+
+```tsx
+import { api } from "../chat.ts";
+
+export default function Messages() {
+  const events = api.events({ room: "general" });
+
+  return <p>{events.value()?.data?.event.message ?? "Waiting for an event"}</p>;
+}
+```
+
+Each emitted value is a `GraphQLResult<TData>`. The subscription error policy
+defaults to `none`; set `subscriptionErrorPolicy` on the factory or `errorPolicy`
+on a declaration to change it. An execution-error `Next` event stays
+nonterminal. Under `none`, its data is omitted while its available errors and
+extensions remain. Under `all`, partial data and errors remain together. Under
+`ignore`, execution errors are omitted; an error-only event without data is
+suppressed. A later valid event can update the same Feed under all three
+policies. An explicit `data: null` execution value remains distinct from absent
+data, including when Apollo filters its public notification.
+
+An errors-only raw `Next` without defined data also follows the native event
+policy: `none` and `all` emit its available errors/extensions without a data
+field, while `ignore` suppresses it. It remains nonterminal. The adapter does
+not classify a `Next` as a finite request failure merely because data is absent.
+
+A protocol `Error` or Link error fails the stream under every policy, including
+`ignore`. A normal protocol `Complete` closes it. The adapter captures these
+Link notifications per operation before Apollo transforms errors into value
+notifications or completion. A supplied native link can also complete after
+caller socket disposal; graphql-ws 6.4.1 does so without a server `Complete`
+message. Feed status describes the ordinary stream lifecycle. A closed Feed
+does not establish a successful remote terminal result or acknowledge server
+cleanup.
+
+Graph retirement aborts the open operation's signal and returns its iterator.
+Iterator return and `graphql.stop()` unsubscribe the native operation and fence
+later callbacks. Cancellation drops queued values; natural completion and
+failure preserve earlier queued events in order. These local cleanup calls do
+not await a server acknowledgement or dispose a shared socket. The caller owns
+authentication, reconnect configuration and `socket.dispose()`. A factory does
+not dispose a socket supplied through an Apollo link.
+
+Subscription calls use `fetchPolicy: "no-cache"` and independent operation
+dispatch. Incoming subscriptions use the
+ordinary receive-only StreamDefinition/Feed API, including its existing latest,
+accumulation and reduction views.
 
 ## Query results and errors
 

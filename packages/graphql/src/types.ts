@@ -9,6 +9,11 @@ import type { GraphQLFormattedError } from "graphql";
  * partial data. Transport, decoding, and cancellation failures do not have a
  * response envelope.
  *
+ * Subscription `Next` events follow the selected native subscription policy.
+ * An errorful event is nonterminal; `none` omits its data while retaining its
+ * available errors and extensions. Protocol and transport failures terminate
+ * the source instead of producing a successful envelope.
+ *
  * @typeParam TData - The declared data shape for the operation.
  */
 export interface GraphQLResult<TData = unknown> {

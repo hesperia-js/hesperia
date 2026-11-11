@@ -4,5 +4,6 @@ export type {
   GraphQLClientOptions,
   GraphQLMutationOptions,
   GraphQLQueryOptions,
+  GraphQLSubscriptionOptions,
 } from "./client.ts";
 export type { GraphQLResult, GraphQLResultError } from "./types.ts";
