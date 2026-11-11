@@ -48,6 +48,13 @@ declare const aeoliaRoom: AeoliaChannelDeclaration<Opening, Incoming, Message, R
 
 declare const wrongOpening: MainChannelDeclaration<OtherOpening, Incoming, Message, Result>;
 
+declare const wrongIncoming: MainChannelDeclaration<
+  Opening,
+  { readonly count: number },
+  Message,
+  Result
+>;
+
 declare const wrongMessage: MainChannelDeclaration<Opening, Incoming, number, Result>;
 
 declare const wrongResult: MainChannelDeclaration<Opening, Incoming, Message, string>;
@@ -80,6 +87,18 @@ function checkRawAeoliaContractTypes(): void {
 
   // @ts-expect-error The incoming stream always requires its ChannelCarrier, including for void openings.
   graph.api.voidRoom.incoming();
+
+  const unbranded = { incoming: room.incoming };
+
+  // @ts-expect-error An incoming stream alone is not a branded channel declaration.
+  const rejectedUnbranded: MainChannelDeclaration<Opening, Incoming, Message, Result> = unbranded;
+
+  // @ts-expect-error A channel declaration cannot change its incoming value type.
+  const rejectedIncoming: MainChannelDeclaration<Opening, Incoming, Message, Result> =
+    wrongIncoming;
+
+  void rejectedUnbranded;
+  void rejectedIncoming;
 
   // @ts-expect-error A channel declaration cannot change its opening input type.
   const rejectedOpening: MainChannelDeclaration<Opening, Incoming, Message, Result> = wrongOpening;

@@ -46,8 +46,8 @@ export interface ChannelSendOptions {
   /**
    * Positive finite deadline override for this send.
    *
-   * When omitted, the effective channel deadline follows the configured
-   * channel, Hesperia project, and built-in defaults.
+   * When omitted, the effective deadline follows the channel default, then the
+   * Hesperia project default when available, then the built-in default.
    */
   readonly timeoutMs?: number;
   /** Caller-owned signal that cancels this send without cancelling sibling sends. */
