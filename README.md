@@ -57,6 +57,8 @@ Each package README covers installation and its public entry points.
 | [@hesperia/language-server](packages/language-server/README.md) | Diagnostics and source navigation for editors.                |
 | [create-hesperia](packages/create-hesperia/README.md)           | Generate an application with an optional Elysia host.         |
 | [@hesperia/elysia](packages/elysia/README.md)                   | Connect Elysia HTTP routes and Eden clients to Hesperia data. |
+| [@hesperia/graphql](packages/graphql/README.md)                 | Adapt GraphQL operations and subscriptions to Aeolia data.    |
+| [@hesperia/grpc](packages/grpc/README.md)                       | Adapt unary and server-streaming gRPC methods to Aeolia.      |
 | [@hesperia/postcss](packages/postcss/README.md)                 | Run an application's PostCSS plugins.                         |
 | [@hesperia/tailwind](packages/tailwind/README.md)               | Generate Tailwind CSS utilities.                              |
 | [@hesperia/stylex](packages/stylex/README.md)                   | Compile StyleX definitions and collect application CSS.       |
