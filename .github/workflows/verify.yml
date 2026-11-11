@@ -180,6 +180,9 @@ jobs:
       - name: "Test tooling"
         if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'"
         run: "bun test --timeout=45000 tests/tooling"
+      - name: "Test public source swaps"
+        if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'"
+        run: "bun test --isolate --timeout=45000 tests/tooling/fixtures/q10-public-source-swap.fixture.ts"
       - name: "Test routing"
         if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.routing == 'true'"
         run: "bun test --timeout=45000 tests/routing"
@@ -250,6 +253,9 @@ jobs:
         if: "matrix.group == 'native-editor' && runner.os == 'Linux'"
         shell: bash
         run: "python3 -B editors/vscode/tests/test_linux_observer.py -v"
+      - name: "Test public source swaps"
+        if: "matrix.group == 'bun-tests-ordinary'"
+        run: "bun test --isolate --timeout=45000 tests/tooling/fixtures/q10-public-source-swap.fixture.ts"
       - name: "Run the original coverage group"
         env:
           COVERAGE_GROUP: ${{ matrix.group }}

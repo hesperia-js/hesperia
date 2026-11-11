@@ -46,7 +46,9 @@ async function withCleanup(
 function containsPath(parent: string, child: string): boolean {
   const suffix = relative(resolve(parent), resolve(child));
 
-  return suffix === "" || (!isAbsolute(suffix) && suffix !== ".." && !suffix.startsWith(`..${sep}`));
+  return (
+    suffix === "" || (!isAbsolute(suffix) && suffix !== ".." && !suffix.startsWith(`..${sep}`))
+  );
 }
 
 test("public capture rejects swaps before canonical resolution and final byte open", async () => {
@@ -67,10 +69,13 @@ test("public capture rejects swaps before canonical resolution and final byte op
   await withCleanup(async () => {
     await linkFrameworkPackages(root);
     await native.mkdir(join(root, "src", "routes"), { recursive: true });
-    await native.writeFile(join(root, "app.tsx"), `export default function App(props: { children: () => unknown }) {
+    await native.writeFile(
+      join(root, "app.tsx"),
+      `export default function App(props: { children: () => unknown }) {
   return <html><head></head><body>{props.children()}</body></html>;
 }
-`);
+`,
+    );
     await native.writeFile(
       join(root, "src", "routes", "+page.tsx"),
       "export default function Home() { return <main>Public file host</main>; }\n",
@@ -113,9 +118,13 @@ test("public capture rejects swaps before canonical resolution and final byte op
       containsPath(outsideRoot, path) || containsPath(canonicalOutside, path);
     const fixtureTarget = (path: unknown) =>
       typeof path === "string" &&
-      [victim, join(directory, "contained.bin"), join(canonicalDirectory, "contained.bin"), join(outsideRoot, "contained.bin"), outsideFile].some(
-        (candidate) => matches(path, candidate),
-      );
+      [
+        victim,
+        join(directory, "contained.bin"),
+        join(canonicalDirectory, "contained.bin"),
+        join(outsideRoot, "contained.bin"),
+        outsideFile,
+      ].some((candidate) => matches(path, candidate));
 
     async function assertRejected(): Promise<void> {
       let result: Awaited<ReturnType<typeof prepareBuild>> | undefined;
@@ -130,14 +139,17 @@ test("public capture rejects swaps before canonical resolution and final byte op
       expect(result).toBeUndefined();
       expect(failure).toBeInstanceOf(ProjectError);
 
-      if (!(failure instanceof ProjectError)) throw new Error("The source swap must reject preparation");
+      if (!(failure instanceof ProjectError))
+        throw new Error("The source swap must reject preparation");
 
       expect(failure.message).toContain("public source changed during capture");
       expect(failure.watch).toBeDefined();
 
       const paths = failure.watch!.map((item) => (item.kind === "file" ? item.file : item.dir));
 
-      expect(paths.some((path) => containsPath(root, path) || containsPath(canonicalRoot, path))).toBe(true);
+      expect(
+        paths.some((path) => containsPath(root, path) || containsPath(canonicalRoot, path)),
+      ).toBe(true);
       expect(paths.some(fromOutside)).toBe(false);
       expect(await native.readFile(recordPath)).toEqual(published);
 
@@ -167,7 +179,11 @@ test("public capture rejects swaps before canonical resolution and final byte op
       armed: () => boolean,
       beforeRead: (path: unknown) => Promise<void>,
     ): void {
-      const readSpy = trackSpy(spies, () => spyOn(filesystem, "readFile"), () => filesystem.readFile === native.readFile);
+      const readSpy = trackSpy(
+        spies,
+        () => spyOn(filesystem, "readFile"),
+        () => filesystem.readFile === native.readFile,
+      );
       readSpy.mockImplementation(((...args: Parameters<typeof filesystem.readFile>) => {
         if (!armed() || typeof args[0] !== "string" || !fixtureTarget(args[0]))
           return Reflect.apply(native.readFile, native, args);
@@ -183,13 +199,21 @@ test("public capture rejects swaps before canonical resolution and final byte op
         })();
       }) as typeof filesystem.readFile);
 
-      const openSpy = trackSpy(spies, () => spyOn(filesystem, "open"), () => filesystem.open === native.open);
+      const openSpy = trackSpy(
+        spies,
+        () => spyOn(filesystem, "open"),
+        () => filesystem.open === native.open,
+      );
       openSpy.mockImplementation(((...args: Parameters<typeof filesystem.open>) => {
         if (!fixtureTarget(args[0])) return Reflect.apply(native.open, native, args);
 
         return (async () => {
           await beforeRead(args[0]);
-          const handle: Awaited<ReturnType<typeof filesystem.open>> = await Reflect.apply(native.open, native, args);
+          const handle: Awaited<ReturnType<typeof filesystem.open>> = await Reflect.apply(
+            native.open,
+            native,
+            args,
+          );
 
           if (armed()) {
             unclosedHandles++;
@@ -197,7 +221,11 @@ test("public capture rejects swaps before canonical resolution and final byte op
 
             try {
               const originalClose = handle.close;
-              const closeHandle = trackSpy(spies, () => spyOn(handle, "close"), () => handle.close === originalClose);
+              const closeHandle = trackSpy(
+                spies,
+                () => spyOn(handle, "close"),
+                () => handle.close === originalClose,
+              );
               closeHandle.mockImplementation(((...closeArgs: Parameters<typeof handle.close>) =>
                 Reflect.apply(originalClose, handle, closeArgs).then(() => {
                   if (!handleClosed) {
@@ -210,7 +238,11 @@ test("public capture rejects swaps before canonical resolution and final byte op
 
               if (held.dev === outsideInfo.dev && held.ino === outsideInfo.ino) {
                 const originalRead = handle.readFile;
-                const readHandle = trackSpy(spies, () => spyOn(handle, "readFile"), () => handle.readFile === originalRead);
+                const readHandle = trackSpy(
+                  spies,
+                  () => spyOn(handle, "readFile"),
+                  () => handle.readFile === originalRead,
+                );
                 readHandle.mockImplementation(((...readArgs: unknown[]) => {
                   outsideReads++;
                   return Reflect.apply(originalRead, handle, readArgs);
@@ -220,9 +252,13 @@ test("public capture rejects swaps before canonical resolution and final byte op
               try {
                 await handle.close();
               } catch (cleanup) {
-                throw new AggregateError([error, cleanup], "Outside handle inspection and close failed", {
-                  cause: error,
-                });
+                throw new AggregateError(
+                  [error, cleanup],
+                  "Outside handle inspection and close failed",
+                  {
+                    cause: error,
+                  },
+                );
               }
 
               throw error;
@@ -275,7 +311,11 @@ test("public capture rejects swaps before canonical resolution and final byte op
     const directorySpies: TrackedSpy[] = [];
 
     await withCleanup(async () => {
-      const readdirSpy = trackSpy(directorySpies, () => spyOn(filesystem, "readdir"), () => filesystem.readdir === native.readdir);
+      const readdirSpy = trackSpy(
+        directorySpies,
+        () => spyOn(filesystem, "readdir"),
+        () => filesystem.readdir === native.readdir,
+      );
       readdirSpy.mockImplementation(((...args: Parameters<typeof filesystem.readdir>) => {
         if (!matches(args[0], directory) && !matches(args[0], canonicalDirectory))
           return Reflect.apply(native.readdir, native, args);
@@ -287,9 +327,17 @@ test("public capture rejects swaps before canonical resolution and final byte op
         })();
       }) as typeof filesystem.readdir);
 
-      const lstatSpy = trackSpy(directorySpies, () => spyOn(filesystem, "lstat"), () => filesystem.lstat === native.lstat);
+      const lstatSpy = trackSpy(
+        directorySpies,
+        () => spyOn(filesystem, "lstat"),
+        () => filesystem.lstat === native.lstat,
+      );
       lstatSpy.mockImplementation(((...args: Parameters<typeof filesystem.lstat>) => {
-        if (!listed || directorySwapped || (!matches(args[0], directory) && !matches(args[0], canonicalDirectory)))
+        if (
+          !listed ||
+          directorySwapped ||
+          (!matches(args[0], directory) && !matches(args[0], canonicalDirectory))
+        )
           return Reflect.apply(native.lstat, native, args);
 
         return (async () => {
@@ -299,7 +347,11 @@ test("public capture rejects swaps before canonical resolution and final byte op
             directorySwapped = true;
             await native.rename(directory, savedDirectory);
             directorySaved = true;
-            await native.symlink(outsideRoot, directory, process.platform === "win32" ? "junction" : "dir");
+            await native.symlink(
+              outsideRoot,
+              directory,
+              process.platform === "win32" ? "junction" : "dir",
+            );
             directoryLinked = true;
           }
 
@@ -307,15 +359,29 @@ test("public capture rejects swaps before canonical resolution and final byte op
         })();
       }) as typeof filesystem.lstat);
 
-      guardReads(directorySpies, () => directorySwapped, async () => undefined);
+      guardReads(
+        directorySpies,
+        () => directorySwapped,
+        async () => undefined,
+      );
       await assertRejected();
 
       expect(directorySwapped).toBe(true);
       await verifyReadGuards();
     }, [
       () => restoreSpies(directorySpies),
-      () => (directoryLinked ? native.unlink(directory).then(() => { directoryLinked = false; }) : undefined),
-      () => (directorySaved ? native.rename(savedDirectory, directory).then(() => { directorySaved = false; }) : undefined),
+      () =>
+        directoryLinked
+          ? native.unlink(directory).then(() => {
+              directoryLinked = false;
+            })
+          : undefined,
+      () =>
+        directorySaved
+          ? native.rename(savedDirectory, directory).then(() => {
+              directorySaved = false;
+            })
+          : undefined,
     ]);
 
     expect(filesystem.readdir).toBe(native.readdir);
@@ -343,8 +409,18 @@ test("public capture rejects swaps before canonical resolution and final byte op
       await verifyReadGuards();
     }, [
       () => restoreSpies(fileSpies),
-      () => (fileLinked ? native.unlink(victim).then(() => { fileLinked = false; }) : undefined),
-      () => (fileSaved ? native.rename(savedFile, victim).then(() => { fileSaved = false; }) : undefined),
+      () =>
+        fileLinked
+          ? native.unlink(victim).then(() => {
+              fileLinked = false;
+            })
+          : undefined,
+      () =>
+        fileSaved
+          ? native.rename(savedFile, victim).then(() => {
+              fileSaved = false;
+            })
+          : undefined,
     ]);
 
     expect(filesystem.open).toBe(native.open);
@@ -370,21 +446,49 @@ test("public capture rejects swaps before canonical resolution and final byte op
       serverStopped = true;
     },
     async () => {
-      if (!serverStopped || spySetupUncertain || activeSpies !== 0 || unclosedHandles !== 0 || directorySaved || directoryLinked || fileSaved || fileLinked)
+      if (
+        !serverStopped ||
+        spySetupUncertain ||
+        activeSpies !== 0 ||
+        unclosedHandles !== 0 ||
+        directorySaved ||
+        directoryLinked ||
+        fileSaved ||
+        fileLinked
+      )
         throw new Error(`Source-swap dependencies retained after incomplete cleanup: ${root}`);
 
       await unlinkFrameworkPackages(root);
       dependenciesUnlinked = true;
     },
     () => {
-      if (!serverStopped || spySetupUncertain || activeSpies !== 0 || unclosedHandles !== 0 || !dependenciesUnlinked || directorySaved || directoryLinked || fileSaved || fileLinked)
+      if (
+        !serverStopped ||
+        spySetupUncertain ||
+        activeSpies !== 0 ||
+        unclosedHandles !== 0 ||
+        !dependenciesUnlinked ||
+        directorySaved ||
+        directoryLinked ||
+        fileSaved ||
+        fileLinked
+      )
         throw new Error(`Source-swap root retained after incomplete cleanup: ${root}`);
 
       return native.rm(root, { recursive: true, force: true });
     },
     () => {
       if (!outside) return;
-      if (!serverStopped || spySetupUncertain || activeSpies !== 0 || unclosedHandles !== 0 || directorySaved || directoryLinked || fileSaved || fileLinked)
+      if (
+        !serverStopped ||
+        spySetupUncertain ||
+        activeSpies !== 0 ||
+        unclosedHandles !== 0 ||
+        directorySaved ||
+        directoryLinked ||
+        fileSaved ||
+        fileLinked
+      )
         throw new Error(`Outside fixture retained after incomplete cleanup: ${outside}`);
 
       return native.rm(outside, { recursive: true, force: true });
