@@ -1,4 +1,6 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import * as filesystem from "node:fs";
+import * as filesystemPromises from "node:fs/promises";
 import {
   mkdir,
   mkdtemp,
@@ -11,7 +13,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { prepareBuild, writeBuild } from "../../packages/tooling/src/project.ts";
 import {
   devProject,
@@ -361,6 +363,315 @@ async function buildFailure(root: string): Promise<string> {
   }
 
   throw new Error("Expected the invalid public-file build to fail");
+}
+
+function completion() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((accept) => {
+    resolve = accept;
+  });
+
+  return { promise, resolve };
+}
+
+interface ObservedWatch {
+  readonly directory: string;
+  closed: boolean;
+  notify(filename: string | null): void;
+  close(): void;
+}
+
+function observePublicWatches(root: string) {
+  const originalWatch = filesystem.watch;
+  const originalOpen = filesystemPromises.open;
+  const canonicalRoot = String(filesystem.realpathSync(root));
+  const records: ObservedWatch[] = [];
+  const waiting: { directory: string; after: number; resolve(record: ObservedWatch): void }[] = [];
+  const heldNotifications = new Set<string>();
+  const handleSpies = new Set<{ mockRestore(): void }>();
+  let failDirectory: string | undefined;
+  let earlyNotificationDirectory: string | undefined;
+  let beforeRegistration: { directory: string; run(): void } | undefined;
+  let afterRead: { filename: string; run(): void } | undefined;
+  let readIntercepted = false;
+  let readRestored = false;
+  let forwardedNativeCallbacks = 0;
+
+  const isWithinFixture = (path: string): boolean => {
+    const relativePath = relative(canonicalRoot, resolve(path));
+
+    return (
+      relativePath === "" ||
+      (!isAbsolute(relativePath) && relativePath !== ".." && !relativePath.startsWith(`..${sep}`))
+    );
+  };
+
+  const openSpy = spyOn(filesystemPromises, "open");
+
+  try {
+    openSpy.mockImplementation(((...args: Parameters<typeof filesystemPromises.open>) => {
+      const filename = args[0];
+
+      if (
+        typeof filename !== "string" ||
+        !isWithinFixture(filename) ||
+        !afterRead ||
+        filename !== afterRead.filename
+      )
+        return Reflect.apply(originalOpen, filesystemPromises, args);
+
+      return (async () => {
+        const handle = await Reflect.apply(originalOpen, filesystemPromises, args);
+
+        try {
+          const originalRead = handle.readFile;
+          const readSpy = spyOn(handle, "readFile");
+
+          handleSpies.add(readSpy);
+          readSpy.mockImplementation((async (...readArguments: unknown[]) => {
+            let bytes;
+            let readFailed = false;
+            let readFailure: unknown;
+
+            try {
+              bytes = await Reflect.apply(originalRead, handle, readArguments);
+              const action = afterRead;
+
+              if (action && filename === action.filename) {
+                afterRead = undefined;
+                readIntercepted = true;
+                action.run();
+              }
+            } catch (error) {
+              readFailed = true;
+              readFailure = error;
+            }
+
+            try {
+              readSpy.mockRestore();
+              handleSpies.delete(readSpy);
+              readRestored = handle.readFile === originalRead;
+            } catch (cleanup) {
+              if (readFailed)
+                throw new AggregateError(
+                  [readFailure, cleanup],
+                  "Fixture read and spy restoration failed",
+                );
+
+              throw cleanup;
+            }
+
+            if (readFailed) throw readFailure;
+
+            return bytes;
+          }) as typeof handle.readFile);
+
+          return handle;
+        } catch (error) {
+          try {
+            await handle.close();
+          } catch (cleanup) {
+            throw new AggregateError(
+              [error, cleanup],
+              "Fixture read spy setup and handle close failed",
+            );
+          }
+
+          throw error;
+        }
+      })();
+    }) as typeof filesystemPromises.open);
+  } catch (error) {
+    try {
+      openSpy.mockRestore();
+    } catch (cleanup) {
+      throw new AggregateError([error, cleanup], "Fixture open spy setup rollback failed");
+    }
+
+    throw error;
+  }
+
+  let watchSpy: { mockRestore(): void } | undefined;
+
+  try {
+    const activeSpy = spyOn(filesystem, "watch");
+    watchSpy = activeSpy;
+    activeSpy.mockImplementation(((...args: Parameters<typeof filesystem.watch>) => {
+      const raw = args[0];
+
+      if (typeof raw !== "string" || !isWithinFixture(raw))
+        return Reflect.apply(originalWatch, filesystem, args);
+
+      let directory: string;
+
+      try {
+        directory = String(filesystem.realpathSync(raw));
+      } catch {
+        return Reflect.apply(originalWatch, filesystem, args);
+      }
+
+      if (!isWithinFixture(directory)) return Reflect.apply(originalWatch, filesystem, args);
+
+      const callbackIndex = typeof args[1] === "function" ? 1 : 2;
+      const callback = (args as readonly unknown[])[callbackIndex];
+
+      if (typeof callback !== "function") return Reflect.apply(originalWatch, filesystem, args);
+
+      if (directory === failDirectory)
+        throw new Error(`Controlled Q10 watch registration failure: ${directory}`);
+
+      if (beforeRegistration && directory === beforeRegistration.directory) {
+        const action = beforeRegistration;
+        beforeRegistration = undefined;
+        action.run();
+      }
+
+      const registration = Reflect.apply(originalWatch, filesystem, [
+        ...args.slice(0, callbackIndex),
+        function (this: filesystem.FSWatcher, event: string, filename: string | Buffer | null) {
+          if (filename !== null) {
+            const changed = resolve(directory, filename.toString());
+            const controlled = [...heldNotifications].some((target) => {
+              const fromTarget = relative(target, changed);
+              const fromChange = relative(changed, target);
+
+              return [fromTarget, fromChange].some(
+                (path) => !isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`),
+              );
+            });
+
+            if (controlled) return;
+          }
+
+          forwardedNativeCallbacks++;
+          Reflect.apply(callback, this, [event, filename]);
+        },
+      ]) as filesystem.FSWatcher;
+      const close = registration.close.bind(registration);
+      const record: ObservedWatch = {
+        directory,
+        closed: false,
+        notify(filename) {
+          Reflect.apply(callback, registration, ["change", filename]);
+        },
+        close() {
+          registration.close();
+        },
+      };
+
+      registration.close = () => {
+        close();
+        record.closed = true;
+      };
+      records.push(record);
+
+      if (directory === earlyNotificationDirectory) record.notify(null);
+
+      for (const waiter of waiting)
+        if (waiter.directory === directory && records.length > waiter.after) waiter.resolve(record);
+
+      return registration;
+    }) as typeof filesystem.watch);
+  } catch (error) {
+    const failures: unknown[] = [error];
+
+    try {
+      watchSpy?.mockRestore();
+    } catch (cleanup) {
+      failures.push(cleanup);
+    }
+
+    try {
+      openSpy.mockRestore();
+    } catch (cleanup) {
+      failures.push(cleanup);
+    }
+
+    if (failures.length > 1)
+      throw new AggregateError(failures, "Fixture spy setup rollback failed");
+
+    throw error;
+  }
+
+  return {
+    records,
+    holdNotifications(...paths: string[]): void {
+      for (const path of paths) heldNotifications.add(resolve(path));
+    },
+    registration(directory: string): ObservedWatch {
+      const canonical = String(filesystem.realpathSync(directory));
+      const record = records.find((item) => !item.closed && item.directory === canonical);
+
+      if (!record) throw new Error(`No active native watch registration for ${directory}`);
+
+      return record;
+    },
+    waitFor(directory: string, after: number): Promise<ObservedWatch> {
+      const canonical = String(filesystem.realpathSync(directory));
+      const found = records
+        .slice(after)
+        .find((item) => !item.closed && item.directory === canonical);
+
+      if (found) return Promise.resolve(found);
+
+      return new Promise((resolve) => waiting.push({ directory: canonical, after, resolve }));
+    },
+    failAt(directory?: string): void {
+      failDirectory =
+        directory === undefined ? undefined : String(filesystem.realpathSync(directory));
+    },
+    notifyDuringRegistration(directory: string): void {
+      earlyNotificationDirectory = String(filesystem.realpathSync(directory));
+    },
+    beforeRegistration(directory: string, run: () => void): void {
+      beforeRegistration = { directory: String(filesystem.realpathSync(directory)), run };
+    },
+    afterRead(filename: string, run: () => void): void {
+      afterRead = { filename: String(filesystem.realpathSync(filename)), run };
+    },
+    forwardedNativeCallbacks(): number {
+      return forwardedNativeCallbacks;
+    },
+    readProbePassed(): boolean {
+      return readIntercepted && readRestored;
+    },
+    restore(): void {
+      const errors: unknown[] = [];
+
+      for (const record of records) {
+        try {
+          if (!record.closed) record.close();
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+
+      for (const handleSpy of handleSpies) {
+        try {
+          handleSpy.mockRestore();
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+
+      try {
+        watchSpy?.mockRestore();
+      } catch (error) {
+        errors.push(error);
+      }
+
+      try {
+        openSpy.mockRestore();
+      } catch (error) {
+        errors.push(error);
+      }
+
+      if (filesystem.watch !== originalWatch || filesystemPromises.open !== originalOpen)
+        errors.push(new Error("Fixture filesystem spies were not restored"));
+
+      if (errors.length) throw new AggregateError(errors, "Fixture watcher cleanup failed");
+    },
+  };
 }
 
 test("one production capture serves exact assets at root and a nested mount", async () => {
@@ -1090,3 +1401,772 @@ async function verifyDevelopmentLinkedTarget(format: ConfigurationFormat): Promi
 test("development follows a changed public link target and retains bytes on failure", async () => {
   for (const format of ["typescript", "json"] as const) await verifyDevelopmentLinkedTarget(format);
 }, 330_000);
+
+test("a missing-watch report can close a real changed development build", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-real-report-close-"));
+
+  const phase = createDeadline(150_000);
+  let cleanup: ReturnType<typeof createDeadline> | undefined;
+  let server: ProjectServer | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let readerTerminal:
+    | Promise<{ readonly kind: "closed" } | { readonly kind: "errored"; readonly error: unknown }>
+    | undefined;
+  let matchedReaderError = false;
+  let startupSucceeded = false;
+  let closeSettled = false;
+  let closeSucceeded = false;
+  let closeObserved = false;
+  let closing = false;
+  let readerRetired = false;
+  let bodyCompleted = false;
+  let operationRejected = false;
+  let streamSettledBeforeClose = false;
+  let revisionSignal: AbortSignal | undefined;
+  let signalWasLive = false;
+  let signalAbortedDuringClose = false;
+  const builds: {
+    initial?: Awaited<ReturnType<typeof prepareBuild>>;
+    changed?: Awaited<ReturnType<typeof prepareBuild>>;
+  } = {};
+  let shutdown: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
+  const pendingOperations = new Set<Promise<unknown>>();
+
+  function track<T>(operation: Promise<T>): Promise<T> {
+    pendingOperations.add(operation);
+    void operation.then(
+      () => pendingOperations.delete(operation),
+      () => {
+        pendingOperations.delete(operation);
+        operationRejected = true;
+      },
+    );
+
+    return operation;
+  }
+
+  const beginClose = () => {
+    if (!server || shutdown) return;
+
+    shutdown = server.close().then(
+      () => {
+        closeSettled = true;
+        closeSucceeded = true;
+        return { ok: true as const };
+      },
+      (error: unknown) => {
+        closeSettled = true;
+        return { ok: false as const, error };
+      },
+    );
+  };
+
+  const observeClose = async (signal: AbortSignal) => {
+    beginClose();
+
+    if (!shutdown || closeObserved) return;
+
+    closeObserved = true;
+    const result = await withAbort(shutdown, signal);
+
+    if (!result.ok) throw result.error;
+  };
+
+  await withFixtureCleanup(async () => {
+    await withAbort(track(linkFrameworkPackages(root)), phase.signal);
+    await withAbort(track(mkdir(join(root, "src", "routes"), { recursive: true })), phase.signal);
+    await withAbort(
+      track(
+        writeFile(
+          join(root, "src", "routes", "+page.tsx"),
+          "export default function Home() { return <main>Public file host</main>; }\n",
+        ),
+      ),
+      phase.signal,
+    );
+
+    const canonicalRoot = await withAbort(track(realpath(root)), phase.signal);
+    const app = join(root, "app.tsx");
+    const replacement = join(root, "app.next");
+    const trigger = join(root, "enable-watch");
+    const parent = join(canonicalRoot, "dependency");
+    const missing = join(parent, "later");
+    const missingReport = `Development watch directory is missing: ${missing}; watching for its creation`;
+    let reportReached!: () => void;
+    const reported = new Promise<void>((resolve) => {
+      reportReached = resolve;
+    });
+    const appSource = (value: string) =>
+      `export default function App(props: { children: () => unknown }) { return <html><head></head><body><p>${value}</p>{props.children()}</body></html>; }\n`;
+
+    await withAbort(track(mkdir(parent)), phase.signal);
+    await withAbort(track(writeFile(app, appSource("initial"))), phase.signal);
+    await withAbort(
+      track(
+        writeFile(
+          join(root, "hesperia.config.ts"),
+          `import { existsSync } from "node:fs";
+import { defineConfig } from "@hesperia/tooling";
+const trigger = ${JSON.stringify(trigger)};
+const missing = ${JSON.stringify(missing)};
+export default defineConfig({ plugins: [{ name: "real-report-close", analyzeProject() { return { watch: existsSync(trigger) ? [{ kind: "directory", dir: missing }] : [] }; } }] });
+`,
+        ),
+      ),
+      phase.signal,
+    );
+
+    const starting = track(
+      devProject(
+        root,
+        {
+          port: 0,
+          report: (message) => {
+            if (message !== missingReport || !server || shutdown) return;
+
+            signalWasLive = revisionSignal !== undefined && !revisionSignal.aborted;
+            closing = true;
+            beginClose();
+            signalAbortedDuringClose = revisionSignal?.aborted === true;
+            reportReached();
+          },
+        },
+        async (project, signal) => {
+          const build = await track(prepareBuild(project, true));
+
+          if (!builds.initial) builds.initial = build;
+
+          if (build.watch?.some((item) => item.kind === "directory" && item.dir === missing)) {
+            builds.changed = build;
+            revisionSignal = signal;
+          }
+
+          return build;
+        },
+      ).then((started) => {
+        startupSucceeded = true;
+        server = started;
+        return started;
+      }),
+    );
+
+    server = await withAbort(starting, phase.signal);
+    const initial = await withAbort(
+      track(fetch(server.url, { signal: phase.signal, headers: { accept: "text/html" } })),
+      phase.signal,
+    );
+
+    expect(initial.status).toBe(200);
+    await withAbort(track(initial.arrayBuffer()), phase.signal);
+
+    const events = await withAbort(
+      track(fetch(new URL("/_hesperia/events", server.url), { signal: phase.signal })),
+      phase.signal,
+    );
+
+    expect(events.status).toBe(200);
+
+    reader = events.body!.getReader();
+    readerTerminal = reader.closed.then(
+      () => ({ kind: "closed" as const }),
+      (error: unknown) => ({ kind: "errored" as const, error }),
+    );
+    const nextEvent = nextDevelopmentEvent(reader, phase.signal);
+
+    expect(await track(nextEvent())).toContain(": connected");
+
+    const pendingStream = track(
+      nextEvent().then(
+        (event) => {
+          if (!closing) streamSettledBeforeClose = true;
+
+          return { event };
+        },
+        (error: unknown) => {
+          if (!closing) streamSettledBeforeClose = true;
+
+          return { error };
+        },
+      ),
+    );
+
+    await withAbort(track(writeFile(trigger, "enabled")), phase.signal);
+    await withAbort(track(writeFile(replacement, appSource("changed"))), phase.signal);
+    await withAbort(track(rename(replacement, app)), phase.signal);
+    await withAbort(reported, phase.signal);
+
+    const initialBuild = builds.initial;
+    const changedBuild = builds.changed;
+
+    expect(initialBuild).toBeDefined();
+    expect(changedBuild).toBeDefined();
+
+    if (!initialBuild || !changedBuild) throw new Error("Real build evidence was not retained");
+
+    expect(JSON.stringify(changedBuild.hosting.assets)).not.toBe(
+      JSON.stringify(initialBuild.hosting.assets),
+    );
+    expect(signalWasLive).toBe(true);
+    expect(signalAbortedDuringClose).toBe(true);
+
+    await observeClose(phase.signal);
+    const finalEvent = await withAbort(pendingStream, phase.signal);
+
+    expect(streamSettledBeforeClose).toBe(false);
+    expect("error" in finalEvent).toBe(true);
+
+    if (!readerTerminal || !("error" in finalEvent))
+      throw new Error("Development event reader has no observed terminal error");
+
+    const terminal = await withAbort(track(readerTerminal), phase.signal);
+
+    if (terminal.kind === "errored") {
+      if (!Object.is(terminal.error, finalEvent.error))
+        throw new AggregateError(
+          [finalEvent.error, terminal.error],
+          "Development event and reader terminal errors differ",
+        );
+
+      matchedReaderError = true;
+    }
+
+    if (phase.signal.aborted) throw phase.signal.reason;
+
+    const stopped = await withAbort(
+      track(
+        fetch(server.url, { signal: phase.signal }).then(
+          () => false,
+          () => true,
+        ),
+      ),
+      phase.signal,
+    );
+
+    if (phase.signal.aborted) throw phase.signal.reason;
+
+    expect(stopped).toBe(true);
+    bodyCompleted = true;
+  }, [
+    () => {
+      phase.close();
+      cleanup = createDeadline(15_000);
+    },
+    () => observeClose(cleanup!.signal),
+    async () => {
+      if (!reader) return;
+
+      if (!matchedReaderError) await withAbort(track(reader.cancel()), cleanup!.signal);
+
+      reader.releaseLock();
+      readerRetired = true;
+    },
+    async () => {
+      if (
+        !bodyCompleted ||
+        !startupSucceeded ||
+        !closeSettled ||
+        !closeSucceeded ||
+        !readerRetired ||
+        phase.signal.aborted ||
+        cleanup!.signal.aborted ||
+        operationRejected ||
+        pendingOperations.size > 0
+      )
+        throw new Error(`Report-close fixture retained after failure or unsettled work: ${root}`);
+
+      await withAbort(track(unlinkFrameworkPackages(root)), cleanup!.signal);
+
+      if (cleanup!.signal.aborted || operationRejected || pendingOperations.size > 0)
+        throw new Error(`Report-close fixture retained after incomplete unlink: ${root}`);
+
+      cleanup!.close();
+      await rm(root, { recursive: true, force: true });
+    },
+    () => cleanup?.close(),
+  ]);
+}, 240_000);
+
+test("public dependency replacement and rollback use the existing native watcher boundary", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-public-watch-order-"));
+
+  const publicRoot = join(root, "public");
+  const directories = Object.fromEntries(
+    ["a", "b", "aa-addition", "zz-addition", "failed-one", "failed-two", "held-failure"].map(
+      (name) => [name, join(root, name)],
+    ),
+  );
+  const bytes = (value: string) => new TextEncoder().encode(value);
+  const initial = bytes("same bytes");
+  const changed = bytes("B changed");
+  const recovered = bytes("registration recovered");
+  const repaired = bytes("missing target repaired");
+  const final = bytes("current root-file target");
+  const alias = join(publicRoot, "live.bin");
+  const rootFile = join(root, "root-target.bin");
+
+  let watches: ReturnType<typeof observePublicWatches> | undefined;
+  let bodyCompleted = false;
+  let serverClosed = false;
+  let readerRetired = false;
+  let spiesRestored = false;
+  let startupSucceeded = false;
+  let operationRejected = false;
+  let cleanup: ReturnType<typeof createDeadline> | undefined;
+  const pendingOperations = new Set<Promise<unknown>>();
+
+  function track<T>(operation: Promise<T>): Promise<T> {
+    pendingOperations.add(operation);
+    void operation.then(
+      () => pendingOperations.delete(operation),
+      () => {
+        pendingOperations.delete(operation);
+        operationRejected = true;
+      },
+    );
+
+    return operation;
+  }
+  const heldFailureStarted = completion();
+  const releaseFailure = completion();
+  const obsoleteAborted = completion();
+  const reports: string[] = [];
+  const reportWaiters: { after: number; match(message: string): boolean; resolve(): void }[] = [];
+  let preparations = 0;
+  let holdFailure = false;
+  let server: ProjectServer | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const deadline = createDeadline(210_000);
+  const signal = deadline.signal;
+
+  const nextReport = (after: number, match: (message: string) => boolean): Promise<void> =>
+    withAbort(
+      reports.slice(after).some(match)
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => reportWaiters.push({ after, match, resolve })),
+      signal,
+    );
+
+  await withFixtureCleanup(async () => {
+    await withAbort(track(linkFrameworkPackages(root)), signal);
+    await withAbort(track(mkdir(join(root, "src", "routes"), { recursive: true })), signal);
+    await withAbort(
+      track(
+        writeFile(
+          join(root, "app.tsx"),
+          `export default function App(props: { children: () => unknown }) {
+  return <html><head></head><body>{props.children()}</body></html>;
+}
+`,
+        ),
+      ),
+      signal,
+    );
+    await withAbort(
+      track(
+        writeFile(
+          join(root, "src", "routes", "+page.tsx"),
+          "export default function Home() { return <main>Public file host</main>; }\n",
+        ),
+      ),
+      signal,
+    );
+    await withAbort(
+      track(writeFile(join(root, "hesperia.config.json"), JSON.stringify({ mountURL: "/" }))),
+      signal,
+    );
+    await withAbort(track(mkdir(publicRoot)), signal);
+
+    for (const directory of Object.values(directories))
+      await withAbort(track(mkdir(directory)), signal);
+
+    for (const name of ["a", "b", "aa-addition", "zz-addition"])
+      await withAbort(track(writeFile(join(directories[name]!, "live.bin"), initial)), signal);
+
+    await withAbort(track(writeFile(rootFile, final)), signal);
+    await withAbort(track(symlink(join(directories.a!, "live.bin"), alias, "file")), signal);
+
+    const observed = observePublicWatches(root);
+    watches = observed;
+    observed.holdNotifications(publicRoot, rootFile, ...Object.values(directories));
+
+    const activeServer = await withAbort(
+      track(
+        devProject(
+          root,
+          {
+            port: 0,
+            report(message) {
+              reports.push(message);
+
+              for (const waiter of reportWaiters)
+                if (reports.length > waiter.after && waiter.match(message)) waiter.resolve();
+            },
+          },
+          async (project, attemptSignal) => {
+            preparations++;
+            const held = holdFailure;
+            holdFailure = false;
+
+            if (held)
+              attemptSignal?.addEventListener("abort", obsoleteAborted.resolve, { once: true });
+
+            try {
+              return await prepareBuild(project, true);
+            } catch (error) {
+              if (held) {
+                heldFailureStarted.resolve();
+
+                await releaseFailure.promise;
+              }
+
+              throw error;
+            }
+          },
+        ).then((started) => {
+          startupSucceeded = true;
+          server = started;
+          return started;
+        }),
+      ),
+      signal,
+    );
+    server = activeServer;
+    reader = (
+      await fetch(new URL("/_hesperia/events?updateProtocol=2", activeServer.url), { signal })
+    ).body!.getReader();
+    const nextEvent = nextDevelopmentEvent(reader, signal);
+
+    await nextEvent();
+
+    const liveURL = new URL("/live.bin", activeServer.url);
+    expect(observed.records.length).toBeGreaterThan(0);
+
+    const oldWatch = observed.registration(directories.a!);
+    const beforeRetarget = observed.records.length;
+
+    await unlink(alias);
+
+    await symlink(join(directories.b!, "live.bin"), alias, "file");
+
+    observed.registration(publicRoot).notify("live.bin");
+
+    const currentWatch = await withAbort(observed.waitFor(directories.b!, beforeRetarget), signal);
+
+    expect(oldWatch.closed).toBe(true);
+
+    expect([
+      ...new Uint8Array(await (await fetch(liveURL, { signal })).arrayBuffer()),
+    ]).toStrictEqual([...initial]);
+
+    const beforeOldNotification = preparations;
+
+    await writeFile(join(directories.a!, "live.bin"), bytes("obsolete A"));
+
+    oldWatch.notify("live.bin");
+
+    observed.registration(root).notify("a");
+
+    expect(preparations).toBe(beforeOldNotification);
+
+    await writeFile(join(directories.b!, "live.bin"), changed);
+
+    currentWatch.notify(null);
+
+    await waitForPublicBytes(nextEvent, liveURL, changed, signal);
+
+    const beforeUnrelated = preparations;
+    const afterUnrelated = bytes("B after unrelated notification");
+
+    await writeFile(join(directories.b!, "live.bin"), afterUnrelated);
+
+    observed.registration(directories.b!).notify("unrelated.bin");
+
+    expect(preparations).toBe(beforeUnrelated);
+
+    observed.registration(directories.b!).notify("live.bin");
+
+    await waitForPublicBytes(nextEvent, liveURL, afterUnrelated, signal);
+
+    const gapDirectory = join(root, "read-watch-gap");
+    const gapTarget = join(gapDirectory, "live.bin");
+    const gapCaptured = bytes("captured before registration");
+    const gapLatest = bytes("changed before registration");
+    const beforeGap = observed.records.length;
+    let changedBeforeRegistration = false;
+
+    await mkdir(gapDirectory);
+
+    await writeFile(gapTarget, gapCaptured);
+
+    observed.holdNotifications(gapDirectory);
+    observed.beforeRegistration(gapDirectory, () => {
+      filesystem.writeFileSync(gapTarget, gapLatest);
+
+      changedBeforeRegistration = true;
+    });
+
+    await unlink(alias);
+
+    await symlink(gapTarget, alias, "file");
+
+    const beforeGapCallbacks = observed.forwardedNativeCallbacks();
+
+    observed.registration(publicRoot).notify("live.bin");
+
+    await withAbort(observed.waitFor(gapDirectory, beforeGap), signal);
+
+    expect(changedBeforeRegistration).toBe(true);
+
+    await waitForPublicBytes(nextEvent, liveURL, gapLatest, signal);
+
+    expect(observed.forwardedNativeCallbacks()).toBe(beforeGapCallbacks);
+
+    const sharedLatest = bytes("root target changed before binding");
+    const sharedRootWatch = observed.registration(root);
+    const beforeSharedTarget = observed.records.length;
+    let changedBeforeBinding = false;
+
+    observed.afterRead(rootFile, () => {
+      filesystem.writeFileSync(rootFile, sharedLatest);
+
+      changedBeforeBinding = true;
+    });
+
+    await unlink(alias);
+
+    await symlink(rootFile, alias, "file");
+
+    const beforeSharedCallbacks = observed.forwardedNativeCallbacks();
+
+    observed.registration(publicRoot).notify("live.bin");
+
+    await waitForPublicBytes(nextEvent, liveURL, sharedLatest, signal);
+
+    expect(observed.forwardedNativeCallbacks()).toBe(beforeSharedCallbacks);
+
+    expect(changedBeforeBinding).toBe(true);
+
+    expect(observed.readProbePassed()).toBe(true);
+
+    expect(observed.registration(root)).toBe(sharedRootWatch);
+
+    expect(
+      observed.records
+        .slice(beforeSharedTarget)
+        .some((record) => record.directory === sharedRootWatch.directory),
+    ).toBe(false);
+
+    await writeFile(rootFile, final);
+
+    await unlink(alias);
+
+    await symlink(join(directories.b!, "live.bin"), alias, "file");
+
+    observed.registration(publicRoot).notify("live.bin");
+
+    await waitForPublicBytes(nextEvent, liveURL, afterUnrelated, signal);
+
+    const beforeAdditions = observed.records.length;
+    const oldRegistrations = observed.records.filter((record) => !record.closed);
+    const reportsBeforeRollback = reports.length;
+    const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
+
+    await symlink(directories["aa-addition"]!, join(publicRoot, "0-left"), directoryLinkType);
+
+    await symlink(directories["zz-addition"]!, join(publicRoot, "1-right"), directoryLinkType);
+
+    observed.failAt(directories["zz-addition"]!);
+    observed.notifyDuringRegistration(directories["aa-addition"]!);
+    observed.registration(publicRoot).notify("0-left");
+
+    await nextReport(reportsBeforeRollback, (message) =>
+      message.includes("Controlled Q10 watch registration failure"),
+    );
+
+    const openedAdditions = observed.records.slice(beforeAdditions);
+
+    expect(openedAdditions.length).toBeGreaterThan(0);
+
+    expect(openedAdditions.every((record) => record.closed)).toBe(true);
+
+    expect(oldRegistrations.every((record) => !record.closed)).toBe(true);
+
+    const beforeRetiredAdditions = preparations;
+
+    for (const record of openedAdditions) record.notify(null);
+
+    expect(preparations).toBe(beforeRetiredAdditions);
+
+    expect([
+      ...new Uint8Array(await (await fetch(liveURL, { signal })).arrayBuffer()),
+    ]).toStrictEqual([...afterUnrelated]);
+
+    expect(
+      (
+        await fetch(new URL("/0-left/live.bin", activeServer.url), {
+          headers: { accept: "application/octet-stream" },
+          signal,
+        })
+      ).status,
+    ).toBe(404);
+
+    observed.failAt();
+
+    await unlink(join(publicRoot, "0-left"));
+
+    await unlink(join(publicRoot, "1-right"));
+
+    await writeFile(join(directories.b!, "live.bin"), recovered);
+
+    observed.registration(directories.b!).notify("live.bin");
+
+    await waitForPublicBytes(nextEvent, liveURL, recovered, signal);
+
+    const beforeFirstFailure = observed.records.length;
+    const reportsBeforeFirstFailure = reports.length;
+    const preparationsBeforeFirstFailure = preparations;
+
+    await unlink(alias);
+
+    await symlink(
+      join(directories["failed-one"]!, "nested", "deeper", "missing.bin"),
+      alias,
+      "file",
+    );
+
+    observed.registration(publicRoot).notify("live.bin");
+
+    const firstFailureWatch = await withAbort(
+      observed.waitFor(directories["failed-one"]!, beforeFirstFailure),
+      signal,
+    );
+
+    await nextReport(reportsBeforeFirstFailure + 1, (message) => message.includes("public source"));
+
+    expect(preparations - preparationsBeforeFirstFailure).toBe(2);
+
+    const beforeSecondFailure = observed.records.length;
+
+    await unlink(alias);
+
+    await symlink(join(directories["failed-two"]!, "missing.bin"), alias, "file");
+
+    observed.registration(publicRoot).notify("live.bin");
+
+    const secondFailureWatch = await withAbort(
+      observed.waitFor(directories["failed-two"]!, beforeSecondFailure),
+      signal,
+    );
+
+    expect(firstFailureWatch.closed).toBe(true);
+
+    const beforeObsoleteFailure = preparations;
+
+    firstFailureWatch.notify("missing.bin");
+
+    observed.registration(root).notify("failed-one");
+
+    expect(preparations).toBe(beforeObsoleteFailure);
+
+    expect([
+      ...new Uint8Array(await (await fetch(liveURL, { signal })).arrayBuffer()),
+    ]).toStrictEqual([...recovered]);
+
+    await writeFile(join(directories["failed-two"]!, "missing.bin"), repaired);
+
+    secondFailureWatch.notify("missing.bin");
+
+    await waitForPublicBytes(nextEvent, liveURL, repaired, signal);
+
+    const beforeStaleFailure = observed.records.length;
+    holdFailure = true;
+
+    await unlink(alias);
+
+    await symlink(join(directories["held-failure"]!, "missing.bin"), alias, "file");
+
+    observed.registration(publicRoot).notify("live.bin");
+
+    await withAbort(heldFailureStarted.promise, signal);
+
+    await unlink(alias);
+
+    await symlink(rootFile, alias, "file");
+
+    observed.registration(publicRoot).notify("live.bin");
+
+    await withAbort(obsoleteAborted.promise, signal);
+
+    releaseFailure.resolve();
+
+    await waitForPublicBytes(nextEvent, liveURL, final, signal);
+
+    expect(
+      observed.records
+        .slice(beforeStaleFailure)
+        .some(
+          (record) =>
+            record.directory === String(filesystem.realpathSync(directories["held-failure"]!)),
+        ),
+    ).toBe(false);
+
+    const finalChanged = bytes("root-file changed");
+
+    await writeFile(rootFile, finalChanged);
+
+    observed.registration(root).notify("root-target.bin");
+
+    await waitForPublicBytes(nextEvent, liveURL, finalChanged, signal);
+
+    bodyCompleted = true;
+  }, [
+    () => releaseFailure.resolve(),
+    () => {
+      deadline.close();
+      cleanup = createDeadline(15_000);
+    },
+    async () => {
+      if (!reader) return;
+
+      await withAbort(track(reader.cancel()), cleanup!.signal);
+      readerRetired = true;
+    },
+    async () => {
+      if (!startupSucceeded || !server) return;
+
+      await withAbort(track(server.close()), cleanup!.signal);
+      serverClosed = true;
+    },
+    () => {
+      if (!watches) return;
+      if (!startupSucceeded || !serverClosed)
+        throw new Error(`Retained Q10 watcher spies after uncertain server retirement: ${root}`);
+
+      watches.restore();
+      spiesRestored = true;
+    },
+    async () => {
+      if (
+        !bodyCompleted ||
+        !startupSucceeded ||
+        !readerRetired ||
+        !serverClosed ||
+        !spiesRestored ||
+        signal.aborted ||
+        cleanup!.signal.aborted ||
+        operationRejected ||
+        pendingOperations.size > 0
+      )
+        throw new Error(`Retained Q10 watcher fixture after failure or unsettled work: ${root}`);
+
+      await withAbort(track(unlinkFrameworkPackages(root)), cleanup!.signal);
+
+      if (cleanup!.signal.aborted || operationRejected || pendingOperations.size > 0)
+        throw new Error(`Retained Q10 watcher fixture after incomplete unlink: ${root}`);
+
+      cleanup!.close();
+      await rm(root, { recursive: true, force: true });
+    },
+    () => cleanup?.close(),
+  ]);
+}, 240_000);
