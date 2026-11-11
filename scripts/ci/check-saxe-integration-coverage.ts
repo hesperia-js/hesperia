@@ -1126,9 +1126,7 @@ async function captureSaxeIntegrationCoverage(repoPath: string): Promise<void> {
   if (!report.supportedFive.floorPassed) process.exitCode = 1;
 }
 
-function parseArguments(
-  args: readonly string[],
-):
+function parseArguments(args: readonly string[]):
   | { readonly help: true }
   | { readonly help: false; readonly capture: true }
   | {
