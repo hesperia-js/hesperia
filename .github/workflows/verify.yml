@@ -232,8 +232,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
-        with:
-          prefer-ubuntu-archive: ${{ runner.os == 'Linux' }}
       - name: "Build workspace packages"
         run: "bun run build"
       - name: "Install ordinary test browser engines and system dependencies"
@@ -400,8 +398,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
-        with:
-          prefer-ubuntu-archive: ${{ runner.os == 'Linux' }}
       - name: "Build Hesperia packages"
         run: "bun run build"
       - name: "Install all browser engines"
@@ -442,8 +438,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
-        with:
-          prefer-ubuntu-archive: ${{ runner.os == 'Linux' }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24.22.0
@@ -546,8 +540,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
-        with:
-          prefer-ubuntu-archive: ${{ runner.os == 'Linux' }}
       - name: "Build packages"
         run: "bun run build"
       - name: "Install all browser engines"
