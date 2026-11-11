@@ -250,6 +250,20 @@ jobs:
         if: "matrix.group == 'native-editor' && runner.os == 'Linux'"
         shell: bash
         run: "python3 -B editors/vscode/tests/test_linux_observer.py -v"
+      - name: "Check Saxe supported-mode coverage"
+        if: "matrix.group == 'bun-tests-ordinary'"
+        run: "bun run scripts/ci/capture-saxe-integration-coverage.ts"
+      - name: "Retain Saxe coverage evidence"
+        if: "always() && matrix.group == 'bun-tests-ordinary'"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "hesperia-saxe-coverage-${{ matrix.platform }}-${{ github.run_attempt }}"
+          if-no-files-found: ignore
+          include-hidden-files: true
+          path: |
+            .hesperia/saxe-integration-coverage/
+            .hesperia/coverage/runs/
+          retention-days: 14
       - name: "Run the original coverage group"
         env:
           COVERAGE_GROUP: ${{ matrix.group }}

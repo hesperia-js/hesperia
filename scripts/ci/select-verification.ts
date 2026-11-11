@@ -122,6 +122,12 @@ function fixtureOwner(path: string): Owners | undefined {
 
 function requiresFull(path: string): string | undefined {
   if (
+    path.startsWith("packages/tooling/src/vendor/saxe/") ||
+    path === "packages/tooling/src/builtin-assets.ts" ||
+    path === "tests/tooling/builtin-assets.test.ts"
+  )
+    return `Saxe integration coverage owner changed: ${path}`;
+  if (
     path === "package.json" ||
     path.endsWith("/package.json") ||
     /(?:^|\/)(?:bun\.lock|[^/]*lock\.json)$/u.test(path)

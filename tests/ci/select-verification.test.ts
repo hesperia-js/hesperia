@@ -45,6 +45,26 @@ async function withRepo(run: (repo: string) => Promise<void>, initialize = true)
   }
 }
 
+test.each([
+  "packages/tooling/src/vendor/saxe/parser.ts",
+  "packages/tooling/src/builtin-assets.ts",
+  "tests/tooling/builtin-assets.test.ts",
+])("Saxe integration owner changes select the full coverage gate: %s", async (path) => {
+  await withRepo(async (repo) => {
+    await put(repo, path, "export const value = 1;");
+
+    const base = commit(repo);
+
+    await put(repo, path, "export const value = 2;");
+
+    const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
+
+    expect(result.full).toBe(true);
+
+    expect(result.fallbackReasons).toContain(`Saxe integration coverage owner changed: ${path}`);
+  });
+});
+
 test("product impact selects owner and static dependent roots without unrelated roots", async () => {
   await withRepo(async (repo) => {
     const path = "packages/hesperia/src/data/feed.ts";
