@@ -1112,7 +1112,7 @@ test("normal stream exhaustion detaches the completed child from its parent", as
 
     const listener = registrations[0]?.[1];
 
-    expect(listener).toBeDefined();
+    expect(typeof listener).toBe("function");
 
     expect(removeListener).not.toHaveBeenCalled();
 
