@@ -1195,6 +1195,47 @@ test("public collisions reject before replacing the last published build", async
   }
 }, 45_000);
 
+test("development preserves public HTML bytes while instrumenting the application document", async () => {
+  const payload = new Uint8Array([
+    ...new TextEncoder().encode(
+      '<!doctype html><script type="module" src="/authored.js"></script>',
+    ),
+    0xff,
+    0x80,
+  ]);
+
+  for (const format of ["json", "typescript"] as const) {
+    const root = await createProjectRoot(`hesperia-public-html-${format}-`, format, "/shop");
+    const publicRoot = join(root, "public");
+    await mkdir(publicRoot);
+    await writeFile(join(publicRoot, "café #%.html"), payload);
+    const server = await devProject(root, { port: 0 });
+
+    try {
+      const document = await fetch(new URL("/shop/", server.url), {
+        headers: { accept: "text/html" },
+      });
+      expect(document.status).toBe(200);
+      expect(await document.text()).toContain("/shop/_hesperia/client.js");
+
+      const url = new URL("/shop/caf%C3%A9%20%23%25.html?request=one", server.url);
+      const head = await fetch(url, { method: "HEAD", headers: { accept: "text/html" } });
+      expect(head.status).toBe(200);
+      expect(head.headers.get("content-type")?.startsWith("text/html")).toBe(true);
+      expect(head.headers.get("content-length")).toBe(String(payload.length));
+      expect(new Uint8Array(await head.arrayBuffer())).toHaveLength(0);
+
+      const response = await fetch(url, { headers: { accept: "text/html" } });
+      expect(response.status).toBe(200);
+      expect([...new Uint8Array(await response.arrayBuffer())]).toStrictEqual([...payload]);
+      expect(response.headers.get("content-type")).toBe(head.headers.get("content-type"));
+      expect(response.headers.get("content-length")).toBe(head.headers.get("content-length"));
+    } finally {
+      await server.close();
+    }
+  }
+}, 120_000);
+
 async function verifyDevelopmentPublicFiles(format: ConfigurationFormat): Promise<void> {
   const root = await createProjectRoot(`hesperia-public-dev-${format}-`, format);
   const publicRoot = join(root, "public");
@@ -1445,6 +1486,127 @@ async function verifyDevelopmentLinkedTarget(format: ConfigurationFormat): Promi
 
 test("development follows a changed public link target and retains bytes on failure", async () => {
   for (const format of ["typescript", "json"] as const) await verifyDevelopmentLinkedTarget(format);
+}, 330_000);
+
+async function verifyDevelopmentFileLinks(format: ConfigurationFormat): Promise<void> {
+  const root = await createProjectRoot(`hesperia-q10-file-links-${format}-`, format);
+  const publicRoot = join(root, "public");
+  const rootTarget = join(root, "root-target.bin");
+  const firstTarget = join(root, "first-target.bin");
+  const secondTarget = join(root, "second-target.bin");
+  const middle = join(root, "middle.bin");
+  const missingDirectory = join(root, "missing-target");
+  const missingTarget = join(missingDirectory, "new.bin");
+  const rootLink = join(publicRoot, "root.bin");
+  const middleLink = join(publicRoot, "middle.bin");
+  const missingLink = join(publicRoot, "missing.bin");
+  const links = new Set<string>();
+  const reports: string[] = [];
+  const bytes = (value: string) => new TextEncoder().encode(value);
+  const first = bytes("first target");
+  const updated = bytes("root target updated");
+  const second = bytes("second target");
+  const repaired = bytes("missing target created");
+  let server: ProjectServer | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let deadline: ReturnType<typeof createDeadline> | undefined;
+
+  const link = async (target: string, path: string) => {
+    await symlink(target, path, "file");
+    links.add(path);
+  };
+  const retarget = async (path: string, target: string) => {
+    await unlink(path);
+    links.delete(path);
+    await link(target, path);
+  };
+
+  await withFixtureCleanup(async () => {
+    await mkdir(publicRoot);
+    await mkdir(missingDirectory);
+    await writeFile(rootTarget, first);
+    await writeFile(firstTarget, first);
+    await writeFile(secondTarget, second);
+    await link(firstTarget, middle);
+    await link(rootTarget, rootLink);
+    await link(middle, middleLink);
+    await link(firstTarget, missingLink);
+
+    server = await devProject(root, { port: 0, report: (message) => reports.push(message) });
+    deadline = createDeadline(150_000);
+    const signal = deadline.signal;
+    const rootURL = new URL("/root.bin", server.url);
+    const middleURL = new URL("/middle.bin", server.url);
+    const missingURL = new URL("/missing.bin", server.url);
+    for (const url of [rootURL, middleURL, missingURL]) {
+      const response = await fetch(url, { signal });
+      expect(response.status).toBe(200);
+      expect([...new Uint8Array(await response.arrayBuffer())]).toStrictEqual([...first]);
+    }
+
+    const events = await fetch(new URL("/_hesperia/events", server.url), { signal });
+    expect(events.status).toBe(200);
+    reader = events.body!.getReader();
+    const nextEvent = nextDevelopmentEvent(reader, signal);
+    await nextEvent();
+
+    await writeFile(rootTarget, updated);
+    await withAbort(
+      waitForPublicBytes(nextEvent, rootURL, updated, signal),
+      AbortSignal.timeout(45_000),
+    );
+
+    await retarget(middle, secondTarget);
+    await withAbort(
+      waitForPublicBytes(nextEvent, middleURL, second, signal),
+      AbortSignal.timeout(45_000),
+    );
+
+    const reportsBeforeFailure = reports.length;
+    await retarget(missingLink, missingTarget);
+    await withAbort(
+      (async () => {
+        for (;;) {
+          const event = await nextEvent();
+          if (
+            reports
+              .slice(reportsBeforeFailure)
+              .some(
+                (message) =>
+                  message
+                    .replaceAll("\\", "/")
+                    .includes("public source could not be resolved (broken or cyclic link)") &&
+                  message.replaceAll("\\", "/").includes(missingLink.replaceAll("\\", "/")) &&
+                  event.includes(JSON.stringify(message)),
+              )
+          )
+            return;
+        }
+      })(),
+      AbortSignal.timeout(45_000),
+    );
+
+    const lastGood = await fetch(missingURL, { signal });
+    expect(lastGood.status).toBe(200);
+    expect([...new Uint8Array(await lastGood.arrayBuffer())]).toStrictEqual([...first]);
+
+    await writeFile(missingTarget, repaired);
+    await withAbort(
+      waitForPublicBytes(nextEvent, missingURL, repaired, signal),
+      AbortSignal.timeout(45_000),
+    );
+  }, [
+    () => deadline?.close(),
+    () => reader?.cancel(),
+    () => server?.close(),
+    async () => {
+      for (const path of links) await unlink(path);
+    },
+  ]);
+}
+
+test("development follows file links and repairs newly missing targets from native changes", async () => {
+  for (const format of ["json", "typescript"] as const) await verifyDevelopmentFileLinks(format);
 }, 330_000);
 
 test("a missing-watch report can close a real changed development build", async () => {

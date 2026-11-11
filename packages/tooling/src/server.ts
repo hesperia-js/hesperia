@@ -1239,9 +1239,14 @@ export async function devProject(
 
       if (!response) return new Response(null, { status: 404 });
 
+      const { pathname: mountPath, assetPath } = current.host.mount;
+      const publicPath = mountPath === "/" ? url.pathname : url.pathname.slice(mountPath.length);
+
       if (
         request.method !== "GET" ||
-        !response.headers.get("content-type")?.startsWith("text/html")
+        url.pathname === assetPath ||
+        url.pathname.startsWith(`${assetPath}/`) ||
+        ("publicFiles" in current && current.publicFiles.has(publicPath))
       )
         return response;
 

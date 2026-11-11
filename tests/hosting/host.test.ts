@@ -107,6 +107,32 @@ describe("createHost", () => {
       readonly mutate: (build: CapturedPublicBuild) => void;
     }[] = [
       {
+        message: "duplicate public file storage path: assets/published.txt",
+        mutate(build) {
+          const records = build.hosting.publicFiles as (typeof build.hosting.publicFiles)[number][];
+          records.push({ ...records[0]! });
+        },
+      },
+      {
+        message: "public file storage paths conflict as a file and directory",
+        mutate(build) {
+          const records = build.hosting.publicFiles as (typeof build.hosting.publicFiles)[number][];
+          const original = records[0]!;
+          const urlPath = `${original.urlPath}/child`;
+          records.push({ ...original, relativePath: `${original.relativePath}/child`, urlPath });
+          (build.publicFiles as Map<string, Blob>).set(
+            urlPath,
+            build.publicFiles.get(original.urlPath)!,
+          );
+        },
+      },
+      {
+        message: "public file urlPath must already be canonical",
+        mutate(build) {
+          (build.hosting.publicFiles[0] as { urlPath: string }).urlPath = "/assets/%70ublished.txt";
+        },
+      },
+      {
         message: "public file URL path does not match its storage path",
         mutate(build) {
           (build.hosting.publicFiles[0] as { relativePath: string }).relativePath =
