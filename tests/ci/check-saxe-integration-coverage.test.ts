@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { checkSaxeIntegrationCoverage } from "../../scripts/ci/check-saxe-integration-coverage.ts";
@@ -144,8 +144,9 @@ function createHitCoverage(
 async function createCaptureFixture(
   requestedHits: number,
   indexSource = "export {};\n",
+  tempRoot = tmpdir(),
 ): Promise<CaptureFixture> {
-  const root = await mkdtemp(join(tmpdir(), "hesperia-saxe-integration-coverage-"));
+  const root = await mkdtemp(join(tempRoot, "hesperia-saxe-integration-coverage-"));
 
   roots.push(root);
 
@@ -403,6 +404,27 @@ test("enforces the 70 percent floor and leaves the 90 percent aim diagnostic", a
     percent: null,
     uncovered: [],
   });
+});
+
+test("accepts a capture under an alternate path to its repository parent", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "hesperia-saxe-parent-"));
+
+  try {
+    const target = join(parent, "target");
+    const alias = join(parent, "alias");
+
+    await mkdir(target);
+    await symlink(target, alias, "junction");
+
+    const fixture = await createCaptureFixture(7, "export {};\n", alias);
+    const report = await checkSaxeIntegrationCoverage(checkerOptions(fixture));
+
+    expect(report.status).toBe("passed");
+    expect(report.supportedFive.totals.lineHit).toBe(7);
+    expect(report.supportedFive.totals.lineFound).toBe(10);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
 });
 
 test("rejects stale candidates and non-integration evidence", async () => {

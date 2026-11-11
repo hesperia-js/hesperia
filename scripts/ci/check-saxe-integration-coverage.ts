@@ -540,10 +540,11 @@ function gitOutput(repoPath: string, args: readonly string[]): string {
 }
 
 function validateCandidate(repoPath: string, candidate: string): string {
-  const root = realpathSync.native(repoPath);
+  const root = resolve(repoPath);
+  const realRoot = realpathSync.native(root);
   const gitRoot = realpathSync.native(gitOutput(root, ["rev-parse", "--show-toplevel"]));
 
-  if (!samePath(root, gitRoot)) fail("checker repository path is not the Git worktree root");
+  if (!samePath(realRoot, gitRoot)) fail("checker repository path is not the Git worktree root");
 
   const head = gitOutput(root, ["rev-parse", "HEAD"]);
 
@@ -570,7 +571,16 @@ function validateRunRoot(repoPath: string, runRoot: string, runId: string): stri
 
   const realPath = realpathSync.native(requested);
 
-  if (!samePath(realPath, expected)) fail("run root resolves through a reparse point or symlink");
+  const realExpected = resolve(
+    realpathSync.native(repoPath),
+    ".hesperia",
+    "coverage",
+    "runs",
+    runId,
+  );
+
+  if (!samePath(realPath, realExpected))
+    fail("run root resolves through a reparse point or symlink");
 
   return realPath;
 }
