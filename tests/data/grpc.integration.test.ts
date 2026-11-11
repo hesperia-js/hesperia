@@ -1098,6 +1098,14 @@ test("normal stream exhaustion detaches the completed child from its parent", as
     [Symbol.asyncIterator]();
 
   try {
+    const firstItem = iterator.next();
+
+    pendingCalls.push(firstItem);
+
+    void firstItem.catch(() => undefined);
+
+    await expect(firstItem).resolves.toStrictEqual({ done: false, value: item });
+
     const registrations = addListener.mock.calls.filter(([type]) => type === "abort");
 
     expect(registrations).toHaveLength(1);
@@ -1107,14 +1115,6 @@ test("normal stream exhaustion detaches the completed child from its parent", as
     expect(listener).toBeDefined();
 
     expect(removeListener).not.toHaveBeenCalled();
-
-    const firstItem = iterator.next();
-
-    pendingCalls.push(firstItem);
-
-    void firstItem.catch(() => undefined);
-
-    await expect(firstItem).resolves.toStrictEqual({ done: false, value: item });
 
     const terminal = iterator.next();
 
