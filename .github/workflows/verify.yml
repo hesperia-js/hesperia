@@ -264,20 +264,6 @@ jobs:
         if: "matrix.group == 'native-editor' && runner.os == 'Linux'"
         shell: bash
         run: "python3 -B editors/vscode/tests/test_linux_observer.py -v"
-      - name: "Check Saxe supported-mode coverage"
-        if: "matrix.group == 'bun-tests-ordinary'"
-        run: "bun run scripts/ci/check-saxe-integration-coverage.ts --capture"
-      - name: "Retain Saxe coverage evidence"
-        if: "always() && matrix.group == 'bun-tests-ordinary'"
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: "hesperia-saxe-coverage-${{ matrix.platform }}-${{ github.run_attempt }}"
-          if-no-files-found: ignore
-          include-hidden-files: true
-          path: |
-            .hesperia/saxe-integration-coverage/
-            .hesperia/coverage/runs/
-          retention-days: 14
       - name: "Run the original coverage group"
         env:
           COVERAGE_GROUP: ${{ matrix.group }}
@@ -290,6 +276,17 @@ jobs:
             args+=("$CODE_PATH" "$CODE_VERSION")
           fi
           bun run scripts/ci/coverage-owner-launcher.ts scripts/ci/run-final-coverage.ts -- "${args[@]}"
+      - name: "Retain Saxe coverage evidence"
+        if: "always() && matrix.group == 'bun-tests-ordinary'"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "hesperia-saxe-coverage-${{ matrix.platform }}-${{ github.run_attempt }}"
+          if-no-files-found: ignore
+          include-hidden-files: true
+          path: |
+            .hesperia/saxe-integration-coverage/
+            .hesperia/coverage/runs/
+          retention-days: 14
       - name: "Retain the original group evidence"
         if: "always()"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

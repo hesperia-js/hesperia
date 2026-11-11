@@ -1004,7 +1004,7 @@ export async function checkSaxeIntegrationCoverage(options: {
   };
 }
 
-async function captureSaxeIntegrationCoverage(repoPath: string): Promise<void> {
+function assertCleanCaptureEnvironment(): void {
   if (
     process.env.BUN_OPTIONS ||
     process.env.NODE_OPTIONS ||
@@ -1014,7 +1014,11 @@ async function captureSaxeIntegrationCoverage(repoPath: string): Promise<void> {
     )
   )
     throw new Error("Saxe coverage cannot inherit runtime or coverage preload options");
+}
 
+export async function captureSaxeIntegrationCoverage(
+  repoPath: string,
+): Promise<SaxeIntegrationCoverageReport> {
   const candidate = gitOutput(repoPath, ["rev-parse", "HEAD"]);
 
   if (gitOutput(repoPath, ["status", "--porcelain=v1", "--untracked-files=all"]))
@@ -1031,13 +1035,25 @@ async function captureSaxeIntegrationCoverage(repoPath: string): Promise<void> {
   const stderrPath = join(evidence, "stderr.log");
   const stdoutFd = openSync(stdoutPath, "wx");
   const stderrFd = openSync(stderrPath, "wx");
+  const environment = { ...process.env };
+
+  for (const name of Object.keys(environment)) {
+    if (
+      name === "BUN_OPTIONS" ||
+      name === "NODE_OPTIONS" ||
+      name === "NODE_PATH" ||
+      name.startsWith("HESPERIA_COVERAGE_")
+    )
+      delete environment[name];
+  }
+
   let result: ReturnType<typeof spawnSync>;
 
   try {
     result = spawnSync(process.execPath, expectedCommand.slice(1), {
       cwd: repoPath,
       stdio: ["ignore", stdoutFd, stderrFd],
-      env: process.env,
+      env: environment,
       windowsHide: true,
     });
   } finally {
@@ -1133,7 +1149,7 @@ async function captureSaxeIntegrationCoverage(repoPath: string): Promise<void> {
 
   console.log(JSON.stringify({ evidence, runRoot, report }));
 
-  if (!report.supportedFive.floorPassed) process.exitCode = 1;
+  return report;
 }
 
 function parseArguments(args: readonly string[]):
@@ -1172,7 +1188,10 @@ if (import.meta.main) {
           "the command and capture inputs.",
       );
     } else if (args.capture) {
-      await captureSaxeIntegrationCoverage(resolve(import.meta.dir, "../.."));
+      assertCleanCaptureEnvironment();
+      const report = await captureSaxeIntegrationCoverage(resolve(import.meta.dir, "../.."));
+
+      if (!report.supportedFive.floorPassed) process.exitCode = 1;
     } else {
       const repoPath = resolve(import.meta.dir, "../..");
       const report = await checkSaxeIntegrationCoverage({

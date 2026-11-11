@@ -449,6 +449,26 @@ test("rejects a run root redirected outside its expected directory", async () =>
   );
 });
 
+test("capture CLI rejects inherited coverage options before running the owner", () => {
+  const result = Bun.spawnSync({
+    cmd: [
+      process.execPath,
+      "run",
+      resolve(import.meta.dir, "../../scripts/ci/check-saxe-integration-coverage.ts"),
+      "--capture",
+    ],
+    env: { ...process.env, HESPERIA_COVERAGE_TEST_MODE: "1" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  expect(result.exitCode).toBe(2);
+  expect(JSON.parse(new TextDecoder().decode(result.stderr))).toMatchObject({
+    status: "invalid-evidence",
+    message: "Saxe coverage cannot inherit runtime or coverage preload options",
+  });
+});
+
 test("rejects stale candidates and non-integration evidence", async () => {
   const fixture = await createCaptureFixture(7);
   const staleCandidate = JSON.parse(JSON.stringify(fixture.inputs)) as Record<string, unknown>;

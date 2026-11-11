@@ -64,7 +64,7 @@ test("full coverage runs four independent groups per OS before platform and comb
   }
 });
 
-test("full coverage retains Saxe evidence and fails the ordinary group when its gate fails", () => {
+test("full coverage retains Saxe evidence after running the original group", () => {
   const steps = workflow.jobs["coverage-groups"]!.steps as {
     name?: string;
     if?: string;
@@ -73,23 +73,16 @@ test("full coverage retains Saxe evidence and fails the ordinary group when its 
     "continue-on-error"?: boolean;
     with?: { path?: string; "include-hidden-files"?: boolean };
   }[];
-  const gateIndex = steps.findIndex((step) => step.name === "Check Saxe supported-mode coverage");
   const evidenceIndex = steps.findIndex((step) => step.name === "Retain Saxe coverage evidence");
   const ordinaryIndex = steps.findIndex((step) => step.name === "Run the original coverage group");
 
-  expect(gateIndex).toBeGreaterThanOrEqual(0);
+  expect(ordinaryIndex).toBeGreaterThanOrEqual(0);
 
-  expect(steps[gateIndex]?.if).toBe("matrix.group == 'bun-tests-ordinary'");
+  expect(steps[ordinaryIndex]?.run).toContain("scripts/ci/run-final-coverage.ts");
 
-  expect(steps[gateIndex]?.run).toBe(
-    "bun run scripts/ci/check-saxe-integration-coverage.ts --capture",
-  );
+  expect(steps[ordinaryIndex]?.["continue-on-error"]).not.toBe(true);
 
-  expect(steps[gateIndex]?.["continue-on-error"]).not.toBe(true);
-
-  expect(evidenceIndex).toBeGreaterThan(gateIndex);
-
-  expect(evidenceIndex).toBeLessThan(ordinaryIndex);
+  expect(evidenceIndex).toBeGreaterThan(ordinaryIndex);
 
   expect(steps[evidenceIndex]?.if).toBe("always() && matrix.group == 'bun-tests-ordinary'");
 
