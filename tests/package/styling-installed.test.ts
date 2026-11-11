@@ -117,6 +117,8 @@ function isInside(parent: string, child: string): boolean {
 }
 
 test("packed PostCSS, Tailwind, and StyleX work in an installed development and production app", async () => {
+  const stage = (name: string) => console.error(`[Q10-STYLING] ${name}`);
+  stage("create temporary workspace");
   const tempRoot = resolve(tmpdir());
 
   const workspace = await mkdtemp(join(tempRoot, "hesperia-styling-installed-"));
@@ -130,6 +132,7 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
   let passed = false;
 
   try {
+    stage("prepare package archives");
     if (!isInside(tempRoot, workspace)) throw new Error(`Unsafe temp workspace path: ${workspace}`);
 
     const tarballs = {
@@ -186,6 +189,7 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
       expect(entries).toContain("package/dist/index.d.ts");
     }
 
+    stage("create application");
     await run(
       packageRoot,
       resolve(packageRoot, "packages/create-hesperia/dist/cli.js"),
@@ -242,15 +246,19 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
 
     await writePackageManifest(manifestPath, applicationManifest);
 
+    stage("install application dependencies");
     await run(application, "install", "--ignore-scripts");
 
+    stage("check application");
     expect(await run(application, "run", "check")).toContain("Hesperia checking passed");
 
     const errors: string[] = [];
 
+    stage("launch browser");
     const browser = await chromium.launch();
 
     try {
+      stage("start development server");
       devServer = Bun.spawn(
         [process.execPath, "node_modules/@hesperia/tooling/dist/cli.js", "dev", "--port", "0"],
         {
@@ -262,6 +270,7 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
 
       const devUrl = await waitForServer(devServer);
 
+      stage("exercise development app");
       const devPage = await browser.newPage();
 
       devPage.on("pageerror", (error) => errors.push(error.message));
@@ -347,14 +356,17 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
 
       await devPage.close();
 
+      stage("stop development server");
       devServer.kill();
 
       await devServer.exited;
 
       devServer = undefined;
 
+      stage("build application");
       expect(await run(application, "run", "build")).toContain("Built browser application");
 
+      stage("start preview server");
       previewServer = Bun.spawn(
         [process.execPath, "node_modules/@hesperia/tooling/dist/cli.js", "preview", "--port", "0"],
         {
@@ -366,6 +378,7 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
 
       const previewUrl = await waitForServer(previewServer);
 
+      stage("exercise preview app");
       const previewPage = await browser.newPage();
 
       previewPage.on("pageerror", (error) => errors.push(error.message));
@@ -408,11 +421,14 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
 
       await previewPage.close();
     } finally {
+      stage("close browser");
       await browser.close();
     }
 
     passed = true;
   } finally {
+    stage("clean up application");
+
     if (devServer) {
       devServer.kill();
 

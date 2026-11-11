@@ -381,11 +381,12 @@ interface ObservedWatch {
   close(): void;
 }
 
-function observePublicWatches(root: string) {
+function observePublicWatches(root: string, context: () => unknown) {
   const originalWatch = filesystem.watch;
   const originalOpen = filesystemPromises.open;
   const canonicalRoot = String(filesystem.realpathSync(root));
   const records: ObservedWatch[] = [];
+  const requests: { raw: string; canonical?: string; state: string }[] = [];
   const waiting: { directory: string; after: number; resolve(record: ObservedWatch): void }[] = [];
   const heldNotifications = new Set<string>();
   const handleSpies = new Set<{ mockRestore(): void }>();
@@ -499,26 +500,38 @@ function observePublicWatches(root: string) {
     activeSpy.mockImplementation(((...args: Parameters<typeof filesystem.watch>) => {
       const raw = args[0];
 
-      if (typeof raw !== "string" || !isWithinFixture(raw))
-        return Reflect.apply(originalWatch, filesystem, args);
+      if (typeof raw !== "string") return Reflect.apply(originalWatch, filesystem, args);
+
+      const request = { raw, canonical: undefined as string | undefined, state: "outside fixture" };
+      requests.push(request);
+
+      if (!isWithinFixture(raw)) return Reflect.apply(originalWatch, filesystem, args);
 
       let directory: string;
 
       try {
         directory = String(filesystem.realpathSync(raw));
       } catch {
+        request.state = "unresolved";
         return Reflect.apply(originalWatch, filesystem, args);
       }
+
+      request.canonical = directory;
+      request.state = "outside canonical fixture";
 
       if (!isWithinFixture(directory)) return Reflect.apply(originalWatch, filesystem, args);
 
       const callbackIndex = typeof args[1] === "function" ? 1 : 2;
       const callback = (args as readonly unknown[])[callbackIndex];
 
+      request.state = "no callback";
+
       if (typeof callback !== "function") return Reflect.apply(originalWatch, filesystem, args);
 
-      if (directory === failDirectory)
+      if (directory === failDirectory) {
+        request.state = "controlled failure";
         throw new Error(`Controlled Q10 watch registration failure: ${directory}`);
+      }
 
       if (beforeRegistration && directory === beforeRegistration.directory) {
         const action = beforeRegistration;
@@ -526,6 +539,7 @@ function observePublicWatches(root: string) {
         action.run();
       }
 
+      request.state = "opening";
       const registration = Reflect.apply(originalWatch, filesystem, [
         ...args.slice(0, callbackIndex),
         function (this: filesystem.FSWatcher, event: string, filename: string | Buffer | null) {
@@ -547,6 +561,7 @@ function observePublicWatches(root: string) {
           Reflect.apply(callback, this, [event, filename]);
         },
       ]) as filesystem.FSWatcher;
+      request.state = "native watch returned";
       const close = registration.close.bind(registration);
       const record: ObservedWatch = {
         directory,
@@ -602,7 +617,18 @@ function observePublicWatches(root: string) {
       const canonical = String(filesystem.realpathSync(directory));
       const record = records.find((item) => !item.closed && item.directory === canonical);
 
-      if (!record) throw new Error(`No active native watch registration for ${directory}`);
+      if (!record)
+        throw new Error(
+          `No active native watch registration for ${directory}: ${JSON.stringify({
+            root,
+            canonicalRoot,
+            canonical,
+            requests,
+            records: records.map(({ directory, closed }) => ({ directory, closed })),
+            forwardedNativeCallbacks,
+            context: context(),
+          })}`,
+        );
 
       return record;
     },
@@ -1732,6 +1758,7 @@ test("public dependency replacement and rollback use the existing native watcher
   const reports: string[] = [];
   const reportWaiters: { after: number; match(message: string): boolean; resolve(): void }[] = [];
   let preparations = 0;
+  let lastPreparedWatchTargets: Awaited<ReturnType<typeof prepareBuild>>["watch"];
   let holdFailure = false;
   let server: ProjectServer | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -1785,7 +1812,11 @@ test("public dependency replacement and rollback use the existing native watcher
     await withAbort(track(writeFile(rootFile, final)), signal);
     await withAbort(track(symlink(join(directories.a!, "live.bin"), alias, "file")), signal);
 
-    const observed = observePublicWatches(root);
+    const observed = observePublicWatches(root, () => ({
+      preparations,
+      reports,
+      lastPreparedWatchTargets,
+    }));
     watches = observed;
     observed.holdNotifications(publicRoot, rootFile, ...Object.values(directories));
 
@@ -1811,7 +1842,9 @@ test("public dependency replacement and rollback use the existing native watcher
               attemptSignal?.addEventListener("abort", obsoleteAborted.resolve, { once: true });
 
             try {
-              return await prepareBuild(project, true);
+              const prepared = await prepareBuild(project, true);
+              lastPreparedWatchTargets = prepared.watch;
+              return prepared;
             } catch (error) {
               if (held) {
                 heldFailureStarted.resolve();
