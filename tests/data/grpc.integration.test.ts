@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { create, type MessageInitShape, type MessageShape } from "@bufbuild/protobuf";
 import {
   createContextValues,
@@ -1086,6 +1086,8 @@ test("normal stream exhaustion detaches the completed child from its parent", as
     contract: defineContract({ namespace: "grpc-normal-completion", operations: { stream } }),
   });
   const pendingCalls: Promise<unknown>[] = [];
+  const addListener = spyOn(parent.signal, "addEventListener");
+  const removeListener = spyOn(parent.signal, "removeEventListener");
   const iterator = stream
     .open(input, {
       abortSignal: parent.signal,
@@ -1096,6 +1098,16 @@ test("normal stream exhaustion detaches the completed child from its parent", as
     [Symbol.asyncIterator]();
 
   try {
+    const registrations = addListener.mock.calls.filter(([type]) => type === "abort");
+
+    expect(registrations).toHaveLength(1);
+
+    const listener = registrations[0]?.[1];
+
+    expect(listener).toBeDefined();
+
+    expect(removeListener).not.toHaveBeenCalled();
+
     const firstItem = iterator.next();
 
     pendingCalls.push(firstItem);
@@ -1116,6 +1128,12 @@ test("normal stream exhaustion detaches the completed child from its parent", as
 
     expect(nativeSignal?.aborted).toBe(false);
 
+    const removals = removeListener.mock.calls.filter(([type]) => type === "abort");
+
+    expect(removals).toHaveLength(1);
+
+    expect(removals[0]?.[1]).toBe(listener);
+
     parent.abort(new Error("late parent abort"));
 
     expect(nativeSignal?.aborted).toBe(false);
@@ -1133,6 +1151,10 @@ test("normal stream exhaustion detaches the completed child from its parent", as
     graph.dispose();
 
     await Promise.allSettled(pendingCalls);
+
+    addListener.mockRestore();
+
+    removeListener.mockRestore();
   }
 });
 
