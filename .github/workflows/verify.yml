@@ -60,8 +60,8 @@ jobs:
             import assert from "node:assert/strict";
             import { releaseVersion } from "./scripts/ci/check-release.ts";
             const branch = process.env.HESPERIA_HEAD_BRANCH;
-            assert.ok(/^(feature|fix)\/.+$/.test(branch) || branch.startsWith("release/"),
-              "Use feature/<name>, fix/<name>, or release/<VERSION> for repository branches");
+            assert.ok(/^(feature|fix|work)\/.+$/.test(branch) || branch.startsWith("release/"),
+              "Use feature/<name>, fix/<name>, work/<name>, or release/<VERSION> for repository branches");
             if (branch.startsWith("release/")) {
               const { version } = releaseVersion(branch.slice("release/".length));
               assert.equal(version, (await Bun.file("package.json").json()).version,
@@ -164,6 +164,7 @@ jobs:
         run: "bun run build"
       - name: "Install browser engines and system dependencies"
         if: "runner.os == 'Linux'"
+        timeout-minutes: 15
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install browser engines"
         if: "runner.os == 'Windows'"
@@ -232,12 +233,14 @@ jobs:
         run: "bun run build"
       - name: "Install ordinary test browser engines and system dependencies"
         if: "matrix.group == 'bun-tests-ordinary' && runner.os == 'Linux'"
+        timeout-minutes: 15
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install ordinary test browser engines"
         if: "matrix.group == 'bun-tests-ordinary' && runner.os == 'Windows'"
         run: "node node_modules/playwright/cli.js install chromium firefox webkit"
       - name: "Install CSS capture Chromium and system dependencies"
         if: "matrix.group == 'browser-css' && runner.os == 'Linux'"
+        timeout-minutes: 15
         run: "node node_modules/playwright/cli.js install --with-deps chromium"
       - name: "Install CSS capture Chromium"
         if: "matrix.group == 'browser-css' && runner.os == 'Windows'"
@@ -389,12 +392,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
-        with:
-          prefer-ubuntu-archive: ${{ runner.os == 'Linux' }}
       - name: "Build Hesperia packages"
         run: "bun run build"
       - name: "Install all browser engines"
         if: "runner.os == 'Linux'"
+        timeout-minutes: 15
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install all browser engines"
         if: "runner.os == 'Windows'"
@@ -430,8 +432,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
-        with:
-          prefer-ubuntu-archive: ${{ runner.os == 'Linux' }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24.22.0
@@ -461,6 +461,7 @@ jobs:
         run: "bun run build"
       - name: "Install browser engines and system dependencies"
         if: "runner.os == 'Linux'"
+        timeout-minutes: 15
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install browser engines"
         if: "runner.os == 'Windows'"
@@ -533,12 +534,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
-        with:
-          prefer-ubuntu-archive: ${{ runner.os == 'Linux' }}
       - name: "Build packages"
         run: "bun run build"
       - name: "Install all browser engines"
         if: "runner.os == 'Linux'"
+        timeout-minutes: 15
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install all browser engines"
         if: "runner.os == 'Windows'"
