@@ -34,8 +34,8 @@ lookup can leave older runs active. Release runs and runs whose provenance is
 uncertain can overlap newer ordinary runs. See [npm release setup](#npm-release-setup).
 
 For same-repository pull requests, CI accepts `feature/<name>`, `fix/<name>`,
-and `release/<VERSION>` source branches. Release branches must name a supported
-version matching the shared workspace version. Fork branch names are exempt;
+`work/<name>`, and `release/<VERSION>` source branches. Release branches must
+name a supported version matching the shared workspace version. Fork branch names are exempt;
 a fork's `release/*` branch does not authorize a release.
 
 ## Required checks
@@ -51,8 +51,8 @@ may be skipped only when a successful scope decision explicitly excludes it.
 
 The check rejects incorrectly named branches at PR verification time. To also
 restrict branch creation, create a separate branch ruleset targeting all branches,
-exclude `main`, `feature/**/*`, `fix/**/*`, and `release/**/*`, and enable
-**Restrict creations** without bypass actors. CI still validates release versions.
+exclude `main`, `feature/**/*`, `fix/**/*`, `work/**/*`, and `release/**/*`.
+Enable **Restrict creations** without bypass actors. CI still validates release versions.
 See [GitHub's ruleset guide](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/creating-rulesets-for-a-repository).
 
 Build, typechecking, lint, and formatting always run. The following gates run
