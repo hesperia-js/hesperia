@@ -360,6 +360,19 @@ test("one production build serves root and nested hosts without changing its ass
         requests.some((path) => path.includes("/_hesperia/assets/") && path.endsWith(".css")),
       ).toBe(true);
 
+      if (errors.length > 0) {
+        console.error(
+          "Production hosting browser errors: " +
+            JSON.stringify({
+              fixture: fixture.name,
+              pageURL: page.url(),
+              browserVersion: browser.version(),
+              responses: responses.filter((response) => response.status >= 400),
+              failedRequests,
+            }),
+        );
+      }
+
       expect(errors).toStrictEqual([]);
 
       await page.close();

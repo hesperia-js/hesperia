@@ -295,7 +295,10 @@ export function Invalid() {
             "Primary frame",
           );
 
-          const initialFrame = page.frame({ name: "primary" });
+          const initialElement = await page.locator('iframe[name="primary"]').elementHandle();
+          const initialFrame = await initialElement.contentFrame();
+
+          await initialElement.dispose();
 
           if (!initialFrame) throw new Error("The primary Embed browsing context was not found");
 
