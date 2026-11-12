@@ -296,6 +296,28 @@ for (const [name, engine] of Object.entries(engines)) {
     await page.locator("#count").waitFor();
     assert.deepEqual(errors, []);
 
+    await page.goto(applicationUrl + "form");
+
+    const nameInput = page.locator("#form-name");
+
+    await nameInput.fill(" aDa ");
+    await page.locator("#validate-form").click();
+    await page.waitForFunction(
+      () => document.querySelector("#form-status")?.textContent === "success",
+    );
+
+    assert.equal(await page.locator("#form-result").textContent(), "Hello, ADA");
+
+    await page.locator("#reset-form-validation").click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#form-status")?.textContent === "idle" &&
+        document.querySelector("#form-result")?.textContent === "",
+    );
+
+    assert.equal(await nameInput.inputValue(), " aDa ");
+    assert.deepEqual(errors, []);
+
     results.push(name);
   } catch (error) {
     throw new Error(name + " installed application failed", { cause: error });

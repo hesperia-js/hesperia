@@ -424,6 +424,7 @@ const built = await Bun.build({
     resolve(import.meta.dir, "fixtures/error-boundary.fixture.mts"),
     resolve(import.meta.dir, "fixtures/stream.fixture.mts"),
     resolve(import.meta.dir, "fixtures/embed.fixture.mts"),
+    resolve(import.meta.dir, "fixtures/form.tsx"),
     resolve(import.meta.dir, "fixtures/scheduling.tsx"),
     resolve(import.meta.dir, "fixtures/graphql.fixture.mts"),
   ],
@@ -506,6 +507,9 @@ const streamOutput = built.outputs.find(
 const embedOutput = built.outputs.find(
   (artifact) => artifact.kind === "entry-point" && artifact.path.endsWith("embed.fixture.js"),
 );
+const formOutput = built.outputs.find(
+  (artifact) => artifact.kind === "entry-point" && artifact.path.endsWith("form.js"),
+);
 const schedulingOutput = built.outputs.find(
   (artifact) => artifact.kind === "entry-point" && artifact.path.endsWith("scheduling.js"),
 );
@@ -530,6 +534,7 @@ if (
   !errorBoundaryOutput ||
   !streamOutput ||
   !embedOutput ||
+  !formOutput ||
   !schedulingOutput ||
   !graphqlOutput
 )
@@ -850,6 +855,15 @@ const browserServerOptions = {
 
     if (path === "/document.js")
       return new Response(documentOutput, { headers: { "content-type": "text/javascript" } });
+
+    if (path === "/form.js")
+      return new Response(formOutput, { headers: { "content-type": "text/javascript" } });
+
+    if (path === "/form")
+      return new Response(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Form validation</title></head><body><div id="app"></div><button id="remove" type="button">Remove form</button><button id="release-validation" type="button">Release delayed validations</button><output id="provider-completions">0</output><script type="module" src="/form.js"></script></body></html>',
+        { headers: { "content-type": "text/html" } },
+      );
 
     if (path === "/graphql.js")
       return new Response(graphqlOutput, { headers: { "content-type": "text/javascript" } });

@@ -57,6 +57,7 @@
     "@hesperia/tooling": "workspace:*",
     "@jridgewell/trace-mapping": "0.3.31",
     "@playwright/test": "1.65.0",
+    "@standard-schema/spec": "1.1.0",
     "@types/bun": "1.4.2",
     "@types/ws": "8.18.1",
     "@vscode/vsce": "4.0.0",
