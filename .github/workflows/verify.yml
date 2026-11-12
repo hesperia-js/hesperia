@@ -60,8 +60,8 @@ jobs:
             import assert from "node:assert/strict";
             import { releaseVersion } from "./scripts/ci/check-release.ts";
             const branch = process.env.HESPERIA_HEAD_BRANCH;
-            assert.ok(/^(feature|fix)\/.+$/.test(branch) || branch.startsWith("release/"),
-              "Use feature/<name>, fix/<name>, or release/<VERSION> for repository branches");
+            assert.ok(/^(feature|fix|work)\/.+$/.test(branch) || branch.startsWith("release/"),
+              "Use feature/<name>, fix/<name>, work/<name>, or release/<VERSION> for repository branches");
             if (branch.startsWith("release/")) {
               const { version } = releaseVersion(branch.slice("release/".length));
               assert.equal(version, (await Bun.file("package.json").json()).version,
@@ -180,6 +180,20 @@ jobs:
       - name: "Test tooling"
         if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'"
         run: "bun test --timeout=45000 tests/tooling"
+      - name: "Check Saxe supported-mode coverage"
+        if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'"
+        run: "bun run scripts/ci/check-saxe-integration-coverage.ts --capture"
+      - name: "Retain Saxe coverage evidence"
+        if: "always() && needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "hesperia-saxe-coverage-${{ matrix.platform }}-${{ github.run_attempt }}"
+          if-no-files-found: ignore
+          include-hidden-files: true
+          path: |
+            .hesperia/saxe-integration-coverage/
+            .hesperia/coverage/runs/
+          retention-days: 14
       - name: "Test routing"
         if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.routing == 'true'"
         run: "bun test --timeout=45000 tests/routing"
@@ -262,6 +276,17 @@ jobs:
             args+=("$CODE_PATH" "$CODE_VERSION")
           fi
           bun run scripts/ci/coverage-owner-launcher.ts scripts/ci/run-final-coverage.ts -- "${args[@]}"
+      - name: "Retain Saxe coverage evidence"
+        if: "always() && matrix.group == 'bun-tests-ordinary'"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "hesperia-saxe-coverage-${{ matrix.platform }}-${{ github.run_attempt }}"
+          if-no-files-found: ignore
+          include-hidden-files: true
+          path: |
+            .hesperia/saxe-integration-coverage/
+            .hesperia/coverage/runs/
+          retention-days: 14
       - name: "Retain the original group evidence"
         if: "always()"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

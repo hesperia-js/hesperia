@@ -181,7 +181,11 @@ export interface SeededCoverageSources {
 export interface CoverageMap {
   files(): string[];
 
-  fileCoverageFor(path: string): { toJSON(): CoverageFile };
+  fileCoverageFor(path: string): {
+    toJSON(): CoverageFile;
+
+    getLineCoverage(): Record<string, number>;
+  };
 
   toJSON(): Record<string, CoverageFile>;
 
