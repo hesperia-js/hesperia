@@ -52,10 +52,11 @@ version installed by Playwright. Firefox and WebKit keep their Playwright
 executables. Playwright does not guarantee compatibility with a different
 browser version.
 
-CI provisions Chrome for Testing 157.0.8103.78 for browser-bearing jobs and
-requires the executable path. It logs the download and executable SHA-256 hashes
-and checks the browser version. The hashes identify the downloaded bytes; they
-are not independently published Google checksums.
+CI provisions Chrome Headless Shell 157.0.8103.78 for browser-bearing jobs and
+requires the executable path. The shell supports headless runs only. CI logs the
+download and executable SHA-256 hashes and checks the browser version. The hashes
+identify the downloaded bytes; they are not independently published Google
+checksums.
 
 The VS Code extension has two real editor gates on Windows. Both use isolated
 workspace, user-data, and extension directories, and both are included in

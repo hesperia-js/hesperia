@@ -1,9 +1,9 @@
-name: "Set up Chrome for Testing"
-description: "Install the selected Chrome for Testing build for browser tests."
+name: "Set up Chrome Headless Shell"
+description: "Install the selected Chrome Headless Shell build for browser tests."
 runs:
   using: composite
   steps:
-    - name: "Install Chrome for Testing"
+    - name: "Install Chrome Headless Shell"
       shell: pwsh
       run: |
         $ErrorActionPreference = "Stop"
@@ -19,12 +19,12 @@ runs:
 
         if ($env:RUNNER_OS -eq "Linux") {
           $platform = "linux64"
-          $archiveName = "chrome-linux64.zip"
-          $executableName = "chrome-linux64/chrome"
+          $archiveName = "chrome-headless-shell-linux64.zip"
+          $executableName = "chrome-headless-shell-linux64/chrome-headless-shell"
         } elseif ($env:RUNNER_OS -eq "Windows") {
           $platform = "win64"
-          $archiveName = "chrome-win64.zip"
-          $executableName = "chrome-win64/chrome.exe"
+          $archiveName = "chrome-headless-shell-win64.zip"
+          $executableName = "chrome-headless-shell-win64/chrome-headless-shell.exe"
         } else {
           throw "Unsupported runner OS: $env:RUNNER_OS"
         }
@@ -55,25 +55,25 @@ runs:
 
         $executable = $executableItem.FullName
 
-        if ($env:RUNNER_OS -eq "Linux") {
-          $reportedVersion = (& $executable --version | Out-String).Trim()
+        if ($env:RUNNER_OS -eq "Windows") {
+          $versionInfo = $executableItem.VersionInfo
+          $fileVersion = if ([string]::IsNullOrWhiteSpace($versionInfo.FileVersion)) { "<unavailable>" } else { $versionInfo.FileVersion }
+          $productVersion = if ([string]::IsNullOrWhiteSpace($versionInfo.ProductVersion)) { "<unavailable>" } else { $versionInfo.ProductVersion }
+          Write-Output "Chrome Headless Shell PE FileVersion: $fileVersion"
+          Write-Output "Chrome Headless Shell PE ProductVersion: $productVersion"
+        }
 
-          if ($LASTEXITCODE -ne 0 -or $reportedVersion -notmatch "(^|\s)$([regex]::Escape($version))$") {
-            throw "Unexpected Chrome version: $reportedVersion"
-          }
-        } else {
-          $reportedVersion = (Get-Item -LiteralPath $executable).VersionInfo.ProductVersion
+        $reportedVersion = (& $executable --version | Out-String).Trim()
 
-          if ($reportedVersion -ne $version) {
-            throw "Unexpected Chrome version: $reportedVersion"
-          }
+        if ($LASTEXITCODE -ne 0 -or $reportedVersion -notmatch "(^|\s)$([regex]::Escape($version))$") {
+          throw "Unexpected Chrome Headless Shell version: $reportedVersion"
         }
 
         $executableHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $executable).Hash.ToLowerInvariant()
-        Write-Output "Chrome for Testing URL: $url"
-        Write-Output "Chrome for Testing archive SHA-256: $archiveHash"
-        Write-Output "Chrome for Testing executable: $executable"
-        Write-Output "Chrome for Testing executable SHA-256: $executableHash"
-        Write-Output "Chrome for Testing version: $reportedVersion"
+        Write-Output "Chrome Headless Shell URL: $url"
+        Write-Output "Chrome Headless Shell archive SHA-256: $archiveHash"
+        Write-Output "Chrome Headless Shell executable: $executable"
+        Write-Output "Chrome Headless Shell executable SHA-256: $executableHash"
+        Write-Output "Chrome Headless Shell version: $reportedVersion"
         "HESPERIA_CHROME_EXECUTABLE_PATH=$executable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         "HESPERIA_CHROME_EXPECTED_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
