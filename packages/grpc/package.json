@@ -8,8 +8,7 @@
     "directory": "packages/grpc"
   },
   "files": [
-    "dist",
-    "docs"
+    "dist"
   ],
   "type": "module",
   "sideEffects": false,
