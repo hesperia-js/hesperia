@@ -168,8 +168,9 @@ test("browser builds preserve finite imports and component-owned dynamic import 
     server = await previewProject(root, 0);
     const script = `import assert from "node:assert/strict";
       import { chromium, firefox, webkit } from ${JSON.stringify(pathToFileURL(resolve(import.meta.dir, "../../node_modules/playwright/index.mjs")).href)};
+      import { browserLaunchOptions } from ${JSON.stringify(pathToFileURL(resolve(import.meta.dir, "../support/browser-launch.mjs")).href)};
       for (const engine of [chromium, firefox, webkit]) {
-        const browser = await engine.launch();
+        const browser = await engine.launch(browserLaunchOptions(engine.name()));
         try {
           const page = await browser.newPage();
           await page.goto(${JSON.stringify(server.url.href)});

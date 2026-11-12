@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../../../support/browser-launch.mjs";
 import assert from "node:assert/strict";
 import { writeFile, rm } from "node:fs/promises";
 import { startBrowserDiagnostics } from "./browser-diagnostics.mjs";
@@ -405,7 +406,7 @@ observer.mark("phase-begin", { phase });
 let browser;
 
 try {
-  browser = await playwright[browserName].launch();
+  browser = await playwright[browserName].launch(browserLaunchOptions(browserName));
 } catch (error) {
   observer.mark("phase-failure", { phase, error });
   observer.dispose();

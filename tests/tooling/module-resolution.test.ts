@@ -487,10 +487,11 @@ export default defineConfig({
       const script = `
         import assert from "node:assert/strict";
         import { chromium, firefox, webkit } from ${JSON.stringify(pathToFileURL(resolve(import.meta.dir, "../../node_modules/playwright/index.mjs")).href)};
+        import { browserLaunchOptions } from ${JSON.stringify(pathToFileURL(resolve(import.meta.dir, "../support/browser-launch.mjs")).href)};
         const opened = [];
         try {
           for (const engine of [chromium, firefox, webkit]) {
-            const browser = await engine.launch();
+            const browser = await engine.launch(browserLaunchOptions(engine.name()));
             opened.push(browser);
             const page = await browser.newPage();
             const errors = [];

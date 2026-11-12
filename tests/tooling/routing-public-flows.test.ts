@@ -251,13 +251,18 @@ test("generated public routing flows preserve ownership, shared freshness, guard
     );
 
     const browserScript = join(root, "routing-public-flows.browser.mjs");
+    const browserLaunchHelper = join(root, "browser-launch.mjs");
 
     await copyFile(browserDriver, browserScript);
+    await copyFile(join(import.meta.dir, "../support/browser-launch.mjs"), browserLaunchHelper);
 
-    const child = Bun.spawn(["node", browserScript, browserRuntimeConfigPath], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    const child = Bun.spawn(
+      ["node", browserScript, browserRuntimeConfigPath, pathToFileURL(browserLaunchHelper).href],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
 
     const captureDriverPid = child.pid;
 

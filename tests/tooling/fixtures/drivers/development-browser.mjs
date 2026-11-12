@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../../../support/browser-launch.mjs";
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 
@@ -27,7 +28,7 @@ const opened = [];
 
 try {
   for (const engine of [chromium, firefox, webkit]) {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
     /** @type {BrowserEntry} */
     const entry = { browser, name: engine.name(), errors: [] };

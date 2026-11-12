@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { expect, test } from "bun:test";
 import { readPinnedAeoliaVersion } from "./package-manifest.ts";
 import { suppliedReleaseArchive } from "./release-candidate.ts";
@@ -315,7 +316,7 @@ test("packed tooling and hosting serve one built route at root and a nested moun
       }
     }
 
-    browser = await chromium.launch();
+    browser = await chromium.launch(browserLaunchOptions("chromium"));
 
     for (const fixture of mounts) {
       const page = await browser.newPage();

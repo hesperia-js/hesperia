@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../../../support/browser-launch.mjs";
 import assert from "node:assert/strict";
 import { installApplicationRoutingDiagnostics } from "./application-routing-diagnostics.mjs";
 import { startBrowserDiagnostics } from "./browser-diagnostics.mjs";
@@ -20,7 +21,7 @@ const { chromium, firefox, webkit } = /** @type {typeof import("playwright")} */
 for (const engine of [chromium, firefox, webkit]) {
   driver.mark("browser-launch", { engine: engine.name() });
 
-  const browser = await engine.launch();
+  const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
   driver.mark("browser-launched", { engine: engine.name(), version: browser.version() });
 

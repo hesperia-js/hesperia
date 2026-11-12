@@ -45,6 +45,19 @@ the browser tests exercise the bundle, including retained native objects and
 synchronous DOM updates. The first counter fixture alone does not establish the
 full milestone.
 
+To run Chromium tests with a specific Chrome for Testing executable, set
+`HESPERIA_CHROME_EXECUTABLE_PATH` to its absolute path. An empty, relative, or
+missing file path is rejected. Without the variable, tests use the Chromium
+version installed by Playwright. Firefox and WebKit keep their Playwright
+executables. Playwright does not guarantee compatibility with a different
+browser version.
+
+CI provisions Chrome Headless Shell 157.0.8103.78 for browser-bearing jobs and
+requires the executable path. The shell supports headless runs only. CI logs the
+download and executable SHA-256 hashes and checks the browser version. The hashes
+identify the downloaded bytes; they are not independently published Google
+checksums.
+
 The VS Code extension has two real editor gates on Windows. Both use isolated
 workspace, user-data, and extension directories, and both are included in
 `bun run check`. Install the pinned dependencies with

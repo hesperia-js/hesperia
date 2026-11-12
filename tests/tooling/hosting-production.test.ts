@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { afterEach, expect, test } from "bun:test";
 import { chromium } from "playwright";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -250,12 +251,17 @@ test("one production build serves root and nested hosts without changing its ass
 
     expect(earlyStyle).toBeDefined();
 
-    browser = await chromium.launch();
+    browser = await chromium.launch(browserLaunchOptions("chromium"));
 
     for (const fixture of mounts) {
       const page = await browser.newPage();
 
       const errors: string[] = [];
+
+      const consoleErrors: {
+        text: string;
+        location: ReturnType<import("playwright").ConsoleMessage["location"]>;
+      }[] = [];
 
       const requests: string[] = [];
 
@@ -266,7 +272,10 @@ test("one production build serves root and nested hosts without changing its ass
       page.on("pageerror", (error) => errors.push(error.message));
 
       page.on("console", (message) => {
-        if (message.type() === "error") errors.push(`console: ${message.text()}`);
+        if (message.type() === "error") {
+          errors.push(`console: ${message.text()}`);
+          consoleErrors.push({ text: message.text(), location: message.location() });
+        }
       });
 
       page.on("request", (request) => requests.push(new URL(request.url()).pathname));
@@ -358,6 +367,20 @@ test("one production build serves root and nested hosts without changing its ass
       expect(
         requests.some((path) => path.includes("/_hesperia/assets/") && path.endsWith(".css")),
       ).toBe(true);
+
+      if (errors.length > 0) {
+        console.error(
+          "Production hosting browser errors: " +
+            JSON.stringify({
+              fixture: fixture.name,
+              pageURL: page.url(),
+              browserVersion: browser.version(),
+              consoleErrors,
+              responses: responses.filter((response) => response.status >= 400),
+              failedRequests,
+            }),
+        );
+      }
 
       expect(errors).toStrictEqual([]);
 
