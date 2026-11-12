@@ -555,10 +555,15 @@ const importedMarkupFiles = new Map(
 );
 startupJournal.mark("host-create-begin");
 
-const importedMarkupHost = await createHost({
-  hosting: importedMarkupBuild.hosting,
-  files: importedMarkupFiles,
-});
+const importedMarkupHost = await createHost(
+  "publicFiles" in importedMarkupBuild
+    ? {
+        hosting: importedMarkupBuild.hosting,
+        files: importedMarkupFiles,
+        publicFiles: importedMarkupBuild.publicFiles,
+      }
+    : { hosting: importedMarkupBuild.hosting, files: importedMarkupFiles },
+);
 
 startupJournal.mark("host-create-end");
 
