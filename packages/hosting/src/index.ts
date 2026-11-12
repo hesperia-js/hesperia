@@ -2,12 +2,13 @@ import {
   captureInput,
   resolveMountPath,
   validateAssets,
+  validatePublicFiles,
   assertCanonicalAssetPath,
 } from "./captured-build.ts";
 
-/** A verified browser artifact inventory captured for one host instance. */
+/** A verified browser artifact inventory in the legacy captured record format. */
 export interface HostingRecordV1 {
-  /** The only supported captured record version. */
+  /** The legacy captured record version. */
   readonly version: 1;
   /** The build mode that produced the captured assets. */
   readonly mode: "development" | "production";
@@ -18,6 +19,37 @@ export interface HostingRecordV1 {
   /** The complete immutable asset inventory and its expected SHA-256 digests. */
   readonly assets: readonly HostingAssetRecord[];
 }
+
+/** One unimported public file captured for exact requests under the application mount. */
+export interface HostingPublicFileRecord {
+  /** Raw slash-separated path relative to the public source directory, without a leading slash. */
+  readonly relativePath: string;
+  /** Canonical application-relative URL path for this file. */
+  readonly urlPath: string;
+  /** Lowercase, unprefixed SHA-256 digest of the captured file bytes. */
+  readonly sha256: string;
+  /** Response media type for this file. */
+  readonly contentType: string;
+}
+
+/** A captured hosting record with a separate inventory for public files. */
+export interface HostingRecordV2 {
+  /** The public-file captured record version. */
+  readonly version: 2;
+  /** The build mode that produced the captured assets. */
+  readonly mode: "development" | "production";
+  /** The canonical mount path saved with the standalone build. */
+  readonly standaloneMountURL: string;
+  /** The full logical `/assets/...` key of the browser startup module. */
+  readonly startupAsset: string;
+  /** The complete immutable managed-asset inventory and its expected digests. */
+  readonly assets: readonly HostingAssetRecord[];
+  /** The complete immutable public-file inventory and its expected digests. */
+  readonly publicFiles: readonly HostingPublicFileRecord[];
+}
+
+/** A hosting record version accepted by this package. */
+export type HostingRecord = HostingRecordV1 | HostingRecordV2;
 
 /** One browser asset in a captured hosting record. */
 export interface HostingAssetRecord {
@@ -37,6 +69,19 @@ export interface CapturedBrowserBuild {
   readonly files: ReadonlyMap<string, Blob>;
 }
 
+/** A captured build with separate managed-asset and public-file byte maps. */
+export interface CapturedPublicBuild {
+  /** Versioned deployment settings and both captured inventories. */
+  readonly hosting: HostingRecordV2;
+  /** Managed browser asset bytes keyed by the exact logical path in `hosting.assets`. */
+  readonly files: ReadonlyMap<string, Blob>;
+  /** Public-file bytes keyed by the exact application URL path in `hosting.publicFiles`. */
+  readonly publicFiles: ReadonlyMap<string, Blob>;
+}
+
+/** A captured build version accepted by this package. */
+export type CapturedBuild = CapturedBrowserBuild | CapturedPublicBuild;
+
 /** Optional per-host deployment selection. */
 export interface HostSelection {
   /** Path-only mount override; raw Unicode is canonicalized before use. */
@@ -54,24 +99,27 @@ export interface ApplicationHost {
   };
 
   /**
-   * Serve the wrapper or captured assets in the managed namespace and HTML
-   * GET/HEAD document requests under the application mount. Managed namespace
-   * misses return 404; unclaimed backend requests return `undefined` so another
-   * host can try them. Other methods for a known managed resource return 405.
+   * Serve the wrapper or captured assets in the managed namespace, exact public
+   * file GET/HEAD requests under the application mount, and HTML GET/HEAD
+   * document requests. Managed namespace misses return 404. Public-file misses
+   * follow the HTML document fallback or backend fallthrough policy. Other
+   * methods for known managed resources return 405; other public-file methods
+   * return `undefined` so another host can try them.
    */
   handle(request: Request): Response | undefined;
 }
 
 /**
  * Load and validate a completed production build directory, without its source tree.
- * Returns the saved hosting metadata and a Blob map containing exactly its verified
- * browser assets. Rejects missing, modified, unsafe, or development builds before
- * returning. The build directory must be real; the build record and captured asset
- * paths must not contain symbolic links.
+ * Returns the saved hosting metadata and maps containing the verified bytes for
+ * each inventory. Version 1 builds return the legacy managed-asset map; version 2
+ * builds return separate managed-asset and public-file maps. Rejects missing,
+ * modified, unsafe, or development builds before returning. The build directory
+ * must be real; the build record and captured paths must not contain symbolic links.
  * If publication retires a capture while it is being read, retries only when the
  * published record changed, for at most three attempts. Unchanged corruption fails.
  */
-export async function readBuild(buildDirectory: string): Promise<CapturedBrowserBuild> {
+export async function readBuild(buildDirectory: string): Promise<CapturedBuild> {
   return (await import("./read-build.ts")).readBuildDirectory(buildDirectory);
 }
 
@@ -83,18 +131,25 @@ export async function readBuild(buildDirectory: string): Promise<CapturedBrowser
  * The build and selection are copied synchronously before the first digest
  * operation, so later caller changes cannot alter the host's inventory.
  *
+ * Version 2 public files are served only at their exact mount-relative URL paths
+ * for GET and HEAD requests. Public files stay separate from managed `/assets/...`
+ * files under `/_hesperia/assets/...`. Public misses follow the existing HTML
+ * document fallback or backend fallthrough policy; non-GET/HEAD methods remain
+ * available to another host.
+ *
  * The promise rejects with `TypeError` when the record version or mode is
- * unsupported, a mount or asset key is unsafe or noncanonical, the startup
- * asset is absent, the inventory does not exactly match the file map, a media
+ * unsupported, a mount or inventory path is unsafe or noncanonical, the startup
+ * asset is absent, either inventory does not exactly match its file map, a media
  * type or digest is invalid, or the selection contains unknown fields.
  */
 export async function createHost(
-  build: CapturedBrowserBuild,
+  build: CapturedBuild,
   selection?: HostSelection,
 ): Promise<ApplicationHost> {
   const snapshot = captureInput(build, selection);
   const mountPathname = resolveMountPath(snapshot);
   const assets = await validateAssets(snapshot);
+  const publicFiles = await validatePublicFiles(snapshot);
   const startup = assets.get(snapshot.startupAsset as string);
 
   if (!startup) throw new TypeError("startupAsset is missing from the captured asset inventory");
@@ -148,6 +203,12 @@ export async function createHost(
       }
 
       if (!isWithinPathname(pathname, mountPathname)) return undefined;
+
+      const publicPath = mountPathname === "/" ? pathname : pathname.slice(mountPathname.length);
+      const publicFile = publicFiles.get(publicPath);
+
+      if (publicFile && (request.method === "GET" || request.method === "HEAD"))
+        return staticResponse(request, publicFile.blob, publicFile.contentType);
 
       if (
         (request.method !== "GET" && request.method !== "HEAD") ||
