@@ -1,12 +1,11 @@
 import { browserLaunchOptions } from "../support/browser-launch.mjs";
-import { createHost, readBuild } from "@hesperia/hosting";
 import { afterEach, expect, test } from "bun:test";
 import { chromium } from "playwright";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prepareBuild, writeBuild } from "../../packages/tooling/src/project.ts";
-import type { ProjectServer } from "../../packages/tooling/src/server.ts";
+import { previewProject, type ProjectServer } from "../../packages/tooling/src/server.ts";
 import { linkFrameworkPackages, unlinkFrameworkPackages } from "./fixture-dependencies.ts";
 
 const roots: string[] = [];
@@ -21,37 +20,6 @@ afterEach(async () => {
 
 function sha256(bytes: Uint8Array): string {
   return new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
-}
-
-const favicon =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><path d="M0 0h1v1H0z"/></svg>';
-
-async function startHostingFixture(root: string, mountURL: string): Promise<ProjectServer> {
-  const build = await readBuild(join(root, ".hesperia", "build"));
-  const host = await createHost(build, { mountURL });
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch(request) {
-      if (
-        new URL(request.url).pathname === "/favicon.ico" &&
-        (request.method === "GET" || request.method === "HEAD")
-      ) {
-        return new Response(request.method === "HEAD" ? null : favicon, {
-          headers: { "content-type": "image/svg+xml" },
-        });
-      }
-
-      return host.handle(request) ?? new Response(null, { status: 404 });
-    },
-  });
-
-  return {
-    url: server.url,
-    async close() {
-      await server.stop(true);
-    },
-  };
 }
 
 test("one production build serves root and nested hosts without changing its assets", async () => {
@@ -172,9 +140,9 @@ test("one production build serves root and nested hosts without changing its ass
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 
   try {
-    rootServer = await startHostingFixture(root, "/");
+    rootServer = await previewProject(root, 0, { mountURL: "/" });
 
-    dashboardServer = await startHostingFixture(root, "/dashboard");
+    dashboardServer = await previewProject(root, 0, { mountURL: "/dashboard" });
 
     const mounts = [
       { name: "root", server: rootServer, mount: "", path: "/early" },
@@ -188,14 +156,6 @@ test("one production build serves root and nested hosts without changing its ass
 
     for (const fixture of mounts) {
       const assetBase = fixture.mount + "/_hesperia";
-
-      const icon = await fetch(new URL("/favicon.ico", fixture.server.url));
-
-      expect(icon.status).toBe(200);
-
-      expect(icon.headers.get("content-type")).toBe("image/svg+xml");
-
-      expect(await icon.text()).toContain('<svg xmlns="http://www.w3.org/2000/svg"');
 
       const document = await fetch(new URL(fixture.path, fixture.server.url), {
         headers: { accept: "text/html" },
