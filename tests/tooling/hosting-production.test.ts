@@ -258,6 +258,11 @@ test("one production build serves root and nested hosts without changing its ass
 
       const errors: string[] = [];
 
+      const consoleErrors: {
+        text: string;
+        location: ReturnType<import("playwright").ConsoleMessage["location"]>;
+      }[] = [];
+
       const requests: string[] = [];
 
       const responses: { path: string; status: number }[] = [];
@@ -267,7 +272,10 @@ test("one production build serves root and nested hosts without changing its ass
       page.on("pageerror", (error) => errors.push(error.message));
 
       page.on("console", (message) => {
-        if (message.type() === "error") errors.push(`console: ${message.text()}`);
+        if (message.type() === "error") {
+          errors.push(`console: ${message.text()}`);
+          consoleErrors.push({ text: message.text(), location: message.location() });
+        }
       });
 
       page.on("request", (request) => requests.push(new URL(request.url()).pathname));
@@ -367,6 +375,7 @@ test("one production build serves root and nested hosts without changing its ass
               fixture: fixture.name,
               pageURL: page.url(),
               browserVersion: browser.version(),
+              consoleErrors,
               responses: responses.filter((response) => response.status >= 400),
               failedRequests,
             }),
