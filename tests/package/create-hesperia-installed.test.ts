@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { expect, test } from "bun:test";
 import { readPinnedAeoliaVersion, writePackageManifest } from "./package-manifest.ts";
 import { suppliedReleaseArchive } from "./release-candidate.ts";
@@ -605,7 +606,7 @@ test("packed creator defaults to Elysia and builds a selectable no-host applicat
       await writeFile(startupFile, startupBytes);
     }
 
-    browser = await chromium.launch();
+    browser = await chromium.launch(browserLaunchOptions("chromium"));
 
     const page = await browser.newPage();
 

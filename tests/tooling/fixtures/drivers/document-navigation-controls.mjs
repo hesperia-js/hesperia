@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../../../support/browser-launch.mjs";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -57,7 +58,7 @@ const failures = [];
 
 try {
   for (const engine of [chromium, firefox, webkit]) {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
     let completed = 0;
 
     try {

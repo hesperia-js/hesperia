@@ -1,0 +1,79 @@
+name: "Set up Chrome for Testing"
+description: "Install the selected Chrome for Testing build for browser tests."
+runs:
+  using: composite
+  steps:
+    - name: "Install Chrome for Testing"
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $ProgressPreference = "SilentlyContinue"
+        $version = "157.0.8103.78"
+
+        if ($env:RUNNER_ARCH -ne "X64") {
+          throw "Unsupported Chrome for Testing architecture: $env:RUNNER_ARCH"
+        }
+
+        $directory = Join-Path $env:RUNNER_TEMP ("hesperia-chrome-" + [guid]::NewGuid())
+        New-Item -ItemType Directory -Path $directory | Out-Null
+
+        if ($env:RUNNER_OS -eq "Linux") {
+          $platform = "linux64"
+          $archiveName = "chrome-linux64.zip"
+          $executableName = "chrome-linux64/chrome"
+        } elseif ($env:RUNNER_OS -eq "Windows") {
+          $platform = "win64"
+          $archiveName = "chrome-win64.zip"
+          $executableName = "chrome-win64/chrome.exe"
+        } else {
+          throw "Unsupported runner OS: $env:RUNNER_OS"
+        }
+
+        $archive = Join-Path $directory $archiveName
+        $url = "https://storage.googleapis.com/chrome-for-testing-public/$version/$platform/$archiveName"
+        Invoke-WebRequest -Uri $url -OutFile $archive
+        $archiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+
+        if ($env:RUNNER_OS -eq "Linux") {
+          & unzip -q $archive -d $directory
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Chrome archive extraction failed"
+          }
+        } else {
+          Expand-Archive -LiteralPath $archive -DestinationPath $directory
+        }
+
+        $executable = Join-Path $directory $executableName
+
+        $executableItem = Get-Item -LiteralPath $executable
+
+        if ($executableItem -isnot [System.IO.FileInfo] -or $executableItem.LinkType -or
+          -not [System.IO.Path]::IsPathFullyQualified($executableItem.FullName)) {
+          throw "Chrome executable must be an absolute regular file: $executable"
+        }
+
+        $executable = $executableItem.FullName
+
+        if ($env:RUNNER_OS -eq "Linux") {
+          $reportedVersion = (& $executable --version | Out-String).Trim()
+
+          if ($LASTEXITCODE -ne 0 -or $reportedVersion -notmatch "(^|\s)$([regex]::Escape($version))$") {
+            throw "Unexpected Chrome version: $reportedVersion"
+          }
+        } else {
+          $reportedVersion = (Get-Item -LiteralPath $executable).VersionInfo.ProductVersion
+
+          if ($reportedVersion -ne $version) {
+            throw "Unexpected Chrome version: $reportedVersion"
+          }
+        }
+
+        $executableHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $executable).Hash.ToLowerInvariant()
+        Write-Output "Chrome for Testing URL: $url"
+        Write-Output "Chrome for Testing archive SHA-256: $archiveHash"
+        Write-Output "Chrome for Testing executable: $executable"
+        Write-Output "Chrome for Testing executable SHA-256: $executableHash"
+        Write-Output "Chrome for Testing version: $reportedVersion"
+        "HESPERIA_CHROME_EXECUTABLE_PATH=$executable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "HESPERIA_CHROME_EXPECTED_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append

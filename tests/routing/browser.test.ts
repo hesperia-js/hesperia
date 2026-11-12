@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chromium, firefox, webkit } from "playwright";
 import { appendFileSync, mkdirSync, mkdtempSync } from "node:fs";
@@ -47,7 +48,7 @@ afterAll(() => {
 for (const engine of [chromium, firefox, webkit]) {
   for (const legacy of [false, true]) {
     test(`${engine.name()} ${legacy ? "legacy" : "native"}: fragment navigation preserves the page and restores presentation on Back`, async () => {
-      const browser = await engine.launch();
+      const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
       try {
         const page = await browser.newPage();
@@ -215,7 +216,7 @@ for (const engine of [chromium, firefox, webkit]) {
   }
 
   test(`${engine.name()}: history tracking preserves native calls and distinct entries during nested writes`, async () => {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
     try {
       const page = await browser.newPage();
@@ -331,7 +332,7 @@ for (const engine of [chromium, firefox, webkit]) {
   }, 20_000);
 
   test(`${engine.name()}: direct history writes retain author state across router adoption and native traversal`, async () => {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
     try {
       const page = await browser.newPage();
@@ -461,7 +462,7 @@ for (const engine of [chromium, firefox, webkit]) {
   }, 20_000);
 
   test(`${engine.name()}: native links navigate once and preserve modified/download/target/platform behavior`, async () => {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
     try {
       const page = await browser.newPage();
@@ -559,7 +560,7 @@ for (const engine of [chromium, firefox, webkit]) {
   }, 20_000);
 
   test(`${engine.name()}: browser Back restores a route through the history adapter`, async () => {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
     try {
       const page = await browser.newPage();
@@ -630,7 +631,7 @@ for (const engine of [chromium, firefox, webkit]) {
   }, 20_000);
 
   test(`${engine.name()}: native Back redirects without leaving the physical history entry behind`, async () => {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
     try {
       const page = await browser.newPage();
@@ -679,7 +680,7 @@ for (const engine of [chromium, firefox, webkit]) {
   }, 20_000);
 
   test(`${engine.name()}: a Back veto restores the exact committed browser entry`, async () => {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
     try {
       const page = await browser.newPage();
@@ -725,7 +726,7 @@ for (const engine of [chromium, firefox, webkit]) {
   }, 20_000);
 
   test(`${engine.name()}: fallback Back keeps the outgoing native page during an async veto`, async () => {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
     try {
       const page = await browser.newPage();
@@ -850,7 +851,7 @@ for (const engine of [chromium, firefox, webkit]) {
       try {
         mark("browser-launch");
 
-        browser = await engine.launch();
+        browser = await engine.launch(browserLaunchOptions(engine.name()));
 
         browser.on("disconnected", () => mark("browser-disconnected"));
 

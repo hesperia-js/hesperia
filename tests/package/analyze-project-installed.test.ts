@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { expect, test } from "bun:test";
 import { readPinnedAeoliaVersion, writePackageManifest } from "./package-manifest.ts";
 import { suppliedReleaseArchive } from "./release-candidate.ts";
@@ -201,7 +202,7 @@ test("packed packages run an installed analyzeProject plugin against one pinned 
       reader.releaseLock();
     }
 
-    const browser = await chromium.launch();
+    const browser = await chromium.launch(browserLaunchOptions("chromium"));
 
     try {
       const page = await browser.newPage();

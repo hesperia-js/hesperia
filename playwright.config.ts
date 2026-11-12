@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { browserLaunchOptions } from "./tests/support/browser-launch.mjs";
 
 const browserPort = process.env.HESPERIA_BROWSER_PORT ?? "4178";
 const browserURL = `http://127.0.0.1:${browserPort}`;
@@ -16,7 +17,10 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"], launchOptions: browserLaunchOptions("chromium") },
+    },
     { name: "firefox", use: { ...devices["Desktop Firefox"] } },
     { name: "webkit", use: { ...devices["Desktop Safari"] } },
   ],

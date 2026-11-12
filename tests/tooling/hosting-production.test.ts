@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { afterEach, expect, test } from "bun:test";
 import { chromium } from "playwright";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -250,7 +251,7 @@ test("one production build serves root and nested hosts without changing its ass
 
     expect(earlyStyle).toBeDefined();
 
-    browser = await chromium.launch();
+    browser = await chromium.launch(browserLaunchOptions("chromium"));
 
     for (const fixture of mounts) {
       const page = await browser.newPage();
