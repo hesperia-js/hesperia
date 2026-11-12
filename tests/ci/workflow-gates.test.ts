@@ -116,11 +116,14 @@ function execute(script: string, env: Record<string, string>) {
 const { version } = await Bun.file(new URL("../../package.json", import.meta.url)).json();
 
 describe("repository branch gate", () => {
-  test("accepts feature, fix, and the authored release version", () => {
+  test("accepts feature, fix, work, and the authored release version", () => {
     for (const branch of [
       "feature/compiler",
       "feature/compiler/scopes",
       "fix/hotfix",
+      "work/x",
+      "work/cli-checks",
+      "work/cli/checks",
       `release/${version}`,
     ]) {
       expect(execute(branchScript, { HESPERIA_HEAD_BRANCH: branch }).exitCode).toBe(0);
@@ -133,6 +136,8 @@ describe("repository branch gate", () => {
       "feature/",
       "fix/",
       "hotfix/parser",
+      "work/",
+      "workspace/cli",
       "release/v1.0.0",
       "release/01.0.0",
       "release/1.0.0+build",
