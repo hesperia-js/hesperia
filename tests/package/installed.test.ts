@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { readPinnedAeoliaVersion, writePackageManifest } from "./package-manifest.ts";
 import { suppliedReleaseArchive } from "./release-candidate.ts";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { packedFile, packedManifest } from "../../scripts/ci/release-candidate.ts";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -13,6 +14,7 @@ test("packed packages serve a custom backend data flow in all three browser engi
   const workspace = await mkdtemp(join(tmpdir(), "hesperia-installed-"));
 
   const application = join(workspace, "application with spaces");
+  const channelEvidence: Record<string, unknown> = { application };
 
   async function run(cwd: string, ...args: string[]): Promise<string> {
     const process_ = Bun.spawn([process.execPath, ...args], {
@@ -60,6 +62,8 @@ test("packed packages serve a custom backend data flow in all three browser engi
       "@hesperia/tooling": await pack(resolve(packageRoot, "packages/tooling")),
       "@hesperia/language-server": await pack(resolve(packageRoot, "packages/language-server")),
     };
+
+    channelEvidence.archives = tarballs;
 
     await run(
       packageRoot,
@@ -112,6 +116,17 @@ test("packed packages serve a custom backend data flow in all three browser engi
       ),
     );
 
+    const schedulingRoute = join(application, "src/routes/scheduling");
+
+    await mkdir(schedulingRoute, { recursive: true });
+    await writeFile(
+      join(schedulingRoute, "+page.tsx"),
+      await readFile(
+        new URL("./fixtures/installed-app/src/routes/scheduling/+page.tsx", import.meta.url),
+        "utf8",
+      ),
+    );
+
     const manifestPath = join(application, "package.json");
 
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
@@ -135,8 +150,21 @@ test("packed packages serve a custom backend data flow in all three browser engi
 
     const require = createRequire(manifestPath);
 
-    expect(require.resolve("@hesperia/compiler")).toContain(
-      join("node_modules", "@hesperia", "compiler"),
+    const compilerRoot = await realpath(join(application, "node_modules/@hesperia/compiler"));
+    const packedCompiler = (await packedManifest(tarballs["@hesperia/compiler"])) as {
+      exports: Record<string, { default?: string }>;
+    };
+    const installedCompiler = JSON.parse(
+      await readFile(join(compilerRoot, "package.json"), "utf8"),
+    );
+    const compilerEntry = packedCompiler.exports["."]?.default;
+
+    expect(installedCompiler).toEqual(packedCompiler);
+
+    if (typeof compilerEntry !== "string") throw new Error("Compiler archive has no default entry");
+
+    expect(await realpath(require.resolve("@hesperia/compiler"))).toBe(
+      await realpath(resolve(compilerRoot, compilerEntry)),
     );
 
     expect(() => require.resolve("hesperia/compiler")).toThrow();
@@ -170,6 +198,14 @@ test("packed packages serve a custom backend data flow in all three browser engi
     );
 
     await writeFile(
+      join(application, "channel-consumer-types.ts"),
+      await readFile(
+        new URL("./fixtures/applications/channels/consumer-types.ts", import.meta.url),
+        "utf8",
+      ),
+    );
+
+    await writeFile(
       join(application, "tsconfig.consumer.json"),
       JSON.stringify({
         compilerOptions: {
@@ -181,7 +217,7 @@ test("packed packages serve a custom backend data flow in all three browser engi
           strict: true,
           types: [],
         },
-        files: ["hesperia.d.ts", "consumer.ts"],
+        files: ["hesperia.d.ts", "consumer.ts", "channel-consumer-types.ts"],
       }),
     );
 
@@ -214,15 +250,83 @@ test("packed packages serve a custom backend data flow in all three browser engi
       "tsconfig.consumer.json",
     );
 
-    expect(files.replaceAll("\\", "/")).toContain("/node_modules/hesperia/dist/client.d.ts");
-
-    expect(files.replaceAll("\\", "/")).toContain("/node_modules/hesperia/dist/navigation.d.ts");
-
-    expect(files.replaceAll("\\", "/")).toContain("/node_modules/hesperia/dist/env.d.ts");
-
-    expect(files.replaceAll("\\", "/")).toContain(
-      "/node_modules/@hesperia/compiler/dist/index.d.ts",
+    const canonicalFiles = await Promise.all(
+      files
+        .split(/\r?\n/u)
+        .filter(Boolean)
+        .map((file) => realpath(resolve(application, file))),
     );
+    const normalize = (file: string): string => {
+      const path = file.replaceAll("\\", "/");
+
+      return process.platform === "win32" ? path.toLowerCase() : path;
+    };
+    const checkedFiles = new Set(canonicalFiles.map(normalize));
+    const hesperiaRoot = await realpath(join(application, "node_modules/hesperia"));
+    const aeoliaRoot = await realpath(join(application, "node_modules/aeolia"));
+    const packedHesperia = (await packedManifest(tarballs.hesperia)) as {
+      exports: Record<string, { types?: string }>;
+    };
+    const installedHesperia = JSON.parse(
+      await readFile(join(hesperiaRoot, "package.json"), "utf8"),
+    );
+    const installedAeolia = JSON.parse(
+      await readFile(join(aeoliaRoot, "package.json"), "utf8"),
+    ) as {
+      name: string;
+      version: string;
+      exports: Record<string, { types?: string }>;
+    };
+
+    channelEvidence.providers = { hesperiaRoot, aeoliaRoot, compilerRoot };
+    channelEvidence.hesperiaManifest = installedHesperia;
+    channelEvidence.aeoliaManifest = installedAeolia;
+    channelEvidence.canonicalFiles = canonicalFiles;
+    channelEvidence.typeScriptFileList = files;
+
+    expect(installedHesperia).toEqual(packedHesperia);
+    expect(installedAeolia.name).toBe("aeolia");
+    expect(installedAeolia.version).toBe(await readPinnedAeoliaVersion(packageRoot));
+    expect(
+      checkedFiles.has(normalize(await realpath(join(application, "channel-consumer-types.ts")))),
+    ).toBe(true);
+
+    const declarationEvidence: Array<{ package: string; target: string; path: string }> = [];
+
+    channelEvidence.declarations = declarationEvidence;
+
+    for (const [name, root, target, archive] of [
+      ["hesperia", hesperiaRoot, packedHesperia.exports["."]?.types, tarballs.hesperia],
+      [
+        "hesperia/aeolia",
+        hesperiaRoot,
+        packedHesperia.exports["./aeolia"]?.types,
+        tarballs.hesperia,
+      ],
+      ["aeolia", aeoliaRoot, installedAeolia.exports["."]?.types, undefined],
+    ] as const) {
+      if (typeof target !== "string" || !target.startsWith("./"))
+        throw new Error(`Package ${name} has no relative types target`);
+
+      const declaration = await realpath(resolve(root, target));
+
+      declarationEvidence.push({ package: name, target, path: declaration });
+      expect(checkedFiles.has(normalize(declaration))).toBe(true);
+
+      if (archive) {
+        const archived = await packedFile(archive, target.slice(2));
+
+        expect(Buffer.from(archived).equals(await readFile(declaration))).toBe(true);
+      }
+    }
+
+    for (const declaration of [
+      join(hesperiaRoot, "dist/client.d.ts"),
+      join(hesperiaRoot, "dist/navigation.d.ts"),
+      join(hesperiaRoot, "dist/env.d.ts"),
+      join(compilerRoot, "dist/index.d.ts"),
+    ])
+      expect(checkedFiles.has(normalize(await realpath(declaration)))).toBe(true);
 
     expect(await run(application, "run", "build")).toContain("Built browser application");
 
@@ -280,6 +384,9 @@ test("packed packages serve a custom backend data flow in all three browser engi
 
     expect(JSON.parse(browserOutput.trim())).toStrictEqual(["chromium", "firefox", "webkit"]);
   } finally {
+    if (process.env.HESPERIA_INSTALLED_CHANNEL_EVIDENCE === "1")
+      console.log(`HESPERIA_INSTALLED_CHANNEL_EVIDENCE ${JSON.stringify(channelEvidence)}`);
+
     if (preview) {
       preview.kill();
 

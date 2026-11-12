@@ -60,8 +60,8 @@ jobs:
             import assert from "node:assert/strict";
             import { releaseVersion } from "./scripts/ci/check-release.ts";
             const branch = process.env.HESPERIA_HEAD_BRANCH;
-            assert.ok(/^(feature|fix)\/.+$/.test(branch) || branch.startsWith("release/"),
-              "Use feature/<name>, fix/<name>, or release/<VERSION> for repository branches");
+            assert.ok(/^(feature|fix|work)\/.+$/.test(branch) || branch.startsWith("release/"),
+              "Use feature/<name>, fix/<name>, work/<name>, or release/<VERSION> for repository branches");
             if (branch.startsWith("release/")) {
               const { version } = releaseVersion(branch.slice("release/".length));
               assert.equal(version, (await Bun.file("package.json").json()).version,
@@ -389,6 +389,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
+        with:
+          prefer-ubuntu-archive: ${{ runner.os == 'Linux' }}
       - name: "Build Hesperia packages"
         run: "bun run build"
       - name: "Install all browser engines"
@@ -428,6 +430,33 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
+        with:
+          prefer-ubuntu-archive: ${{ runner.os == 'Linux' }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.22.0
+          package-manager-cache: false
+      - name: "Record Node 24 scheduling profile"
+        shell: bash
+        run: "printf 'HESPERIA_SCHEDULING_NODE_24_22_0_EXE=%s\\n' \"$(node -p 'process.execPath')\" >> \"$GITHUB_ENV\""
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.10.0
+          package-manager-cache: false
+      - name: "Record Node 26.10 scheduling profile"
+        shell: bash
+        run: "printf 'HESPERIA_SCHEDULING_NODE_26_10_0_EXE=%s\\n' \"$(node -p 'process.execPath')\" >> \"$GITHUB_ENV\""
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.12.0
+          package-manager-cache: false
+      - name: "Record Node 26.12 scheduling profile"
+        shell: bash
+        run: "printf 'HESPERIA_SCHEDULING_NODE_26_12_0_EXE=%s\\n' \"$(node -p 'process.execPath')\" >> \"$GITHUB_ENV\""
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.2
+          package-manager-cache: false
       - name: "Build workspace packages"
         run: "bun run build"
       - name: "Install browser engines and system dependencies"
@@ -444,7 +473,10 @@ jobs:
       - name: "Validate the package candidate"
         run: "bun scripts/ci/verify-release-candidate.ts --candidate-dir .hesperia/release-candidate"
       - name: "Run installed and linked package behavior"
-        run: "bun test --timeout=60000 tests/package"
+        shell: bash
+        run: |
+          export HESPERIA_SCHEDULING_NODE_22_23_2_EXE="$(node -p 'process.execPath')"
+          bun test --timeout=60000 tests/package
         env:
           HESPERIA_RELEASE_CANDIDATE_DIR: ${{ format('{0}/.hesperia/release-candidate', github.workspace) }}
   golden-plan:
@@ -501,6 +533,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
+        with:
+          prefer-ubuntu-archive: ${{ runner.os == 'Linux' }}
       - name: "Build packages"
         run: "bun run build"
       - name: "Install all browser engines"
@@ -609,7 +643,7 @@ jobs:
       - name: "Set up Bun"
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - name: "Require every selected verification job"
         env:
           RESULTS: ${{ toJSON(needs) }}
