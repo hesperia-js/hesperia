@@ -1,5 +1,11 @@
 import * as client from "hesperia/client";
-import { client as clientCapability } from "hesperia/client";
+import {
+  client as clientCapability,
+  type Form,
+  type FormOptions,
+  type FormRunOptions,
+} from "hesperia/client";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { debounce, throttle } from "hesperia/scheduling";
 import { beforeLeave, navigation, type HesperiaNavigation } from "hesperia/navigation";
 // @ts-expect-error beforeLeave is exposed by hesperia/navigation, not hesperia/routing.
@@ -9,6 +15,71 @@ import { env } from "hesperia/env";
 import { SETTINGS } from "hesperia/config/public";
 import { defineConfig, type Plugin } from "@hesperia/tooling";
 import { checkProjectModules, type ProjectCheckingResult } from "@hesperia/compiler";
+
+interface ValidationInput {
+  readonly source: string;
+}
+
+interface ValidationOutput {
+  readonly normalized: string;
+}
+
+function isValidationInput(value: unknown): value is ValidationInput {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "source" in value &&
+    typeof value.source === "string"
+  );
+}
+
+const schema: StandardSchemaV1<ValidationInput, ValidationOutput> = {
+  "~standard": {
+    version: 1,
+    vendor: "hesperia-installed-consumer",
+    validate(value) {
+      if (!isValidationInput(value)) return { issues: [{ message: "Expected source" }] };
+
+      return { value: { normalized: value.source.trim() } };
+    },
+  },
+};
+
+const formOptions: FormOptions<ValidationInput> = {
+  map(formData) {
+    const source = formData.get("source");
+
+    if (typeof source !== "string") throw new TypeError("Expected a source field");
+
+    return { source };
+  },
+};
+
+const validation: Form<ValidationInput, ValidationOutput> = client.form(schema, formOptions);
+const directRun = validation.run({ source: " Ada " });
+const directRunId: number = directRun.id;
+const directRunSignal: AbortSignal = directRun.signal;
+directRun.cancel();
+const directResult: StandardSchemaV1.Result<ValidationOutput> = await directRun;
+const runOptions: FormRunOptions = { submitter: document.createElement("button") };
+const formRun = validation.runForm(document.createElement("form"), runOptions);
+const formResult: StandardSchemaV1.Result<ValidationOutput> = await formRun;
+
+// @ts-expect-error a form run requires the schema input
+validation.run();
+
+const wrongFormOptions = { map: () => ({ source: 42 }) };
+
+// @ts-expect-error the map must return the schema input shape
+const rejectedFormOptions: FormOptions<ValidationInput> = wrongFormOptions;
+void rejectedFormOptions;
+
+const ordinaryTask = client.task(() => (input: string) => input);
+
+// @ts-expect-error reset is part of form validation, not ordinary tasks
+ordinaryTask.reset();
+
+void [directRunId, directRunSignal, directResult, formResult, validation.value()];
 
 const scheduledOptional = debounce((value = "default") => value.length, 10);
 const scheduledNumber: Promise<number> = scheduledOptional();

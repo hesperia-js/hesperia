@@ -81,6 +81,9 @@
   "scripts": {
     "build": "bunx tsc -p tsconfig.build.json"
   },
+  "dependencies": {
+    "@standard-schema/spec": "1.1.0"
+  },
   "peerDependencies": {
     "aeolia": "1.0.0-alpha.1"
   }

@@ -15,3 +15,12 @@ export type { Page } from "./runtime/page.ts";
 export { RenderFault } from "./runtime/owner.ts";
 export { AsyncBoundary } from "./runtime/async.ts";
 export type { AsyncBoundaryProps } from "./runtime/async.ts";
+
+export type {
+  ChannelCarrier,
+  ChannelDeclaration,
+  ChannelProjection,
+  ChannelSendOptions,
+  ChannelView,
+  StandaloneChannel,
+} from "./data/channel-types.ts";

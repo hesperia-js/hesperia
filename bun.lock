@@ -6,15 +6,21 @@
       "name": "hesperia",
       "devDependencies": {
         "@apollo/client": "4.3.5",
+        "@bufbuild/protobuf": "2.16.0",
+        "@connectrpc/connect": "2.2.0",
+        "@connectrpc/connect-node": "2.2.0",
         "@elysia/eden": "1.4.10",
         "@graphql-tools/executor": "2.1.0",
         "@hesperia/compiler": "workspace:*",
         "@hesperia/graphql": "workspace:*",
+        "@hesperia/grpc": "workspace:*",
         "@hesperia/language-server": "workspace:*",
         "@hesperia/tooling": "workspace:*",
         "@jridgewell/trace-mapping": "0.3.31",
         "@playwright/test": "1.65.0",
+        "@standard-schema/spec": "1.1.0",
         "@types/bun": "1.4.2",
+        "@types/node": "22.20.2",
         "@types/ws": "8.18.1",
         "@vscode/vsce": "4.0.0",
         "aeolia": "1.0.0-alpha.1",
@@ -124,9 +130,28 @@
         "rxjs": "7.8.2",
       },
     },
+    "packages/grpc": {
+      "name": "@hesperia/grpc",
+      "version": "1.0.0-alpha.3",
+      "devDependencies": {
+        "@connectrpc/connect-node": "2.2.0",
+      },
+      "peerDependencies": {
+        "@bufbuild/protobuf": "2.16.0",
+        "@connectrpc/connect": "2.2.0",
+        "@connectrpc/connect-node": "2.2.0",
+        "aeolia": "1.0.0-alpha.1",
+      },
+      "optionalPeers": [
+        "@connectrpc/connect-node",
+      ],
+    },
     "packages/hesperia": {
       "name": "hesperia",
       "version": "1.0.0-alpha.3",
+      "dependencies": {
+        "@standard-schema/spec": "1.1.0",
+      },
       "peerDependencies": {
         "aeolia": "1.0.0-alpha.1",
       },
@@ -291,6 +316,12 @@
 
     "@borewit/text-codec": ["@borewit/text-codec@0.2.2", "", {}, "sha512-DDaRehssg1aNrH4+2hnj1B7vnUGEjU6OIlyRdkMd0aUdIUvKXrJfXsy8LVtXAy7DRvYVluWbMspsRhz2lcW0mQ=="],
 
+    "@bufbuild/protobuf": ["@bufbuild/protobuf@2.16.0", "", {}, "sha512-FWa0sPlqYGJgpTs6OxBRcL/AW4JT0OIO+W1ajerluoTVh8CV0B7XM1qsNCRgnkSCkRCgOICKHRQlY17jrsm0+Q=="],
+
+    "@connectrpc/connect": ["@connectrpc/connect@2.2.0", "", { "peerDependencies": { "@bufbuild/protobuf": "^2.7.0" } }, "sha512-M63OQ1ZFcPUm85CuewJ9G9CMV8LjzGR9935xOnXNQGSazAbwMb3x2W7vXBYM1zqrP7XFD8uxp/dUAhirclgwnQ=="],
+
+    "@connectrpc/connect-node": ["@connectrpc/connect-node@2.2.0", "", { "peerDependencies": { "@bufbuild/protobuf": "^2.7.0", "@connectrpc/connect": "2.2.0" } }, "sha512-E6uUO6e11WdynAuBjuN+0WpHjqxEM9BNDdfDIJHcn49Esg/WxSIbn2y1KFt9XL96IJi01qdBbvubcdpBz1X3Zw=="],
+
     "@dual-bundle/import-meta-resolve": ["@dual-bundle/import-meta-resolve@4.2.1", "", {}, "sha512-id+7YRUgoUX6CgV0DtuhirQWodeeA7Lf4i2x71JS/vtA5pRb/hIGWlw+G6MeXvsM+MXrz0VAydTGElX1rAfgPg=="],
 
     "@elysia/eden": ["@elysia/eden@1.4.10", "", { "peerDependencies": { "elysia": ">=1.4.19" } }, "sha512-vcZXQcW6wZj6rhTxaiTkuCbVuS/yAJQ9jqCM6b83a5hu99F5Aj3HOyWXL17iod2Rz+pJpYsQGX0XaeoCsMpw2g=="],
@@ -326,6 +357,8 @@
     "@hesperia/golden": ["@hesperia/golden@workspace:golden"],
 
     "@hesperia/graphql": ["@hesperia/graphql@workspace:packages/graphql"],
+
+    "@hesperia/grpc": ["@hesperia/grpc@workspace:packages/grpc"],
 
     "@hesperia/hosting": ["@hesperia/hosting@workspace:packages/hosting"],
 
@@ -548,6 +581,8 @@
     "@secretlint/types": ["@secretlint/types@10.2.2", "", {}, "sha512-Nqc90v4lWCXyakD6xNyNACBJNJ0tNCwj2WNk/7ivyacYHxiITVgmLUFXTBOeCdy79iz6HtN9Y31uw/jbLrdOAg=="],
 
     "@sinclair/typebox": ["@sinclair/typebox@0.34.52", "", {}, "sha512-XiMQh7qqVlxZzcVD+kkGMNGMzcTrDMLWI7S4x7z1MkCkbDPrekpZXEUK0eZqZFMuHQg2a2DZOcDIh9o5v3Gonw=="],
+
+    "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 
     "@stylexjs/babel-plugin": ["@stylexjs/babel-plugin@0.19.1", "", { "dependencies": { "@babel/core": "^7.26.8", "@babel/helper-module-imports": "^7.25.9", "@babel/traverse": "^7.26.8", "@babel/types": "^7.26.8", "@dual-bundle/import-meta-resolve": "^4.1.0", "@stylexjs/shared": "0.19.1", "@stylexjs/stylex": "0.19.1", "postcss-value-parser": "^4.1.0" } }, "sha512-Ig3crX6MuGWDEAx+f89aLxTQUWVeEc2Aco2moIdcObyvo7hZJgU26rxJN3k7geFjhi+5dfna6TNR8iTRK0PQGA=="],
 

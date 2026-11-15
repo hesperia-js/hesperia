@@ -573,12 +573,13 @@ export default function App() {
     await writeFile(join(root, "src", "image%20name.png"), image);
 
     const built = await prepareBuild(root);
-    const captured = {
-      hosting: built.hosting,
-      files: new Map(
-        built.hosting.assets.map((asset) => [asset.path, built.files.get(asset.path)!]),
-      ),
-    };
+    const files = new Map(
+      built.hosting.assets.map((asset) => [asset.path, built.files.get(asset.path)!]),
+    );
+    const captured =
+      "publicFiles" in built
+        ? { hosting: built.hosting, files, publicFiles: built.publicFiles }
+        : { hosting: built.hosting, files };
     const imagePaths = ["native%20pic%20%23%25.png", "image%2520name.png"].map((name) => {
       const path = built.hosting.assets.find((asset) => asset.path.endsWith(`/${name}`))?.path;
 
