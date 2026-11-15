@@ -246,6 +246,10 @@ test(
         Promise.race([promise, earlyExit, proxyFailure.promise, timeout]);
       phase = "waiting-for-browser";
       await wait(ready.promise);
+      phase = "preparing-deletion";
+      await writeFile(join(routeA, "page.css"), ".a { color: rgb(50, 60, 70); }");
+      const styleRevision = await wait(nextObserver());
+      expect(styleRevision.message?.type).toBe("style-revision");
       phase = "deleting";
       await rm(removed);
       const [sentId, seenId] = await wait(Promise.all([forwarded.promise, removal.promise]));
