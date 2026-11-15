@@ -15,6 +15,8 @@ import { writeFile } from "node:fs/promises";
  * @property {boolean} [hasNativeRouteInterception]
  * @property {number} [initialTimeOrigin]
  * @property {Promise<Request>} [documentReload]
+ * @property {string} [developmentClientUrl]
+ * @property {string} [eventStreamUrl]
  */
 
 const [playwrightModuleUrl, applicationUrl, routePath, secondPageSource] = process.argv.slice(2);
@@ -25,6 +27,8 @@ const { chromium, firefox, webkit } = /** @type {typeof import("playwright")} */
 
 /** @type {BrowserEntry[]} */
 const opened = [];
+/** @type {Array<() => void>} */
+const releaseEventStreams = [];
 
 try {
   for (const engine of [chromium, firefox, webkit]) {
@@ -37,6 +41,35 @@ try {
 
     const page = await browser.newPage();
     entry.page = page;
+
+    let releaseEventStream = () => {};
+    const eventStreamGate = new Promise(
+      /** @param {(value?: void) => void} resolve */ (resolve) => {
+        releaseEventStream = resolve;
+      },
+    );
+    releaseEventStreams.push(releaseEventStream);
+
+    let observeEventStreamHold = () => {};
+    const eventStreamHeld = new Promise(
+      /** @param {(value?: void) => void} resolve */ (resolve) => {
+        observeEventStreamHold = resolve;
+      },
+    );
+    const clientScriptRequest = page.waitForRequest((request) =>
+      new URL(request.url()).pathname.endsWith("/client.js"),
+    );
+    const eventStreamRequest = page.waitForRequest((request) =>
+      new URL(request.url()).pathname.endsWith("/events"),
+    );
+
+    await page.route("**/events", async (route) => {
+      observeEventStreamHold();
+
+      await eventStreamGate;
+
+      await route.continue();
+    });
 
     page.on("pageerror", (error) => entry.errors.push(error.message));
 
@@ -51,6 +84,25 @@ try {
     );
 
     await page.goto(applicationUrl);
+
+    const [clientRequest, heldEventRequest] = await Promise.all([
+      clientScriptRequest,
+      eventStreamRequest,
+    ]);
+
+    await eventStreamHeld;
+
+    const developmentClientUrl = clientRequest.url();
+    const eventStreamUrl = heldEventRequest.url();
+
+    entry.developmentClientUrl = developmentClientUrl;
+    entry.eventStreamUrl = eventStreamUrl;
+
+    assert.equal(
+      eventStreamUrl,
+      new URL("./events", developmentClientUrl).href,
+      "Development client used its mounted event URL",
+    );
 
     await page.waitForFunction(() => document.querySelector("#version")?.textContent === "first");
 
@@ -100,7 +152,67 @@ try {
     );
   }
 
+  const publicationEntry = opened[0];
+
+  if (!publicationEntry) throw new Error("No browser is available for publication observation");
+
+  const publicationPage = await publicationEntry.browser.newPage();
+
+  publicationPage.on("pageerror", (error) => publicationEntry.errors.push(error.message));
+
+  const publicationClientRequest = publicationPage.waitForRequest((request) =>
+    new URL(request.url()).pathname.endsWith("/client.js"),
+  );
+  const publicationEventRequest = publicationPage.waitForRequest((request) =>
+    new URL(request.url()).pathname.endsWith("/events"),
+  );
+  const publicationEventResponse = publicationPage.waitForResponse(
+    (response) => new URL(response.url()).pathname.endsWith("/events") && response.status() === 200,
+  );
+
+  await publicationPage.goto(applicationUrl);
+
+  await publicationPage.waitForFunction(
+    () => document.querySelector("#version")?.textContent === "first",
+  );
+
+  const [publicationClient, publicationRequest, publicationResponse] = await Promise.all([
+    publicationClientRequest,
+    publicationEventRequest,
+    publicationEventResponse,
+  ]);
+
+  assert.equal(
+    publicationRequest.url(),
+    new URL("./events", publicationClient.url()).href,
+    "Publication observer used its mounted event URL",
+  );
+  const heldEventStreamUrl = publicationEntry.eventStreamUrl;
+
+  if (!heldEventStreamUrl) throw new Error("Browser event stream URL was not captured");
+
+  assert.equal(publicationRequest.url(), heldEventStreamUrl);
+  assert.equal(publicationResponse.url(), publicationRequest.url());
+
+  const publicationDocumentReload = publicationPage.waitForRequest(
+    (request) =>
+      request.isNavigationRequest() &&
+      request.resourceType() === "document" &&
+      new URL(request.url()).pathname === "/nested",
+    { timeout: 30000 },
+  );
+
   await writeFile(routePath, secondPageSource);
+
+  const publishedDocumentRequest = await publicationDocumentReload;
+
+  assert.equal(publishedDocumentRequest.isNavigationRequest(), true);
+
+  await publicationPage.waitForFunction(
+    () => document.querySelector("#version")?.textContent === "second",
+  );
+
+  for (const releaseEventStream of releaseEventStreams) releaseEventStream();
 
   for (const entry of /** @type {Required<BrowserEntry>[]} */ (opened)) {
     const documentRequest = await entry.documentReload;
@@ -155,5 +267,7 @@ try {
     console.log(entry.name + " development warning and reload verified");
   }
 } finally {
+  for (const releaseEventStream of releaseEventStreams) releaseEventStream();
+
   await Promise.all(opened.map((entry) => entry.browser.close()));
 }
