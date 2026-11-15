@@ -1,8 +1,8 @@
 # @hesperia/hosting
 
 Host a captured Hesperia browser build through a Fetch request handler. This
-package verifies the build's asset inventory and digests, then serves its document
-wrapper and managed assets at the selected mount path.
+package verifies the build's inventories and digests, then serves its document
+wrapper, managed assets, and captured public files at the selected mount path.
 
 ## Install
 
@@ -43,8 +43,18 @@ for requests the application does not claim, allowing another handler to run.
 
 `readBuild` loads a completed production build without the source tree. It rejects
 missing or changed assets and symlinks in captured paths. For in-memory adapters,
-pass `createHost` a `CapturedBrowserBuild` containing the hosting record and the
-exact map of asset Blobs.
+pass `createHost` a `CapturedBuild`: either a `CapturedBrowserBuild` with its
+managed-asset map, or a `CapturedPublicBuild` with separate managed-asset and
+public-file maps.
+
+Builds with public files use the version 2 hosting record and keep public-file
+bytes in a separate map from managed assets. `createHost` serves each public file
+at its exact mount-relative URL for GET and HEAD requests, with its captured bytes
+and media type. Public files under `/assets/...` remain distinct from managed
+assets under `/_hesperia/assets/...`. A public-file miss continues through the
+existing HTML document fallback or backend fallthrough
+policy; methods other than GET and HEAD remain available to the backend handler.
+Builds with no public files retain the version 1 record format.
 
 This host serves a browser startup wrapper; it does not render components on the
 server or produce a static-file deployment. See
