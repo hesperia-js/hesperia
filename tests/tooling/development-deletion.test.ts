@@ -75,7 +75,14 @@ test(
     let proxy: ReturnType<typeof Bun.serve> | undefined;
     let child: ReturnType<typeof Bun.spawn> | undefined;
     let observer: ReadableStreamDefaultReader<Uint8Array> | undefined;
-    const stream = { upstream: undefined as ReadableStreamDefaultReader<Uint8Array> | undefined };
+    const stream = {
+      upstream: undefined as ReadableStreamDefaultReader<Uint8Array> | undefined,
+      pullCount: 0,
+      lastFrame: undefined as { id: string; type?: string } | undefined,
+      cutHeld: false,
+      cutReleased: false,
+      cleanupStarted: false,
+    };
     let output: Promise<string> | undefined;
     let errors: Promise<string> | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -147,15 +154,35 @@ test(
               new ReadableStream<Uint8Array>({
                 async pull(controller) {
                   try {
+                    stream.pullCount++;
                     const frame = await next();
+                    stream.lastFrame = {
+                      id: frame.id,
+                      type: typeof frame.message === "string" ? frame.message : frame.message?.type,
+                    };
                     controller.enqueue(frame.bytes);
                     if (frame.message?.type === "source-removal") {
+                      stream.cutHeld = true;
                       forwarded.resolve(frame.id);
                       await release.promise;
+                      stream.cutReleased = true;
                       controller.close();
                       await stream.upstream?.cancel();
                     }
                   } catch (error) {
+                    const errorText = String(error);
+                    receipts.push({
+                      type: "proxy-pull-error",
+                      phase,
+                      cleanupStarted: stream.cleanupStarted,
+                      pullCount: stream.pullCount,
+                      lastFrame: stream.lastFrame,
+                      cutHeld: stream.cutHeld,
+                      cutReleased: stream.cutReleased,
+                      error: errorText.slice(0, 500),
+                      errorChars: errorText.length,
+                      errorTruncated: errorText.length > 500,
+                    });
                     proxyFailure.reject(error);
                     try {
                       controller.error(error);
@@ -249,6 +276,7 @@ test(
       failure = error;
     } finally {
       if (timer) clearTimeout(timer);
+      stream.cleanupStarted = true;
       release.resolve();
       try {
         if (child && child.exitCode === null) child.kill();
@@ -288,12 +316,52 @@ test(
       }
     }
     if (failure || cleanupFailures.length) {
+      let stdoutText = "";
       let stderr = "";
+      try {
+        if (output) stdoutText = await reconnectCleanup(output, "browser stdout");
+      } catch (error) {
+        cleanupFailures.push(error);
+      }
       try {
         if (errors) stderr = await reconnectCleanup(errors, "browser stderr");
       } catch (error) {
         cleanupFailures.push(error);
       }
+      const bounded = (value: string, limit: number) => ({
+        text: value.slice(0, limit),
+        totalChars: value.length,
+        truncated: value.length > limit,
+      });
+      const diagnostic = {
+        type: "reconnect-control-failure",
+        phase,
+        failure: bounded(String(failure), 1000),
+        stream: {
+          pullCount: stream.pullCount,
+          lastFrame: stream.lastFrame,
+          cutHeld: stream.cutHeld,
+          cutReleased: stream.cutReleased,
+          cleanupStarted: stream.cleanupStarted,
+        },
+        receipts: {
+          items: receipts
+            .slice(0, 20)
+            .map((receipt) => bounded(JSON.stringify(receipt) ?? String(receipt), 400)),
+          total: receipts.length,
+          included: Math.min(receipts.length, 20),
+          truncated: receipts.length > 20,
+        },
+        stdout: bounded(stdoutText, 1200),
+        stderr: bounded(stderr, 2000),
+        cleanupFailures: {
+          items: cleanupFailures.slice(0, 4).map((error) => bounded(String(error), 400)),
+          total: cleanupFailures.length,
+          included: Math.min(cleanupFailures.length, 4),
+          truncated: cleanupFailures.length > 4,
+        },
+      };
+      console.error("[reconnect-control] " + JSON.stringify(diagnostic));
       throw new AggregateError(
         [failure, ...cleanupFailures].filter((error) => error !== undefined),
         "Reconnect phase " +
