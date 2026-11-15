@@ -1224,7 +1224,7 @@ export async function devProject(
 
               value.enqueue(
                 encoder.encode(
-                  `: connected\n\nid: ${current.identity}\ndata: {"type":"current"}\n\n`,
+                  `: connected\nid: ${current.identity}\ndata: {"type":"current"}\n\n`,
                 ),
               );
             },
