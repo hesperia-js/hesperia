@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { expect, test } from "bun:test";
 import { readPinnedAeoliaVersion, writePackageManifest } from "./package-manifest.ts";
 import { suppliedReleaseArchive } from "./release-candidate.ts";
@@ -255,7 +256,7 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
     const errors: string[] = [];
 
     stage("launch browser");
-    const browser = await chromium.launch();
+    const browser = await chromium.launch(browserLaunchOptions("chromium"));
 
     try {
       stage("start development server");

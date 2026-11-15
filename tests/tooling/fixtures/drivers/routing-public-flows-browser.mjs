@@ -23,6 +23,11 @@ import { readFile, writeFile } from "node:fs/promises";
 const runtimeConfig = JSON.parse(await readFile(process.argv[2], "utf8"));
 
 const { playwrightModuleUrl, serverUrl } = runtimeConfig;
+const browserLaunchModuleUrl = process.argv[3];
+
+if (!browserLaunchModuleUrl) throw new Error("Expected browser launch helper module URL");
+
+const { browserLaunchOptions } = await import(browserLaunchModuleUrl);
 
 const { chromium, firefox, webkit } = /** @type {typeof import("playwright")} */ (
   await import(playwrightModuleUrl)
@@ -309,7 +314,7 @@ async function captureCurrentDocument(page, context) {
 }
 
 for (const engine of [chromium, firefox, webkit]) {
-  const browser = await engine.launch();
+  const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
   try {
     const page = await browser.newPage();

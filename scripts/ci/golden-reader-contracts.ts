@@ -38,6 +38,9 @@ const REVIEWED_READERS: Readonly<Record<string, string>> = {
     "963d4fdc97c6a8756855a3249f2b7d61b2718439b53dd777b683df92eca1c448",
   "packages/tooling/src/public-files.ts":
     "3041b3db6c77a1840036dfcd0331a9edd833999141283d4d585820548b960bf0",
+  // The browser helper only stats the executable selected by the environment.
+  "tests/support/browser-launch.mjs":
+    "916d49574a1626213b3c15d91f680c5e3030bc3e779c5eec1e579a691f3e4282",
 };
 
 // Server entrypoints and project roots are finite. Each domain owns every case in
