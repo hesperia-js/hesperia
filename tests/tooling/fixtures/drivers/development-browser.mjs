@@ -1,5 +1,6 @@
 import { browserLaunchOptions } from "../../../support/browser-launch.mjs";
 import assert from "node:assert/strict";
+import { writeSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 
 /** @typedef {import("playwright").Browser} Browser */
@@ -29,6 +30,16 @@ const { chromium, firefox, webkit } = /** @type {typeof import("playwright")} */
 const opened = [];
 /** @type {Array<() => void>} */
 const releaseEventStreams = [];
+let eventStreamsReleased = false;
+
+/** @param {string} name */
+function markMilestone(name) {
+  try {
+    writeSync(2, `${name}\n`);
+  } catch {
+    return;
+  }
+}
 
 try {
   for (const engine of [chromium, firefox, webkit]) {
@@ -143,13 +154,6 @@ try {
 
     entry.hasNativeRouteInterception = hasNativeRouteInterception;
     entry.initialTimeOrigin = await page.evaluate(() => performance.timeOrigin);
-    entry.documentReload = page.waitForRequest(
-      (request) =>
-        request.isNavigationRequest() &&
-        request.resourceType() === "document" &&
-        new URL(request.url()).pathname === "/nested",
-      { timeout: 30000 },
-    );
   }
 
   const publicationEntry = opened[0];
@@ -212,7 +216,25 @@ try {
     () => document.querySelector("#version")?.textContent === "second",
   );
 
+  markMilestone("observer-second");
+
+  for (const entry of /** @type {Required<BrowserEntry>[]} */ (opened)) {
+    entry.documentReload = entry.page.waitForRequest(
+      (request) =>
+        request.isNavigationRequest() &&
+        request.resourceType() === "document" &&
+        new URL(request.url()).pathname === "/nested",
+      { timeout: 30000 },
+    );
+    void entry.documentReload.catch(() => {});
+  }
+
+  markMilestone("waits-armed");
+
   for (const releaseEventStream of releaseEventStreams) releaseEventStream();
+  eventStreamsReleased = true;
+
+  markMilestone("gate-release");
 
   for (const entry of /** @type {Required<BrowserEntry>[]} */ (opened)) {
     const documentRequest = await entry.documentReload;
@@ -267,7 +289,11 @@ try {
     console.log(entry.name + " development warning and reload verified");
   }
 } finally {
-  for (const releaseEventStream of releaseEventStreams) releaseEventStream();
+  if (!eventStreamsReleased) {
+    for (const releaseEventStream of releaseEventStreams) releaseEventStream();
+
+    markMilestone("cleanup-gate-release");
+  }
 
   await Promise.all(opened.map((entry) => entry.browser.close()));
 }
