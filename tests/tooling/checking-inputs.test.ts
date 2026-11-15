@@ -32,29 +32,61 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-async function servedAsset(server: ProjectServer, assetPath: string): Promise<string> {
+async function servedAsset(server: ProjectServer, assetPath: string): Promise<Uint8Array> {
   const response = await fetch(new URL(`/_hesperia${assetPath}`, server.url));
 
   if (!response.ok) throw new Error(`Development asset returned ${response.status}: ${assetPath}`);
 
-  return response.text();
+  return new Uint8Array(await response.arrayBuffer());
 }
 
-async function nextEvent(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  expected: string,
-): Promise<string> {
-  let received = "";
+function developmentEvents(reader: ReadableStreamDefaultReader<Uint8Array>) {
+  const decoder = new TextDecoder();
+  let pending = "";
 
-  while (!received.includes(expected)) {
-    const chunk = await reader.read();
+  return async (expected: string): Promise<string> => {
+    for (;;) {
+      const boundary = pending.indexOf("\n\n");
 
-    if (chunk.done) throw new Error(`Development events ended before ${expected}`);
+      if (boundary >= 0) {
+        const event = pending.slice(0, boundary);
+        pending = pending.slice(boundary + 2);
 
-    received += new TextDecoder().decode(chunk.value);
+        if (event.includes(expected)) return event;
+
+        continue;
+      }
+
+      const chunk = await reader.read();
+
+      if (chunk.done) throw new Error(`Development events ended before ${expected}`);
+
+      pending += decoder.decode(chunk.value, { stream: true });
+    }
+  };
+}
+
+async function waitForServedAsset(
+  server: ProjectServer,
+  assetPath: string,
+  expected: Uint8Array,
+  nextEvent: (expected: string) => Promise<string>,
+): Promise<void> {
+  for (;;) {
+    const response = await fetch(new URL(`/_hesperia${assetPath}`, server.url));
+
+    if (response.ok) {
+      const actual = new Uint8Array(await response.arrayBuffer());
+
+      if (
+        actual.length === expected.length &&
+        actual.every((byte, index) => byte === expected[index])
+      )
+        return;
+    }
+
+    await nextEvent('data: "reload"');
   }
-
-  return received;
 }
 
 test("development captures declaration revisions and serves only successful rebuilds", async () => {
@@ -89,6 +121,7 @@ test("development captures declaration revisions and serves only successful rebu
     );
 
     const initialDeclaration = "export declare const label: string;";
+    const invalidDeclaration = "export declare const label: number;";
     const repairedDeclaration = 'export declare const label: "updated";';
     const declaration = join(library, "types/api.d.ts");
     const browserModule = join(library, "browser.js");
@@ -111,7 +144,14 @@ test("development captures declaration revisions and serves only successful rebu
 
     const reports: string[] = [];
     const repaired = deferred<{ build: BrowserBuild; record: BuildRecord }>();
-    let latestCapture: { build: BrowserBuild; record: BuildRecord } | undefined;
+    const successfulCaptures: { build: BrowserBuild; record: BuildRecord }[] = [];
+    const declarationDigests = () =>
+      successfulCaptures.map(
+        ({ record }) =>
+          record.checkingInputs.find(
+            (input) => input.filename === "node_modules/declaration-package/types/api.d.ts",
+          )?.digest,
+      );
     let initialAssetHashes: ReadonlyMap<string, string> | undefined;
     server = await devProject(
       root,
@@ -119,7 +159,8 @@ test("development captures declaration revisions and serves only successful rebu
       async (projectRoot) => {
         const build = await prepareBuild(projectRoot, true);
         const record = await recordFromBuild(build);
-        latestCapture = { build, record };
+        const capture = { build, record };
+        successfulCaptures.push(capture);
         initialAssetHashes ??= new Map(
           build.hosting.assets.map((asset) => [asset.path, asset.sha256]),
         );
@@ -135,12 +176,12 @@ test("development captures declaration revisions and serves only successful rebu
               input.digest === sourceDigest(repairedDeclaration),
           )
         )
-          repaired.resolve(latestCapture);
+          repaired.resolve(capture);
 
         return build;
       },
     );
-    const initialCapture = latestCapture;
+    const initialCapture = successfulCaptures[0];
 
     if (!initialCapture) throw new Error("Development server did not prepare an initial build");
 
@@ -155,40 +196,59 @@ test("development captures declaration revisions and serves only successful rebu
       inputPaths(root, initialRecord).sort((a, b) => a.localeCompare(b)),
     );
 
-    const initialStartup = await servedAsset(server, initialCapture.build.hosting.startupAsset);
+    const initialServedAssets = await Promise.all(
+      initialCapture.build.hosting.assets.map(async ({ path }) => {
+        const captured = initialCapture.build.files.get(path);
 
+        if (!captured) throw new Error(`Initial build omitted ${path}`);
+
+        const bytes = await servedAsset(server!, path);
+
+        expect(bytes).toEqual(new Uint8Array(await captured.arrayBuffer()));
+
+        return { path, bytes };
+      }),
+    );
+
+    const initialEntrypoint = await fetch(new URL("/_hesperia/startup.js", server.url));
+
+    if (!initialEntrypoint.ok)
+      throw new Error(`Development entry returned ${initialEntrypoint.status}`);
+
+    const initialEntrypointBytes = new Uint8Array(await initialEntrypoint.arrayBuffer());
     const events = await fetch(new URL("/_hesperia/events", server.url), {
       signal: AbortSignal.timeout(15_000),
     });
     reader = events.body!.getReader();
-    const connected = await reader.read();
+    const nextEvent = developmentEvents(reader);
 
-    expect(new TextDecoder().decode(connected.value)).toContain(": connected");
+    expect(await nextEvent(": connected")).toContain(": connected");
 
-    await writeFile(declaration, "export declare const label: number;");
+    await writeFile(declaration, invalidDeclaration);
 
-    const diagnostic = await nextEvent(reader, "Hesperia checking failed");
+    const diagnostic = await nextEvent("Hesperia checking failed");
 
     expect(diagnostic).toContain('data: "ProjectError: Hesperia checking failed"');
 
     expect(reports).toContain("ProjectError: Hesperia checking failed");
 
-    expect(latestCapture).toBe(initialCapture);
+    expect(declarationDigests()).not.toContain(undefined);
+    expect(declarationDigests()).not.toContain(sourceDigest(invalidDeclaration));
 
-    expect(await servedAsset(server, initialCapture.build.hosting.startupAsset)).toBe(
-      initialStartup,
-    );
+    for (const asset of initialServedAssets)
+      expect(await servedAsset(server, asset.path)).toEqual(asset.bytes);
+
+    const retainedEntrypoint = await fetch(new URL("/_hesperia/startup.js", server.url));
+
+    expect(retainedEntrypoint.status).toBe(200);
+
+    expect(new Uint8Array(await retainedEntrypoint.arrayBuffer())).toEqual(initialEntrypointBytes);
 
     await writeFile(browserModule, 'export const label = "updated";');
 
     await writeFile(declaration, repairedDeclaration);
 
-    const [repairedCapture] = await Promise.all([
-      repaired.promise,
-      nextEvent(reader, 'data: "reload"'),
-    ]);
-
-    expect(latestCapture).toBe(repairedCapture);
+    const [repairedCapture] = await Promise.all([repaired.promise, nextEvent('data: "reload"')]);
 
     const repairedRecord = repairedCapture.record;
     const repairedInput = repairedRecord.checkingInputs.find(
@@ -218,7 +278,15 @@ test("development captures declaration revisions and serves only successful rebu
 
     if (!expectedAsset) throw new Error(`Repaired build omitted ${changedAsset.path}`);
 
-    expect(await servedAsset(server, changedAsset.path)).toBe(await expectedAsset.text());
+    await waitForServedAsset(
+      server,
+      changedAsset.path,
+      new Uint8Array(await expectedAsset.arrayBuffer()),
+      nextEvent,
+    );
+
+    expect(declarationDigests()).not.toContain(undefined);
+    expect(declarationDigests()).not.toContain(sourceDigest(invalidDeclaration));
   } finally {
     await reader?.cancel().catch(() => undefined);
 
