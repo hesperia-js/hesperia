@@ -1,5 +1,6 @@
 import { browserLaunchOptions } from "../../../support/browser-launch.mjs";
 import assert from "node:assert/strict";
+import { writeSync } from "node:fs";
 import { writeFile, rm } from "node:fs/promises";
 import { startBrowserDiagnostics } from "./browser-diagnostics.mjs";
 import { startProcessDiagnostics } from "./process-diagnostics.mjs";
@@ -17,7 +18,213 @@ const [
   removedPath,
   navigationMode,
   diagnosticsDirectory,
+  driverMode,
+  reconnectProxyOrigin,
 ] = process.argv.slice(2);
+
+if (driverMode === "reconnect-stream") {
+  let browser;
+  let phase = "launch";
+  /** @type {Array<{requestId: string, eventId: string, data: string, timestamp: number}>} */
+  const frames = [];
+  /** @type {Array<{url: string, timestamp: number}>} */
+  const documents = [];
+  /** @type {Map<string, Record<string, string>>} */
+  const requestHeaders = new Map();
+  /** @type {Map<string, string>} */
+  const eventRequests = new Map();
+  /** @type {string[]} */
+  const routed = [];
+  /** @type {string[]} */
+  const pageErrors = [];
+  /**
+   * @param {object} value
+   * @returns {Promise<void>}
+   */
+  const receipt = (value) =>
+    new Promise((resolve, reject) => {
+      if (!process.send) return reject(new Error("Node IPC channel is unavailable"));
+      process.send(value, (error) => (error ? reject(error) : resolve()));
+    });
+  /** @param {(frame: {requestId: string, eventId: string, data: string, timestamp: number}) => boolean} predicate */
+  const waitFrame = async (predicate) => {
+    for (let attempt = 0; attempt < 600; attempt++) {
+      const match = frames.find(predicate);
+      if (match) return match;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error("Timed out waiting for browser EventSource frame");
+  };
+  try {
+    if (engineName !== "chromium") throw new Error("Reconnect control requires Chromium");
+    const playwright = /** @type {typeof import("playwright")} */ (
+      await import(playwrightModuleUrl)
+    );
+    browser = await playwright.chromium.launch(browserLaunchOptions("chromium"));
+    const page = await browser.newPage();
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Network.enable");
+    cdp.on("Network.eventSourceMessageReceived", (event) => {
+      if (frames.length < 32) frames.push(event);
+    });
+    cdp.on("Network.requestWillBeSentExtraInfo", (event) => {
+      requestHeaders.set(event.requestId, event.headers);
+    });
+    cdp.on("Network.requestWillBeSent", (event) => {
+      if (event.type === "EventSource") eventRequests.set(event.requestId, event.request.url);
+      if (event.type === "Document" && new URL(event.request.url).pathname === "/b")
+        documents.push({ url: event.request.url, timestamp: event.timestamp });
+    });
+    await page.addInitScript(() => {
+      globalThis.documentIdentity = Math.random();
+      globalThis.removals = 0;
+      window.addEventListener("hesperia:dev-source-removal", () => globalThis.removals++);
+    });
+    const eventUrl = new URL("/_hesperia/events", applicationUrl);
+    await page.route(eventUrl.href, async (route) => {
+      const request = route.request();
+      assert.equal(request.url(), eventUrl.href);
+      routed.push(request.url());
+      if (routed.length === 1) {
+        const proxyUrl = new URL(eventUrl.pathname + eventUrl.search, reconnectProxyOrigin);
+        await route.continue({ url: proxyUrl.href });
+      } else {
+        await route.continue();
+      }
+    });
+    await page.goto(applicationUrl, { timeout: 30_000 });
+    await page.waitForSelector("#a", { timeout: 30_000 });
+    const initial = await waitFrame((frame) => JSON.parse(frame.data)?.type === "current");
+    await page.locator("#to-other").click();
+    await page.waitForSelector("#b", { timeout: 30_000 });
+    await page.locator("#count").click();
+    const before = await page.evaluate(() => ({
+      origin: location.origin,
+      pathname: location.pathname,
+      identity: globalThis.documentIdentity,
+      count: document.querySelector("#count")?.textContent,
+    }));
+    assert.equal(before.origin, new URL(applicationUrl).origin);
+    assert.equal(before.pathname, "/b");
+    assert.equal(before.count, "1");
+    const previousDocuments = documents.length;
+    phase = "ready";
+    await receipt({
+      type: "ready",
+      initialId: initial.eventId,
+      requestId: initial.requestId,
+      ...before,
+    });
+
+    const removed = await waitFrame((frame) => JSON.parse(frame.data)?.type === "source-removal");
+    await page.waitForFunction(() => globalThis.removals > 0, null, { timeout: 30_000 });
+    const afterRemoval = await page.evaluate(() => ({
+      origin: location.origin,
+      pathname: location.pathname,
+      identity: globalThis.documentIdentity,
+      count: document.querySelector("#count")?.textContent,
+    }));
+    assert.deepEqual(afterRemoval, before);
+    assert.equal(removed.requestId, initial.requestId);
+    const documentRequest = page.waitForRequest(
+      (request) =>
+        request.isNavigationRequest() &&
+        request.resourceType() === "document" &&
+        new URL(request.url()).pathname === "/b",
+      { timeout: 60_000 },
+    );
+    void documentRequest.catch(() => {});
+    phase = "removal";
+    await receipt({
+      type: "removal",
+      id: removed.eventId,
+      requestId: removed.requestId,
+      ...afterRemoval,
+    });
+
+    const current = await waitFrame(
+      (frame) =>
+        frame.requestId !== removed.requestId && JSON.parse(frame.data)?.type === "current",
+    );
+    phase = "current-observed";
+    await receipt({
+      type: "current",
+      id: current.eventId,
+      requestId: current.requestId,
+      timestamp: current.timestamp,
+    });
+    if (
+      current.eventId !== removed.eventId ||
+      routed.length < 2 ||
+      eventRequests.get(current.requestId) !== eventUrl.href
+    )
+      throw new Error(
+        "Harness evidence failure: reconnect current or request did not match the cut",
+      );
+    let headers = requestHeaders.get(current.requestId);
+    for (let attempt = 0; !headers && attempt < 100; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      headers = requestHeaders.get(current.requestId);
+    }
+    if (!headers) throw new Error("Harness evidence failure: CDP reconnect headers unavailable");
+    const lastEventId = Object.entries(headers).find(
+      ([name]) => name.toLowerCase() === "last-event-id",
+    )?.[1];
+    if (lastEventId !== removed.eventId)
+      throw new Error(
+        "Harness evidence failure: reconnect Last-Event-ID unavailable or mismatched",
+      );
+    phase = "recovery";
+    await receipt({ type: "header-confirmed", requestId: current.requestId, lastEventId });
+
+    await documentRequest;
+    let recoveredDocument = documents
+      .slice(previousDocuments)
+      .find((event) => event.timestamp > current.timestamp);
+    for (let attempt = 0; !recoveredDocument && attempt < 100; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      recoveredDocument = documents
+        .slice(previousDocuments)
+        .find((event) => event.timestamp > current.timestamp);
+    }
+    assert.ok(recoveredDocument, "The recovered document request followed the reconnect current");
+    await page.waitForFunction(
+      (identity) =>
+        location.pathname === "/b" &&
+        document.querySelector("#b") !== null &&
+        globalThis.documentIdentity !== identity,
+      before.identity,
+      { timeout: 30_000 },
+    );
+    const after = await page.evaluate(() => ({
+      origin: location.origin,
+      identity: globalThis.documentIdentity,
+      count: document.querySelector("#count")?.textContent,
+    }));
+    assert.equal(after.origin, before.origin);
+    assert.notEqual(after.identity, before.identity);
+    assert.equal(after.count, "0");
+    assert.deepEqual(pageErrors, []);
+    await receipt({ type: "recovered", ...after });
+    await browser.close();
+    writeSync(1, "Deletion SSE reconnect recovery verified\n");
+    process.exit(0);
+  } catch (error) {
+    writeSync(
+      2,
+      "Reconnect phase " +
+        phase +
+        ": " +
+        String(error) +
+        "; page errors " +
+        JSON.stringify(pageErrors).slice(0, 2000) +
+        "\n",
+    );
+    if (browser) await browser.close().catch(() => {});
+    process.exit(1);
+  }
+}
 
 /** @param {Page} page */
 async function installRecorder(page) {

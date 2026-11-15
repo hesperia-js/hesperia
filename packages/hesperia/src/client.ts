@@ -1,9 +1,12 @@
 import { computed, signal, type Computed, type SignalOptions, type WritableSignal } from "aeolia";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { createBinding, type Binding } from "./runtime/binding.ts";
 import { Owner, RenderFault } from "./runtime/owner.ts";
 import type { Rendered } from "./runtime/dom.ts";
 import { createTask } from "./data/task.ts";
 import type { InferredTask, Task, TaskContext, TaskFactory, TaskInvocation } from "./data/types.ts";
+import { createForm } from "./validation/form.ts";
+import type { Form, FormOptions } from "./validation/form.ts";
 import * as eventHelpers from "./events.ts";
 
 /** Native event listener helpers available from the `hesperia/client` namespace. */
@@ -66,6 +69,23 @@ export interface Client {
 
   /** Create a task with explicitly selected input and output types. */
   task<Input = void, Output = unknown>(factory: TaskFactory<Input, Output>): Task<Input, Output>;
+
+  /**
+   * Create a dormant Standard Schema validator bound to this component's lifetime.
+   *
+   * A run fulfills with the schema result, including validation issues; thrown
+   * errors and task cancellation fail the run. `runForm` captures native form
+   * data and its optional submitter synchronously when the run starts, then
+   * applies `options.map` before validation. `reset` clears validation state only.
+   *
+   * @param schema Standard Schema validator used by each run.
+   * @param options Optional form-data-to-input mapping.
+   * @returns The owner-bound form validator.
+   */
+  form<Input, Output>(
+    schema: StandardSchemaV1<Input, Output>,
+    options?: FormOptions<Input>,
+  ): Form<Input, Output>;
 
   /** Insert opaque HTML into an authored host or Fragment; requires the project permission flag. */
   unsafeHTML(host: Rendered, html: unknown): Rendered;
@@ -142,6 +162,10 @@ export function createClient(owner: Owner): Client {
       return createTask(owner, factory);
     },
 
+    form<Input, Output>(schema: StandardSchemaV1<Input, Output>, options?: FormOptions<Input>) {
+      return createForm<Input, Output>(owner, schema, options);
+    },
+
     unsafeHTML: missingCompilation,
   };
 
@@ -168,6 +192,7 @@ const uncompiledClient = {
   bind: missingCompilation,
   unsafeBind: missingCompilation,
   task: missingCompilation,
+  form: missingCompilation,
   unsafeHTML: missingCompilation,
 };
 export const client: Client = uncompiledClient;
@@ -186,7 +211,10 @@ export const bind: Client["bind"] = missingCompilation;
 export const unsafeBind: Client["unsafeBind"] = missingCompilation;
 /** Compiler-bound owner task authoring operation. */
 export const task: Client["task"] = missingCompilation;
+/** Compiler-bound owner form-validation authoring operation. */
+export const form: Client["form"] = missingCompilation;
 /** Compiler-lowered raw HTML operation with an authored host or Fragment. */
 export const unsafeHTML: Client["unsafeHTML"] = missingCompilation;
 
 export type { Binding, WritableBinding } from "./runtime/binding.ts";
+export type { Form, FormOptions, FormRunOptions } from "./validation/form.ts";
