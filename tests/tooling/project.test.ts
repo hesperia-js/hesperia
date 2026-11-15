@@ -186,6 +186,79 @@ describe("project commands", () => {
     }
   });
 
+  test("the emitted build command reports retained warnings without running lint", async () => {
+    const root = await temporaryProject();
+    const image = join(root, "photo.jpg");
+    const app = join(root, "app.tsx");
+
+    await mkdir(join(root, "src"), { recursive: true });
+
+    await writeFile(image, new Uint8Array([0, 255, 1, 2]));
+
+    await writeFile(
+      app,
+      `import photo from "./photo.jpg" with { type: "image/png" };
+export default function App() {
+  return <html><head></head><body><span>{photo.type}</span></body></html>;
+}`,
+    );
+
+    const lintSource = join(root, "src", "lint-only.ts");
+    const lintConfiguration = join(root, ".oxlintrc.json");
+
+    await writeFile(lintSource, "const lintOnlyBuildProbe = 1;\n");
+
+    await writeFile(
+      lintConfiguration,
+      JSON.stringify({ plugins: ["typescript"], rules: { "no-unused-vars": "error" } }),
+    );
+
+    const run = async (executable: string, arguments_: string[], cwd: string) => {
+      const child = Bun.spawn([executable, ...arguments_], {
+        cwd,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+
+      return { code, stdout, stderr };
+    };
+
+    const built = await run(
+      process.execPath,
+      [resolve(import.meta.dir, "../../packages/tooling/dist/cli.js"), "build"],
+      root,
+    );
+
+    expect(built.code).toBe(0);
+
+    expect(built.stdout).toContain("Built browser application");
+
+    expect(built.stderr).toContain(
+      `${app}: HES-PLUGIN: Declared MIME type image/png differs from image/jpeg for ${image}; bytes are not converted.`,
+    );
+
+    expect(built.stderr).not.toContain("lint-only.ts");
+
+    expect(built.stderr).not.toContain("lintOnlyBuildProbe");
+
+    const linted = await run(
+      process.execPath,
+      ["run", "lint", "--", "--config", lintConfiguration, lintSource],
+      resolve(import.meta.dir, "../.."),
+    );
+
+    expect(linted.code).toBe(1);
+
+    expect(`${linted.stdout}\n${linted.stderr}`).toContain("lintOnlyBuildProbe");
+
+    expect(`${linted.stdout}\n${linted.stderr}`).toContain("no-unused-vars");
+  });
+
   test("creates the starter and refuses to overwrite a nonempty destination", async () => {
     const root = await temporaryProject(false);
 
