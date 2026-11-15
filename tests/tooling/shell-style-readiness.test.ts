@@ -19,12 +19,14 @@ test("generated shell startup waits for installed-head CSS and releases failed s
     await linkFrameworkPackages(root);
 
     const built = await prepareBuild(root, true);
-    const host = await createHost({
-      hosting: built.hosting,
-      files: new Map(
-        built.hosting.assets.map((asset) => [asset.path, built.files.get(asset.path)!]),
-      ),
-    });
+    const files = new Map(
+      built.hosting.assets.map((asset) => [asset.path, built.files.get(asset.path)!]),
+    );
+    const host = await createHost(
+      "publicFiles" in built
+        ? { hosting: built.hosting, files, publicFiles: built.publicFiles }
+        : { hosting: built.hosting, files },
+    );
     server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
