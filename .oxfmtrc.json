@@ -6,6 +6,7 @@
     "**/build/**",
     "hesperia.d.ts",
     "packages/tooling/src/vendor/saxe/**",
+    "tests/data/fixtures/grpc/service-all_pb.ts",
     "tests/browser/fixtures/imported-markup/src/native.css",
     "tests/browser/fixtures/imported-markup/src/native-nested.css"
   ],
