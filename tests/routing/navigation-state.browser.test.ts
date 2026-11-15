@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chromium, firefox, webkit } from "playwright";
 import { resolve } from "node:path";
@@ -82,7 +83,7 @@ for (const engine of [chromium, firefox, webkit]) {
     engine.name() +
       " changed-URL direct History writes project author state across reload and released Forward",
     async () => {
-      const browser = await engine.launch();
+      const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
       try {
         const page = await browser.newPage();
@@ -282,7 +283,7 @@ for (const engine of [chromium, firefox, webkit]) {
   );
 
   test(`${engine.name()} direct History URL arguments match nullable and base-relative native behavior`, async () => {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
     try {
       const page = await browser.newPage();
@@ -527,7 +528,7 @@ for (const engine of [chromium, firefox, webkit]) {
   }, 45_000);
 
   test(`${engine.name()} fallback keeps classic and Navigation state separate across reload and traversal`, async () => {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
     try {
       const page = await browser.newPage();
@@ -687,7 +688,7 @@ for (const engine of [chromium, firefox, webkit]) {
   }, 45_000);
 
   test(`${engine.name()} fallback keeps state projection on Back and Forward after Router disposal`, async () => {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
     try {
       const page = await browser.newPage();

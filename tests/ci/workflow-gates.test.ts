@@ -64,6 +64,61 @@ test("full coverage runs four independent groups per OS before platform and comb
   }
 });
 
+test("browser-bearing jobs require the selected Chrome before running tests", () => {
+  const jobs = workflow.jobs as unknown as Record<
+    string,
+    {
+      env?: Record<string, string>;
+      steps: { name?: string; uses?: string; if?: string; run?: string }[];
+    }
+  >;
+  const setup = "./.github/actions/setup-chrome";
+
+  for (const [name, command] of [
+    ["source-quality", "bun test --timeout=45000 tests/tooling"],
+    ["browser", "bun run test:browser"],
+    ["package", "bun test --timeout=60000 tests/package"],
+    ["golden", "node ../node_modules/@playwright/test/cli.js test"],
+  ] as const) {
+    const job = jobs[name]!;
+    const setupIndex = job.steps.findIndex((step) => step.uses === setup);
+    const testIndex = job.steps.findIndex((step) => step.run?.includes(command));
+
+    expect(job.env?.HESPERIA_REQUIRE_CHROME_EXECUTABLE_PATH).toBe("1");
+    expect(setupIndex).toBeGreaterThanOrEqual(0);
+    expect(job.steps[setupIndex]!.if).toBeUndefined();
+    expect(testIndex).toBeGreaterThan(setupIndex);
+  }
+
+  const coverage = jobs["coverage-groups"]!;
+  const setupIndex = coverage.steps.findIndex((step) => step.uses === setup);
+  const testIndex = coverage.steps.findIndex(
+    (step) => step.name === "Run the original coverage group",
+  );
+
+  expect(setupIndex).toBeGreaterThanOrEqual(0);
+  expect(testIndex).toBeGreaterThan(setupIndex);
+
+  const setupCondition = coverage.steps[setupIndex]!.if!;
+  const requiredExpression = coverage.env!.HESPERIA_REQUIRE_CHROME_EXECUTABLE_PATH!;
+  const evaluate = (expression: string, group: string) =>
+    new Function("matrix", `return (${expression.replace(/^\$\{\{\s*|\s*\}\}$/g, "")});`)({
+      group,
+    });
+
+  for (const group of [
+    "bun-tests-ordinary",
+    "project-worker-owner",
+    "browser-css",
+    "native-editor",
+  ]) {
+    const hasBrowser = group === "bun-tests-ordinary" || group === "browser-css";
+
+    expect(Boolean(evaluate(setupCondition, group))).toBe(hasBrowser);
+    expect(evaluate(requiredExpression, group)).toBe(hasBrowser ? "1" : "0");
+  }
+});
+
 function requestsFull(outcome: string, outputs: Record<string, string>, full = false) {
   const expression = scopeExpression
     .slice("${{ ".length, -" }}".length)
