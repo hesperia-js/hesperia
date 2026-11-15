@@ -175,6 +175,16 @@ dependencies, and temporary modules are excluded. The check fails if any
 executable source has no coverage records or either floor is below 90%.
 Sources with no executable statements are reported separately.
 
+Full CI and selected tooling verification run the checked SVG import owner
+separately and require at least 70% line coverage across the five supported
+vendored Saxe modules. The report includes the sixth module in the complete
+closure and makes no line exclusions. The job retains the direct run's logs,
+capture inputs, raw coverage artifacts, and checker report. Changes to Saxe or
+its checked-import owner select tooling verification.
+After the frozen install and build, run the same capture and check locally with
+`bun run scripts/ci/check-saxe-integration-coverage.ts --capture`. This check does not
+replace the combined Windows and Linux coverage gate.
+
 For a bounded local in-process report, run `bun run test:coverage` followed by
 `bun run scripts/ci/check-coverage.ts`. Those commands do not include browser
 or editor subprocesses. To capture all owners locally, use

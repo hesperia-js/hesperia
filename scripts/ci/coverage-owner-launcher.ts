@@ -112,6 +112,7 @@ const sourcePreload = "scripts/ci/coverage-editor-preload.ts";
 const sourceCollector = "scripts/ci/coverage-collector.ts";
 const sourceInventory = "scripts/ci/coverage-inventory.ts";
 const sourceChecker = "scripts/ci/check-coverage.ts";
+const sourceSaxeChecker = "scripts/ci/check-saxe-integration-coverage.ts";
 const sourceCoverageClassifier = "scripts/ci/coverage-source-classifier.ts";
 const sourceWorkerBuild = "scripts/ci/coverage-worker-build.ts";
 const sourceLauncher = "scripts/ci/coverage-owner-launcher.ts";
@@ -160,6 +161,7 @@ function ownerProfiles(
           driver,
           "scripts/ci/coverage-group-artifacts.ts",
           sourceChecker,
+          sourceSaxeChecker,
           sourceCoverageClassifier,
           sourceLauncher,
           sourceCollector,
