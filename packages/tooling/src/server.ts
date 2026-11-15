@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -78,6 +79,7 @@ type DevelopmentCapture = DevelopmentCaptureMetadata &
 type PublishedDevelopmentRevision = DevelopmentCapture & {
   readonly host: ApplicationHost;
   readonly fingerprint: string;
+  readonly identity: string;
 };
 
 type DevelopmentWatchEntry = NonNullable<BrowserBuild["watch"]>[number];
@@ -136,6 +138,7 @@ export async function devProject(
     initialCapture,
     initialHost,
     developmentFingerprint(build, initialCapture.hosting),
+    randomUUID(),
   );
   let closed = false;
   let pending = false;
@@ -574,10 +577,10 @@ export async function devProject(
 
   rememberDevelopmentRoot(published.host);
 
-  function publish(message: unknown): void {
+  function publish(message: unknown, identity: string): void {
     for (const client of clients) {
       try {
-        client.enqueue(encoder.encode(`data: ${JSON.stringify(message)}\n\n`));
+        client.enqueue(encoder.encode(`id: ${identity}\ndata: ${JSON.stringify(message)}\n\n`));
       } catch {
         clients.delete(client);
       }
@@ -1061,7 +1064,12 @@ export async function devProject(
               }
 
               const closeFailures = commitAndRetire(watchInstall.retired, () => {
-                published = publishDevelopmentCapture(capture, published.host, fingerprint);
+                published = publishDevelopmentCapture(
+                  capture,
+                  published.host,
+                  fingerprint,
+                  published.identity,
+                );
                 build = candidate;
                 failedWatchDependencies = [];
               });
@@ -1101,19 +1109,27 @@ export async function devProject(
               }
 
               const closeFailures = commitAndRetire(watchInstall.retired, () => {
-                published = publishDevelopmentCapture(capture, host, fingerprint);
+                const publication = publishDevelopmentCapture(
+                  capture,
+                  host,
+                  fingerprint,
+                  randomUUID(),
+                );
+
+                published = publication;
                 build = candidate;
                 failedWatchDependencies = [];
 
                 rememberDevelopmentRoot(host);
 
                 if (routeIds.length || reloadAll)
-                  publish({ type: "source-removal", routeIds, reloadAll });
+                  publish({ type: "source-removal", routeIds, reloadAll }, publication.identity);
 
                 publish(
                   styleOnly
                     ? { type: "style-revision", plan: candidate.styleRevision!.plan }
                     : "reload",
+                  publication.identity,
                 );
               });
 
@@ -1158,6 +1174,7 @@ export async function devProject(
             if (closed || controller.signal.aborted || pending) continue;
 
             const message = String(error);
+            const current = published;
 
             if (closed || controller.signal.aborted || pending) continue;
 
@@ -1165,7 +1182,7 @@ export async function devProject(
 
             if (closed || controller.signal.aborted || pending) continue;
 
-            publish(message);
+            publish(message, current.identity);
 
             if (
               watchInstall.installed &&
@@ -1203,7 +1220,13 @@ export async function devProject(
 
               clients.add(value);
 
-              value.enqueue(encoder.encode(": connected\n\n"));
+              const current = published;
+
+              value.enqueue(
+                encoder.encode(
+                  `: connected\n\nid: ${current.identity}\ndata: {"type":"current"}\n\n`,
+                ),
+              );
             },
 
             cancel() {
@@ -1251,7 +1274,7 @@ export async function devProject(
         return response;
 
       const body = await response.text();
-      const clientPath = `${current.host.mount.assetPath}/client.js`;
+      const clientPath = `${current.host.mount.assetPath}/client.js?publication=${encodeURIComponent(current.identity)}`;
       const html = body.replace(
         '<script type="module" src=',
         `<script type="module" src="${clientPath.replaceAll("&", "&amp;")}"></script><script type="module" src=`,
@@ -1541,10 +1564,11 @@ function publishDevelopmentCapture(
   capture: DevelopmentCapture,
   host: ApplicationHost,
   fingerprint: string,
+  identity: string,
 ): PublishedDevelopmentRevision {
-  if ("publicFiles" in capture) return { ...capture, host, fingerprint };
+  if ("publicFiles" in capture) return { ...capture, host, fingerprint, identity };
 
-  return { ...capture, host, fingerprint };
+  return { ...capture, host, fingerprint, identity };
 }
 
 function canonicalSource(filename: string): string {
@@ -1579,9 +1603,10 @@ function developmentClientSource(assetRoot: string): string {
   const eventsURL = JSON.stringify(`${assetRoot}/events`);
   const warningsURL = JSON.stringify(`${assetRoot}/warnings`);
   return `const warningsURL = ${warningsURL};
+let receivedPublication = new URL(import.meta.url).searchParams.get("publication") ?? "";
 addEventListener("hesperia:warning", event => { if (typeof event.detail === "string") void fetch(warningsURL, { method: "POST", body: event.detail }).catch(() => {}); });
 const requestHardReload = () => { const request = new CustomEvent("hesperia:dev-hard-reload", { cancelable: true }); if (window.dispatchEvent(request)) location.reload(); };
 const events = new EventSource(${eventsURL});
-events.onmessage = async event => { const message = JSON.parse(event.data); if (message === "reload") { requestHardReload(); return; } if (message?.type === "source-removal") { window.dispatchEvent(new CustomEvent("hesperia:dev-source-removal", { detail: { routeIds: message.routeIds, reloadAll: message.reloadAll } })); return; } if (message?.type === "style-revision") { let resolve; let reject; const settled = new Promise((accept, fail) => { resolve = accept; reject = fail; }); const update = new CustomEvent("hesperia:style-revision", { cancelable: true, detail: { plan: message.plan, resolve, reject } }); if (window.dispatchEvent(update)) { requestHardReload(); return; } try { await settled; } catch (error) { console.error(error); dispatchEvent(new CustomEvent("hesperia:warning", { detail: String(error) })); } return; } console.error(message); };
+events.onmessage = async event => { const message = JSON.parse(event.data); const publication = event.lastEventId; const previousPublication = receivedPublication; receivedPublication = publication; if (message?.type === "current") { if (publication !== previousPublication) requestHardReload(); return; } if (message === "reload") { requestHardReload(); return; } if (message?.type === "source-removal") { window.dispatchEvent(new CustomEvent("hesperia:dev-source-removal", { detail: { routeIds: message.routeIds, reloadAll: message.reloadAll } })); return; } if (message?.type === "style-revision") { let resolve; let reject; const settled = new Promise((accept, fail) => { resolve = accept; reject = fail; }); const update = new CustomEvent("hesperia:style-revision", { cancelable: true, detail: { plan: message.plan, resolve, reject } }); if (window.dispatchEvent(update)) { requestHardReload(); return; } try { await settled; } catch (error) { console.error(error); dispatchEvent(new CustomEvent("hesperia:warning", { detail: String(error) })); } return; } console.error(message); };
 `;
 }
