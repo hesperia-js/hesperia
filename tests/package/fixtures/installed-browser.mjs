@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../../support/browser-launch.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
@@ -64,7 +65,7 @@ async function clickWithoutNavigationWait(page, selector) {
 }
 
 for (const [name, engine] of Object.entries(engines)) {
-  const browser = await engine.launch();
+  const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
   try {
     const page = await browser.newPage();

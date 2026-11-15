@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -137,7 +138,7 @@ test("linked packages share state and revalidate live invalidated queries", asyn
     }
 
     for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
-      const browser = await engine.launch();
+      const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
       try {
         const page = await browser.newPage();
