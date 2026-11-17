@@ -8,8 +8,45 @@ an accumulated or otherwise projected value. Both expose owner-bound views:
 their reads stop being valid when the component owner is released.
 
 An adapter module constructs an Aeolia graph and its matching contract, then
-exports the adapted API. Components import that value directly from the module.
-There is no startup registration step and no `client.api` property.
+exports the adapted API. Components import that value directly from the module;
+there is no `client.api` property.
+
+## Application data identity
+
+An application can supply `dataBinding` in `app.config.ts` to give its root an
+explicit application identity and security scope. Create the identity once and
+reuse it for roots that belong to the same application:
+
+```ts
+import { createDataApplication } from "hesperia";
+
+const application = createDataApplication();
+
+export default {
+  dataBinding: {
+    application,
+    security: () => ({ kind: "none" as const }),
+  },
+};
+```
+
+For authenticated scopes, create a `DataSecurityPartition` with
+`createDataSecurityPartition()` and return it from `security` as
+`{ kind: "partition", partition }`. The authentication owner decides when
+callers can share a partition. The identity and partition are local to the
+JavaScript realm that created them.
+
+The optional `attach` callback receives a root control before component setup.
+Call `replaceSecurity(control.generation, nextScope, apply)` to fence the old
+scope before changing credentials. The returned promise resolves to the new
+generation after `apply` succeeds, or rejects with the failure. Stale or
+concurrent replacements do not call `apply`. The callback can return a
+synchronous unsubscribe, which runs when the root is disposed. `revoke(reason)`
+fences the current scope without removing the component tree.
+
+For an explicit `mount`, pass the same descriptor in `MountOptions.dataBinding`.
+A synchronous mount cannot complete an asynchronous security replacement
+started by `attach`; finish authentication before mounting in that case.
 
 ```tsx
 import { AsyncBoundary, type Component } from "hesperia";

@@ -1,5 +1,11 @@
 import { attachElementBinding, type Binding } from "./binding.ts";
-import { Owner, RenderFault, reportFault, type RuntimeContext } from "./owner.ts";
+import {
+  disposeOwnerSyncPreservingFailure,
+  Owner,
+  RenderFault,
+  reportFault,
+  type RuntimeContext,
+} from "./owner.ts";
 import { Scheduler } from "./scheduler.ts";
 import { installRootProjectPolicy } from "./project-policy.ts";
 import {
@@ -18,6 +24,11 @@ import {
   type TargetEntryPreparation,
 } from "./style.ts";
 import { isNonArrayObject, isNonNullObject } from "../utils.ts";
+import {
+  bootstrapDataBindingRoot,
+  registerDataBindingRoot,
+  type DataBindingBootstrap,
+} from "../data/environment.ts";
 
 declare const __HESPERIA_DEV__: boolean;
 
@@ -590,6 +601,8 @@ function append(parent: Node, value: Rendered, document: Document, owner?: Owner
 
 /** Browser mount configuration. */
 export interface MountOptions {
+  /** Application identity and security integration for this root's data bindings. */
+  readonly dataBinding?: DataBindingBootstrap;
   /** Receives unhandled rendering faults; defaults to throwing. */
   readonly onError?: (error: unknown) => void;
   /** Receives development warnings; defaults to console.warn. */
@@ -600,8 +613,11 @@ export interface MountOptions {
 
 /** Mounted application lifetime and deterministic effect completion barrier. */
 export interface MountedApplication {
-  /** Remove the application and revoke its owned work. Idempotent. */
-  dispose(reason?: unknown): void;
+  /** Revoke the application synchronously and join its owned cleanup work. Idempotent. */
+  dispose(reason?: unknown): Promise<void>;
+
+  /** Revoke synchronously and report cleanup failures through the owner error route. */
+  disposeSync(reason?: unknown): void;
 
   /** Resolve when pending DOM and effect passes have settled. */
   settled(): Promise<void>;
@@ -659,6 +675,7 @@ export function createRuntimeRoot(
   } as RuntimeContext;
   const owner = new Owner(context, null, "root");
   context.scheduler = new Scheduler(owner);
+  registerDataBindingRoot(owner, "MountOptions.dataBinding or app.config.ts");
   return { context, owner };
 }
 
@@ -679,7 +696,7 @@ export function prepareTree(owner: Owner, render: () => Rendered): PreparedTree 
   try {
     append(fragment, render(), owner.context.document, owner);
   } catch (error) {
-    owner.dispose(error);
+    disposeOwnerSyncPreservingFailure(owner, error);
 
     throw error;
   }
@@ -719,14 +736,14 @@ export function prepareTree(owner: Owner, render: () => Rendered): PreparedTree 
 
         owner.context.scheduler.requestEffects();
       } catch (error) {
-        owner.dispose(error);
+        disposeOwnerSyncPreservingFailure(owner, error);
 
         throw error;
       }
     },
 
     dispose(reason) {
-      owner.dispose(reason);
+      owner.disposeSync(reason);
     },
   };
 }
@@ -740,6 +757,7 @@ function mountedHandle(
 
   return {
     dispose: (reason) => owner.dispose(reason),
+    disposeSync: (reason) => owner.disposeSync(reason),
     settled: () => startup.then(() => context.scheduler.settled()),
   };
 }
@@ -1181,6 +1199,8 @@ export function mount<P>(
   try {
     installRootProjectPolicy(owner, definition as Component<unknown>);
 
+    bootstrapDataBindingRoot(owner, options.dataBinding);
+
     const styleBinding = internalStyleBindingFor(definition);
 
     if (container.nodeType === 9 && styleBinding && !styleBinding.documentCompositionId) {
@@ -1249,7 +1269,7 @@ export function mount<P>(
       ),
     );
   } catch (error) {
-    owner.dispose(error);
+    disposeOwnerSyncPreservingFailure(owner, error);
 
     reportFault(owner, error);
   }

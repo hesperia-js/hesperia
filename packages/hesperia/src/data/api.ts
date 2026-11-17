@@ -1,12 +1,17 @@
-import type { Contract, Graph } from "aeolia";
+import type { Contract, Graph, OperationDefinition, OperationTree } from "aeolia";
 import { createContractApi, type HesperiaContractApi } from "./contract.ts";
 import type { Owner } from "../runtime/owner.ts";
 import { isObjectLike } from "../utils.ts";
+import type { NativeOperationPolicy } from "../validation/native-operation.ts";
+
+type FiniteOperation = Extract<OperationDefinition, { readonly kind: "query" | "mutation" }>;
+type OperationPolicies = ReadonlyMap<FiniteOperation, NativeOperationPolicy>;
 
 interface AdaptedApiRecord {
   readonly graph: Graph;
   readonly contract: Contract;
   readonly project?: (bound: object) => object;
+  readonly policies?: OperationPolicies;
 }
 
 /** The shape of an adapted API before a component owner is known. */
@@ -28,6 +33,7 @@ const adaptedApiGraphs = new WeakMap<object, Graph>();
  * @param contract - The same public Aeolia contract used to create `graph`.
  * @param project - Optional provider projection applied after Hesperia binds
  * the graph and contract to a component owner.
+ * @param policies - Preparation policies keyed by finite declarations in this contract.
  * @returns A marker resolved to the owner-bound API, or to `Facade` when a
  * projector is supplied.
  */
@@ -42,20 +48,73 @@ export function markImportedApi<C extends Contract, Facade extends object>(
 export function markImportedApi<C extends Contract, Facade extends object>(
   graph: Graph<C>,
   contract: C,
+  project: (bound: HesperiaContractApi<C, true>) => Facade,
+  policies: OperationPolicies,
+): Facade;
+
+export function markImportedApi<C extends Contract, Facade extends object>(
+  graph: Graph<C>,
+  contract: C,
   project?: (bound: HesperiaContractApi<C>) => Facade,
+  policies?: OperationPolicies,
 ): ImportedApi<C> | Facade {
   const value = Object.freeze(Object.create(null)) as object;
+  const capturedPolicies = snapshotPolicies(contract.operations, policies);
   const record: AdaptedApiRecord = project
     ? {
         graph,
         contract,
         project: (bound) => project(bound as unknown as HesperiaContractApi<C>),
+        ...(capturedPolicies === undefined ? {} : { policies: capturedPolicies }),
       }
-    : { graph, contract };
+    : {
+        graph,
+        contract,
+        ...(capturedPolicies === undefined ? {} : { policies: capturedPolicies }),
+      };
 
   adaptedApis.set(value, Object.freeze(record));
 
   return value as ImportedApi<C> | Facade;
+}
+
+function snapshotPolicies(
+  operations: OperationTree,
+  policies: OperationPolicies | undefined,
+): OperationPolicies | undefined {
+  if (policies === undefined) return undefined;
+
+  const definitions = new Set<object>();
+  const visited = new Set<object>();
+  const collect = (tree: object): void => {
+    if (visited.has(tree)) return;
+
+    visited.add(tree);
+    for (const declaration of Object.values(tree)) {
+      if (!isObjectLike(declaration)) continue;
+
+      const kind = Reflect.get(declaration, "kind");
+      if (kind === "query" || kind === "mutation") definitions.add(declaration);
+      else if (kind !== "store" && kind !== "stream") collect(declaration);
+    }
+  };
+  collect(operations);
+
+  const captured = new Map<FiniteOperation, NativeOperationPolicy>();
+  for (const [definition, policy] of policies) {
+    if (!definitions.has(definition))
+      throw new TypeError(
+        "Native operation policies must reference finite operations in their contract",
+      );
+
+    const prepare = policy?.prepare;
+    if (typeof prepare !== "function")
+      throw new TypeError("Native operation policies require a preparation function");
+
+    captured.set(definition, Object.freeze({ prepare }));
+  }
+
+  return captured;
 }
 
 const ownerCaches = new WeakMap<Owner, WeakMap<object, unknown>>();
@@ -107,7 +166,7 @@ function bindValue(
   if (record !== undefined) {
     owner.assertActive();
 
-    const bound = createContractApi(owner, record.graph, record.contract);
+    const bound = createContractApi(owner, record.graph, record.contract, record.policies);
 
     adaptedApiGraphs.set(bound as object, record.graph);
 

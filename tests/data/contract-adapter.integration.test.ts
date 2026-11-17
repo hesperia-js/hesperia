@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import {
   createGraph,
   createMutation,
+  createQuery,
   createStore,
   createStream,
   defineContract,
@@ -13,6 +14,8 @@ import { reset, withAeolia } from "../../packages/hesperia/src/aeolia/index.ts";
 import { createContractApi } from "../../packages/hesperia/src/data/contract.ts";
 import { createClient } from "../../packages/hesperia/src/client.ts";
 import { Owner, type RuntimeContext } from "../../packages/hesperia/src/runtime/owner.ts";
+import { createNativeOperationPolicy } from "../../packages/hesperia/src/validation/native-operation.ts";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 
 const owners: Owner[] = [];
 
@@ -37,6 +40,244 @@ function makeOwner(): Owner {
 
   return owner;
 }
+
+function validatedQuery(schema: StandardSchemaV1<unknown, string>) {
+  const backend = testBackend();
+  const respond = backend.respond<string, string>("adapter.validation-custody");
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const query = createQuery({
+    name: "adapter.validation-custody",
+    key: (input: string) => `validation-custody/${input}`,
+    fetch: (input: string, options) => {
+      const result = respond(input, options);
+
+      markStarted();
+
+      return result;
+    },
+  });
+  const contract = defineContract({
+    namespace: "adapter-validation-custody",
+    operations: { query },
+  });
+  const graph = createGraph({ contract });
+  const owner = makeOwner();
+  const policy = createNativeOperationPolicy((input) => ({
+    input,
+    schemas: { input: schema },
+    replace: (value) => value,
+  }));
+  const marker = markImportedApi(graph, contract, (bound) => bound, new Map([[query, policy]]));
+  const api = bindImported(owner, marker) as typeof marker;
+
+  return { api, backend, graph, owner, started };
+}
+
+test("synchronous input validation acquires the transformed query immediately", async () => {
+  let calls = 0;
+  const schema: StandardSchemaV1<unknown, string> = {
+    "~standard": {
+      version: 1,
+      vendor: "test",
+      validate: (input) => {
+        calls++;
+        return { value: String(input).toUpperCase() };
+      },
+    },
+  };
+  const { api, backend, graph, owner } = validatedQuery(schema);
+
+  try {
+    const query = api.query("abc");
+
+    expect(calls).toBe(1);
+    expect(query.key).toBeDefined();
+    expect(backend.calls).toHaveLength(1);
+    expect(backend.calls[0]?.input).toBe("ABC");
+    backend.resolve(backend.calls[0]!, "done");
+    await expect(query.ready).resolves.toBe("done");
+  } finally {
+    await owner.dispose();
+    graph.dispose();
+  }
+});
+
+test("asynchronous input validation acquires only after the transformed value is ready", async () => {
+  let finish!: (value: StandardSchemaV1.Result<string>) => void;
+  const schema: StandardSchemaV1<unknown, string> = {
+    "~standard": {
+      version: 1,
+      vendor: "test",
+      validate: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    },
+  };
+  const { api, backend, graph, owner, started } = validatedQuery(schema);
+
+  try {
+    const query = api.query("abc");
+    const ready = query.ready;
+
+    expect(query.key).toBeUndefined();
+    expect(backend.calls).toHaveLength(0);
+    finish({ value: "ABC" });
+
+    await started;
+    expect(backend.calls).toHaveLength(1);
+    expect(backend.calls[0]?.input).toBe("ABC");
+    backend.resolve(backend.calls[0]!, "done");
+    await expect(ready).resolves.toBe("done");
+  } finally {
+    await owner.dispose();
+    graph.dispose();
+  }
+});
+
+test("query cancellation joins the original asynchronous input validation", async () => {
+  let finish!: (value: StandardSchemaV1.Result<string>) => void;
+  const schema: StandardSchemaV1<unknown, string> = {
+    "~standard": {
+      version: 1,
+      vendor: "test",
+      validate: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    },
+  };
+  const { api, backend, graph, owner } = validatedQuery(schema);
+  const reason = new Error("owner cancelled");
+  const query = api.query("abc");
+  const ready = query.ready;
+  let retired = false;
+  const retirement = owner.dispose(reason).then(() => {
+    retired = true;
+  });
+
+  await expect(ready).rejects.toBe(reason);
+  await Promise.resolve();
+  expect(retired).toBe(false);
+  expect(backend.calls).toHaveLength(0);
+
+  finish({ value: "ABC" });
+  await retirement;
+  expect(backend.calls).toHaveLength(0);
+  graph.dispose();
+});
+
+test("an asynchronous validator rejection preserves its cause without dispatch", async () => {
+  const cause = new Error("validator rejected");
+  const schema: StandardSchemaV1<unknown, string> = {
+    "~standard": {
+      version: 1,
+      vendor: "test",
+      validate: () => Promise.reject(cause),
+    },
+  };
+  const { api, backend, graph, owner } = validatedQuery(schema);
+
+  try {
+    await expect(api.query("abc").ready).rejects.toBe(cause);
+    expect(backend.calls).toHaveLength(0);
+  } finally {
+    await owner.dispose();
+    graph.dispose();
+  }
+});
+
+for (const property of ["then", "constructor"] as const) {
+  test(`validation ${property} failure reports incomplete owner retirement`, async () => {
+    let finish!: (value: StandardSchemaV1.Result<string>) => void;
+    const original = new Promise<StandardSchemaV1.Result<string>>((resolve) => {
+      finish = resolve;
+    });
+    const cause = new Error("validation then access failed");
+
+    Object.defineProperty(original, property, {
+      configurable: true,
+      get: () => {
+        throw cause;
+      },
+    });
+
+    const schema: StandardSchemaV1<unknown, string> = {
+      "~standard": { version: 1, vendor: "test", validate: () => original },
+    };
+    const { api, backend, graph, owner } = validatedQuery(schema);
+    const query = api.query("abc");
+
+    await expect(query.ready).rejects.toBe(cause);
+    const retirement = await owner.dispose().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(retirement).toBeInstanceOf(AggregateError);
+
+    const failure = (retirement as AggregateError).errors[0] as {
+      readonly cause: unknown;
+      readonly incomplete: boolean;
+      readonly original: unknown;
+    };
+
+    expect(failure).toMatchObject({ cause, incomplete: true, original });
+    expect(backend.calls).toHaveLength(0);
+    owners.splice(owners.indexOf(owner), 1);
+    Reflect.deleteProperty(original, property);
+    finish({ value: "ABC" });
+    graph.dispose();
+  });
+}
+
+test("query progress preserves reentrant reports through completion", async () => {
+  let report!: (value: number) => void;
+  let finish!: (value: string) => void;
+  const query = createQuery<string, string, string, number>({
+    name: "adapter.progress-reentrant",
+    key: (input) => `adapter-progress/${input}`,
+    fetch: (_input, options) => {
+      report = options.reportProgress;
+      return new Promise<string>((resolve) => {
+        finish = resolve;
+      });
+    },
+  });
+  const contract = defineContract({ namespace: "adapter-progress", operations: { query } });
+  const graph = createGraph({ contract });
+  const owner = makeOwner();
+
+  try {
+    const view = createContractApi(owner, graph, contract).query("one");
+    const progress = view.project({
+      kind: "reduce",
+      initial: [] as number[],
+      step: (values, value) => {
+        if (value === 1) {
+          report(2);
+          finish("done");
+        }
+
+        return [...values, value];
+      },
+    });
+    const ready = view.ready;
+
+    expect(typeof report).toBe("function");
+    report(1);
+
+    await expect(ready).resolves.toBe("done");
+    expect(progress.value()).toStrictEqual([1, 2]);
+    expect(progress.status()).toBe("complete");
+  } finally {
+    finish?.("cleanup");
+    await owner.dispose();
+    graph.dispose();
+  }
+});
 
 test("contract members become owner views and mutations stay dormant in a body", async () => {
   const backend = testBackend();

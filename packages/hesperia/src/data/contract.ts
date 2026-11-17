@@ -20,13 +20,30 @@ import type {
 import { RenderFault, type Owner } from "../runtime/owner.ts";
 import { isNonArrayObject, isNonNullObject } from "../utils.ts";
 import { createFeed } from "./feed.ts";
-import { createQueryView } from "./query.ts";
+import { createPreparedQueryView, createQueryView } from "./query.ts";
 import { createTask } from "./task.ts";
-import type { Accessor, Cell, Feed, QueryView, Task, TaskRun } from "./types.ts";
+import {
+  prepareProfileQueryInput,
+  type NativeOperationPolicy,
+} from "../validation/native-operation.ts";
+import { nativeQueryRegistration, type NativeQueryProfile } from "./native-observation.ts";
+import { currentDataBindingEnvironment } from "./environment.ts";
+import { acquireProfileQuery, assertQueryEnvironment } from "./query-binding.ts";
+import type {
+  Accessor,
+  Cell,
+  Feed,
+  QueryView,
+  Task,
+  TaskRun,
+  ValidationQueryView,
+} from "./types.ts";
 
 type BrandedOperationOptions<Options extends StoreOptions<any> | MutationOptions> = ReturnType<
   typeof queryOptions<Options>
 >;
+type FiniteOperation = Extract<OperationDefinition, { readonly kind: "query" | "mutation" }>;
+type OperationPolicies = ReadonlyMap<FiniteOperation, NativeOperationPolicy>;
 
 /**
  * Owner-bound mutation controller returned by an adapted contract member.
@@ -62,15 +79,25 @@ interface MutationInvocation {
 }
 
 /** Map an Aeolia contract declaration to Hesperia's owner-bound member shape. */
-export type HesperiaMember<D> =
-  D extends QueryDefinition<infer I, infer T, any>
-    ? ((input: I, options?: StoreOptions<T>) => QueryView<T>) &
-        ([I] extends [void | undefined]
-          ? (() => QueryView<T>) &
-              ((
-                options: StoreOptions<T> | BrandedOperationOptions<StoreOptions<T>>,
-              ) => QueryView<T>)
-          : {})
+export type HesperiaMember<D, Validating extends boolean = false> =
+  D extends QueryDefinition<infer I, infer T, any, infer Progress>
+    ? D extends NativeQueryProfile<infer Raw, infer Completed, infer P>
+      ? ((input: Raw, options?: StoreOptions<Completed>) => ValidationQueryView<Completed, P>) &
+          ([Raw] extends [void | undefined] ? () => ValidationQueryView<Completed, P> : {})
+      : ((
+          input: I,
+          options?: StoreOptions<T>,
+        ) => Validating extends true ? ValidationQueryView<T, Progress> : QueryView<T, Progress>) &
+          ([I] extends [void | undefined]
+            ? (() => Validating extends true
+                ? ValidationQueryView<T, Progress>
+                : QueryView<T, Progress>) &
+                ((
+                  options: StoreOptions<T> | BrandedOperationOptions<StoreOptions<T>>,
+                ) => Validating extends true
+                  ? ValidationQueryView<T, Progress>
+                  : QueryView<T, Progress>)
+            : {})
     : D extends MutationDefinition<infer I, infer R>
       ? () => MutationTask<I, R>
       : D extends StreamDefinition<infer I, infer T, any>
@@ -78,12 +105,14 @@ export type HesperiaMember<D> =
         : D extends StoreDefinition<infer T, any>
           ? () => Cell<T>
           : D extends OperationTree
-            ? { readonly [K in keyof D]: HesperiaMember<D[K]> }
+            ? { readonly [K in keyof D]: HesperiaMember<D[K], Validating> }
             : never;
 
 /** Hesperia's owner-bound projection of an Aeolia contract tree. */
-export type HesperiaContractApi<C extends Contract> =
-  C extends Contract<infer T> ? { readonly [K in keyof T]: HesperiaMember<T[K]> } : never;
+export type HesperiaContractApi<C extends Contract, Validating extends boolean = false> =
+  C extends Contract<infer T>
+    ? { readonly [K in keyof T]: HesperiaMember<T[K], Validating> }
+    : never;
 
 /**
  * Adapt the public Aeolia graph API to Hesperia's owner-bound data handles.
@@ -98,11 +127,12 @@ export function createContractApi<C extends Contract>(
   owner: Owner,
   graph: Graph<C>,
   contract: C,
+  policies?: OperationPolicies,
 ): HesperiaContractApi<C> {
   owner.assertActive();
 
   const rawApi = graph.api as ContractApi<C>;
-  return buildTree(owner, graph, rawApi, contract.operations) as HesperiaContractApi<C>;
+  return buildTree(owner, graph, rawApi, contract.operations, policies) as HesperiaContractApi<C>;
 }
 
 function buildTree(
@@ -110,6 +140,7 @@ function buildTree(
   graph: Graph,
   rawApi: unknown,
   declarations: OperationTree,
+  policies: OperationPolicies | undefined,
 ): unknown {
   if (rawApi === null || typeof rawApi !== "object")
     throw new TypeError("Aeolia graph API must be an object");
@@ -137,6 +168,61 @@ function buildTree(
         const queryMember = member as (
           ...args: [input?: unknown, options?: StoreOptions<unknown>]
         ) => QueryStore<unknown>;
+
+        const registration = nativeQueryRegistration(declaration);
+
+        if (registration) {
+          const environment = currentDataBindingEnvironment(owner.context);
+          const assertAuthority = (): void => assertQueryEnvironment(owner, environment);
+
+          assertAuthority();
+          const options = args[1] === undefined ? undefined : { ...args[1] };
+          assertAuthority();
+
+          return createPreparedQueryView(
+            owner,
+            graph,
+            (track) => prepareProfileQueryInput(args[0], registration.profile, track),
+            (prepared) =>
+              acquireProfileQuery(
+                owner,
+                graph,
+                declaration,
+                registration,
+                prepared.input,
+                options,
+                environment,
+              ),
+            options?.abortSignal,
+            assertAuthority,
+          );
+        }
+
+        const policy = policies?.get(declaration);
+
+        if (policy) {
+          return createPreparedQueryView(
+            owner,
+            graph,
+            (track) => policy.prepare(args[0], track),
+            (input) => {
+              const preparedArgs: [input?: unknown, options?: StoreOptions<unknown>] = [
+                input,
+                args[1],
+              ];
+              const store = queryMember(...preparedArgs);
+
+              return {
+                store,
+                recover: () => {
+                  queryMember(...preparedArgs);
+                },
+              };
+            },
+            args[1]?.abortSignal,
+          );
+        }
+
         const store = queryMember(...args);
         return createQueryView(owner, graph, store, () => {
           queryMember(...args);
@@ -144,6 +230,8 @@ function buildTree(
       };
     } else if (isMutationDefinition(declaration)) {
       if (typeof member !== "function") throw malformedMember(property);
+
+      const policy = policies?.get(declaration);
 
       result[property] = () => {
         type Invocation = {
@@ -174,18 +262,53 @@ function buildTree(
               }
 
               const linked = linkAbortSignals(taskSignal, invocation.options?.abortSignal);
+              const context = owner.context;
 
-              try {
+              const assertCurrent = (): void => {
+                owner.assertActive();
+
+                if (linked.signal.aborted) throw linked.signal.reason ?? cancellationReason();
+                if (
+                  owner.context !== context ||
+                  latest !== record ||
+                  record.resetReason !== undefined ||
+                  record.version !== graph.resetVersion.get()
+                )
+                  throw record.resetReason ?? cancellationReason();
+              };
+
+              const dispatch = (input: unknown): Promise<unknown> => {
                 const operationOptions =
                   invocation.options === undefined
                     ? { abortSignal: linked.signal }
                     : { ...invocation.options, abortSignal: linked.signal };
                 const operation = (
                   member as (value: unknown, callOptions: MutationOptions) => Promise<unknown>
-                )(invocation.input, operationOptions);
-                return rejectOnAbort(operation, invocation.options?.abortSignal).finally(
-                  linked.stop,
+                )(input, operationOptions);
+
+                return rejectOnAbort(operation, invocation.options?.abortSignal);
+              };
+
+              try {
+                if (policy === undefined) return dispatch(invocation.input).finally(linked.stop);
+
+                assertCurrent();
+                const prepared = policy.prepare(invocation.input, (completion) =>
+                  owner.onRelease(() => completion),
                 );
+                const dispatchPrepared = (input: unknown): Promise<unknown> => {
+                  assertCurrent();
+                  return dispatch(input);
+                };
+                let operation: Promise<unknown>;
+
+                if (isPreparedPromise(prepared)) {
+                  const preparation = Promise.resolve(prepared);
+                  void preparation.catch(() => undefined);
+                  operation = rejectOnAbort(preparation, linked.signal).then(dispatchPrepared);
+                } else operation = dispatchPrepared(prepared);
+
+                return operation.finally(linked.stop);
               } catch (error) {
                 linked.stop();
 
@@ -317,13 +440,21 @@ function buildTree(
           graph.resetVersion,
         );
     } else if (isOperationTree(declaration)) {
-      result[property] = buildTree(owner, graph, member, declaration);
+      result[property] = buildTree(owner, graph, member, declaration, policies);
     } else {
       throw malformedMember(property);
     }
   }
 
   return Object.freeze(result);
+}
+
+function isPreparedPromise<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
+  return (
+    value !== null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof Reflect.get(value, "then") === "function"
+  );
 }
 
 function createCellView<T>(owner: Owner, store: Store<T>): Cell<T> {
@@ -377,7 +508,9 @@ function isStoreDefinition(value: unknown): value is StoreDefinition<unknown> {
   return isNonNullObject(value) && (value as { kind?: unknown }).kind === "store";
 }
 
-function isQueryDefinition(value: unknown): value is QueryDefinition<unknown, unknown, string> {
+function isQueryDefinition(
+  value: unknown,
+): value is QueryDefinition<unknown, unknown, string, any> {
   return isOperationDefinition(value) && value.kind === "query";
 }
 

@@ -9,6 +9,25 @@ import type {
   StreamStatus,
 } from "aeolia";
 import type { Owner } from "../runtime/owner.ts";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
+import type { QueryProgressProject } from "./query-progress.ts";
+
+/** Latest eligible observation issue, independent of a finite request failure. */
+export type ObservationIssue =
+  | {
+      /** The output schema returned its original issues. */
+      readonly kind: "schema";
+      /** The original issues and their provider-supplied paths. */
+      readonly issues: readonly StandardSchemaV1.Issue[];
+    }
+  | {
+      /** Mapping or validation threw or rejected. */
+      readonly kind: "processing";
+      /** The stage that failed. */
+      readonly phase: "mapping" | "validation";
+      /** The original thrown or rejected reason. */
+      readonly cause: unknown;
+    };
 
 /** The lifecycle state published by an owner-bound task controller. */
 export type TaskStatus = "idle" | "pending" | "success" | "failure" | "cancelled";
@@ -86,11 +105,13 @@ export type InferredTask<
 >;
 
 /** A live query view whose reads and await are owned by one component. */
-export interface QueryView<T> {
+interface QueryViewCore<T, P> {
+  /** Shared observation issue; a valid observation clears it. */
+  readonly observationIssue: Accessor<ObservationIssue | undefined>;
   /** The underlying store key. */
-  readonly key: QueryStore<T>["key"];
+  readonly key: QueryStore<T, P>["key"];
   /** The graph owning the underlying store. */
-  readonly graph: QueryStore<T>["graph"];
+  readonly graph: QueryStore<T, P>["graph"];
   /**
    * Live committed or predicted value read. A call while rendering content
    * consumes this query source for that rendered lifetime. If a graph reset
@@ -106,9 +127,9 @@ export interface QueryView<T> {
   /** Current query caller status. */
   readonly status: Accessor<StoreStatus>;
   /** The original Aeolia readiness promise, with its semantics unchanged. */
-  readonly ready: QueryStore<T>["ready"];
+  readonly ready: QueryStore<T, P>["ready"];
   /** The underlying Aeolia query store, for explicit interoperability. */
-  readonly source: QueryStore<T>;
+  readonly source: QueryStore<T, P>;
   /** Commit a local value through the underlying store. */
   readonly set: (value: T) => void;
   /** Compute and commit a local value through the underlying store. */
@@ -121,7 +142,7 @@ export interface QueryView<T> {
    * recovery path instead, so failed recovery remains disarmed until this
    * method is called.
    */
-  readonly revalidate: QueryStore<T>["revalidate"];
+  readonly revalidate: QueryStore<T, P>["revalidate"];
   /**
    * Await the query state observed at the start of the await.
    *
@@ -140,6 +161,25 @@ export interface QueryView<T> {
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
   ) => PromiseLike<TResult1 | TResult2>;
 }
+
+/** A query exposes progress projections when its native progress type is present. */
+export type QueryView<T, P = never> = QueryViewCore<T, P> &
+  ([P] extends [never] ? {} : { readonly project: QueryProgressProject<P> });
+
+/** A query that may still be validating input before acquiring its native store. */
+export type ValidationQueryView<T, P = never> = Omit<
+  QueryView<T, P>,
+  "key" | "source" | "status" | "ready"
+> & {
+  /** The native key after input preparation and acquisition succeed. */
+  readonly key: QueryStore<T, P>["key"] | undefined;
+  /** The native store, absent until acquisition succeeds. */
+  readonly source: QueryStore<T, P> | undefined;
+  /** Input validation is Hesperia-owned; acquired states retain native statuses. */
+  readonly status: Accessor<StoreStatus | "validating">;
+  /** Acquisition followed by the acquired store's native readiness. */
+  readonly ready: QueryStore<T, P>["ready"];
+};
 
 /** A callable owner-bound view over a declared writable Aeolia store. */
 export interface Cell<T> extends Accessor<T | undefined> {
