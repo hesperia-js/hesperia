@@ -95,7 +95,8 @@ export async function analyzeComponentProps(
   collectFunctions(source);
 
   const byParameterStart: Record<string, ComponentPropsMetadata> = {};
-  const typeEvidenceByParameterStart: Record<string, ComponentPropTypeEvidence> = Object.create(null);
+  const typeEvidenceByParameterStart: Record<string, ComponentPropTypeEvidence> =
+    Object.create(null);
   const diagnostics: CompilerDiagnostic[] = [];
   const trusted = await findTrustedBrands(project);
 

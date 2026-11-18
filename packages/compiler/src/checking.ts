@@ -376,7 +376,11 @@ async function createCheckingSession(
             },
 
             getAccessibleEntries(filename: string) {
-              typingHost.record({ operation: "getAccessibleEntries", path: filename, result: undefined });
+              typingHost.record({
+                operation: "getAccessibleEntries",
+                path: filename,
+                result: undefined,
+              });
               return undefined;
             },
 
@@ -675,7 +679,13 @@ async function createCheckingSession(
           views: modules.flatMap((module, index) => {
             const view = views.get(normalize(modulePaths[index]!));
             return view
-              ? [{ filename: module.filename, nativeFilename: modulePaths[index]!, source: view.source }]
+              ? [
+                  {
+                    filename: module.filename,
+                    nativeFilename: modulePaths[index]!,
+                    source: view.source,
+                  },
+                ]
               : [];
           }),
           analyses,
@@ -704,14 +714,10 @@ function virtualPath(filename: string, root: string): string {
 }
 
 function snapshotVirtualModules(modules: readonly VirtualModule[]): readonly VirtualModule[] {
-  return Object.freeze(
-    modules.map(({ filename, source }) => Object.freeze({ filename, source })),
-  );
+  return Object.freeze(modules.map(({ filename, source }) => Object.freeze({ filename, source })));
 }
 
-function snapshotProjectCheckingOptions(
-  options: ProjectCheckingOptions,
-): ProjectCheckingOptions {
+function snapshotProjectCheckingOptions(options: ProjectCheckingOptions): ProjectCheckingOptions {
   return Object.freeze({
     ...options,
     ...(options.additionalFiles
@@ -727,9 +733,7 @@ function snapshotProjectCheckingOptions(
           }),
         }
       : {}),
-    ...(options.styledEntryIds
-      ? { styledEntryIds: new Set(options.styledEntryIds) }
-      : {}),
+    ...(options.styledEntryIds ? { styledEntryIds: new Set(options.styledEntryIds) } : {}),
   });
 }
 

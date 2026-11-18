@@ -51,7 +51,16 @@ export type CheckerTypeAbi =
 export type CheckerTypeShape =
   | {
       readonly kind: "primitive";
-      readonly name: "any" | "unknown" | "never" | "void" | "undefined" | "null" | "string" | "number" | "boolean";
+      readonly name:
+        | "any"
+        | "unknown"
+        | "never"
+        | "void"
+        | "undefined"
+        | "null"
+        | "string"
+        | "number"
+        | "boolean";
     }
   | {
       readonly kind: "literal";
@@ -59,7 +68,10 @@ export type CheckerTypeShape =
       readonly value: string | number | boolean;
     }
   | { readonly kind: "union" | "intersection"; readonly types: readonly CheckerTypeShape[] }
-  | { readonly kind: "keyof"; /** Type whose keys form this type. */ readonly target: CheckerTypeShape }
+  | {
+      readonly kind: "keyof";
+      /** Type whose keys form this type. */ readonly target: CheckerTypeShape;
+    }
   | {
       readonly kind: "indexed-access";
       /** Object side of the native `T[K]` access. */
@@ -303,20 +315,18 @@ interface NamedTypeDeclarationNode extends Node {
   readonly name?: Node;
 }
 
-
 function semanticStructuralShape(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(semanticStructuralShape);
 
   if (typeof value !== "object" || value === null) return value;
 
   const record = value as Record<string, unknown>;
-  const normalized = Object.fromEntries(Object.keys(record)
-    .filter((key) => key !== "declaration" && key !== "declarations")
-    .sort()
-    .map((key) => [
-    key,
-    semanticStructuralShape(record[key]),
-  ]));
+  const normalized = Object.fromEntries(
+    Object.keys(record)
+      .filter((key) => key !== "declaration" && key !== "declarations")
+      .sort()
+      .map((key) => [key, semanticStructuralShape(record[key])]),
+  );
 
   if (record.kind === "union" || record.kind === "intersection") {
     const types = (normalized as { types?: unknown }).types;
@@ -329,7 +339,9 @@ function semanticStructuralShape(value: unknown): unknown {
     const shape = normalized as { indexes?: unknown[]; properties?: { name?: string }[] };
 
     if (Array.isArray(shape.properties))
-      shape.properties = [...shape.properties].sort((left, right) => String(left.name).localeCompare(String(right.name)));
+      shape.properties = [...shape.properties].sort((left, right) =>
+        String(left.name).localeCompare(String(right.name)),
+      );
 
     if (Array.isArray(shape.indexes))
       shape.indexes = [...shape.indexes].sort((left, right) =>
@@ -339,7 +351,6 @@ function semanticStructuralShape(value: unknown): unknown {
 
   return normalized;
 }
-
 
 async function checkerTypeAbi(
   project: Project,
@@ -392,7 +403,12 @@ async function checkerTypeAbi(
   }
 
   const flags = type.flags;
-  const primitive: ReadonlyArray<readonly [number, "any" | "unknown" | "never" | "void" | "undefined" | "null" | "string" | "number" | "boolean"]> = [
+  const primitive: ReadonlyArray<
+    readonly [
+      number,
+      "any" | "unknown" | "never" | "void" | "undefined" | "null" | "string" | "number" | "boolean",
+    ]
+  > = [
     [TypeFlags.Any, "any"],
     [TypeFlags.Unknown, "unknown"],
     [TypeFlags.Never, "never"],
@@ -417,7 +433,15 @@ async function checkerTypeAbi(
     return { kind: "resolved", shape: { kind: "literal", base: "boolean", value: type.value } };
 
   if (type.isIndexType()) {
-    const target = await checkerTypeAbi(project, await type.getTarget(), `${path}/target`, active, depth + 1, boundTypeParameters, budget);
+    const target = await checkerTypeAbi(
+      project,
+      await type.getTarget(),
+      `${path}/target`,
+      active,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
 
     return target.kind === "resolved"
       ? { kind: "resolved", shape: { kind: "keyof", target: target.shape } }
@@ -425,20 +449,71 @@ async function checkerTypeAbi(
   }
 
   if (type.isIndexedAccessType()) {
-    const object = await checkerTypeAbi(project, await type.getObjectType(), `${path}/object`, active, depth + 1, boundTypeParameters, budget);
-    const index = await checkerTypeAbi(project, await type.getIndexType(), `${path}/index`, active, depth + 1, boundTypeParameters, budget);
+    const object = await checkerTypeAbi(
+      project,
+      await type.getObjectType(),
+      `${path}/object`,
+      active,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
+    const index = await checkerTypeAbi(
+      project,
+      await type.getIndexType(),
+      `${path}/index`,
+      active,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
 
     if (object.kind === "unresolved" || index.kind === "unresolved")
       return object.kind === "unresolved" ? object : index;
 
-    return { kind: "resolved", shape: { kind: "indexed-access", object: object.shape, index: index.shape } };
+    return {
+      kind: "resolved",
+      shape: { kind: "indexed-access", object: object.shape, index: index.shape },
+    };
   }
 
   if (type.isConditionalType()) {
-    const check = await checkerTypeAbi(project, await type.getCheckType(), `${path}/check`, active, depth + 1, boundTypeParameters, budget);
-    const extendsType = await checkerTypeAbi(project, await type.getExtendsType(), `${path}/extends`, active, depth + 1, boundTypeParameters, budget);
-    const whenTrue = await checkerTypeAbi(project, await type.getTrueType(), `${path}/true`, active, depth + 1, boundTypeParameters, budget);
-    const whenFalse = await checkerTypeAbi(project, await type.getFalseType(), `${path}/false`, active, depth + 1, boundTypeParameters, budget);
+    const check = await checkerTypeAbi(
+      project,
+      await type.getCheckType(),
+      `${path}/check`,
+      active,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
+    const extendsType = await checkerTypeAbi(
+      project,
+      await type.getExtendsType(),
+      `${path}/extends`,
+      active,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
+    const whenTrue = await checkerTypeAbi(
+      project,
+      await type.getTrueType(),
+      `${path}/true`,
+      active,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
+    const whenFalse = await checkerTypeAbi(
+      project,
+      await type.getFalseType(),
+      `${path}/false`,
+      active,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
 
     if (check.kind === "unresolved") return check;
     if (extendsType.kind === "unresolved") return extendsType;
@@ -458,20 +533,47 @@ async function checkerTypeAbi(
   }
 
   if (type.isSubstitutionType()) {
-    const base = await checkerTypeAbi(project, await type.getBaseType(), `${path}/base`, active, depth + 1, boundTypeParameters, budget);
-    const constraint = await checkerTypeAbi(project, await type.getConstraint(), `${path}/constraint`, active, depth + 1, boundTypeParameters, budget);
+    const base = await checkerTypeAbi(
+      project,
+      await type.getBaseType(),
+      `${path}/base`,
+      active,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
+    const constraint = await checkerTypeAbi(
+      project,
+      await type.getConstraint(),
+      `${path}/constraint`,
+      active,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
 
     if (base.kind === "unresolved" || constraint.kind === "unresolved")
       return base.kind === "unresolved" ? base : constraint;
 
-    return { kind: "resolved", shape: { kind: "substitution", base: base.shape, constraint: constraint.shape } };
+    return {
+      kind: "resolved",
+      shape: { kind: "substitution", base: base.shape, constraint: constraint.shape },
+    };
   }
 
   if (type.isTemplateLiteralType()) {
     const types: CheckerTypeShape[] = [];
 
     for (const [index, member] of (await type.getTypes()).entries()) {
-      const result = await checkerTypeAbi(project, member, `${path}/span/${index}`, active, depth + 1, boundTypeParameters, budget);
+      const result = await checkerTypeAbi(
+        project,
+        member,
+        `${path}/span/${index}`,
+        active,
+        depth + 1,
+        boundTypeParameters,
+        budget,
+      );
 
       if (result.kind === "unresolved") return result;
 
@@ -484,10 +586,17 @@ async function checkerTypeAbi(
   if (type.isStringMappingType()) {
     const operation = await checkerStringMappingOperation(project, type);
 
-    if (!operation)
-      return { kind: "unresolved", reason: "unsupported-type" };
+    if (!operation) return { kind: "unresolved", reason: "unsupported-type" };
 
-    const target = await checkerTypeAbi(project, await type.getTarget(), `${path}/target`, active, depth + 1, boundTypeParameters, budget);
+    const target = await checkerTypeAbi(
+      project,
+      await type.getTarget(),
+      `${path}/target`,
+      active,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
 
     return target.kind === "resolved"
       ? { kind: "resolved", shape: { kind: "string-mapping", operation, target: target.shape } }
@@ -499,7 +608,16 @@ async function checkerTypeAbi(
 
     if (!identity && !type.isThisType) return { kind: "unresolved", reason: "type-parameter" };
 
-    return checkerTypeParameterAbi(project, type, identity ?? `${path}/this`, path, active, depth, boundTypeParameters, budget);
+    return checkerTypeParameterAbi(
+      project,
+      type,
+      identity ?? `${path}/this`,
+      path,
+      active,
+      depth,
+      boundTypeParameters,
+      budget,
+    );
   }
 
   if (type.isUnionType() || type.isIntersectionType()) {
@@ -511,7 +629,15 @@ async function checkerTypeAbi(
     const shapes: CheckerTypeShape[] = [];
 
     for (const [index, member] of members.entries()) {
-      const result = await checkerTypeAbi(project, member, `${path}/${index}`, nextActive, depth + 1, boundTypeParameters, budget);
+      const result = await checkerTypeAbi(
+        project,
+        member,
+        `${path}/${index}`,
+        nextActive,
+        depth + 1,
+        boundTypeParameters,
+        budget,
+      );
 
       if (result.kind === "unresolved") return result;
 
@@ -536,7 +662,15 @@ async function checkerTypeAbi(
     const elements: CheckerTypeShape[] = [];
 
     for (const [index, element] of (await project.checker.getTypeArguments(tuple)).entries()) {
-      const result = await checkerTypeAbi(project, element, `${path}/element/${index}`, nextActive, depth + 1, boundTypeParameters, budget);
+      const result = await checkerTypeAbi(
+        project,
+        element,
+        `${path}/element/${index}`,
+        nextActive,
+        depth + 1,
+        boundTypeParameters,
+        budget,
+      );
 
       if (result.kind === "unresolved") return result;
 
@@ -576,17 +710,43 @@ async function checkerTypeAbi(
 
   if (await project.checker.isArrayType(type)) {
     if (!type.isTypeReference())
-      return (await checkerReferenceAbi(project, type, path, active, depth, boundTypeParameters, budget)) ??
-        { kind: "unresolved", reason: "unsupported-type" };
+      return (
+        (await checkerReferenceAbi(
+          project,
+          type,
+          path,
+          active,
+          depth,
+          boundTypeParameters,
+          budget,
+        )) ?? { kind: "unresolved", reason: "unsupported-type" }
+      );
 
     const arguments_ = await project.checker.getTypeArguments(type);
 
     if (arguments_.length !== 1 || (symbolName !== "Array" && symbolName !== "ReadonlyArray"))
-      return (await checkerReferenceAbi(project, type, path, active, depth, boundTypeParameters, budget)) ??
-        { kind: "unresolved", reason: "unsupported-type" };
+      return (
+        (await checkerReferenceAbi(
+          project,
+          type,
+          path,
+          active,
+          depth,
+          boundTypeParameters,
+          budget,
+        )) ?? { kind: "unresolved", reason: "unsupported-type" }
+      );
 
     const nextActive = new Map(active).set(type.id, path);
-    const element = await checkerTypeAbi(project, arguments_[0]!, `${path}/element`, nextActive, depth + 1, boundTypeParameters, budget);
+    const element = await checkerTypeAbi(
+      project,
+      arguments_[0]!,
+      `${path}/element`,
+      nextActive,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
 
     if (element.kind === "unresolved") return element;
 
@@ -619,7 +779,15 @@ async function checkerTypeAbi(
     };
   }
 
-  const reference = await checkerReferenceAbi(project, type, path, active, depth, boundTypeParameters, budget);
+  const reference = await checkerReferenceAbi(
+    project,
+    type,
+    path,
+    active,
+    depth,
+    boundTypeParameters,
+    budget,
+  );
 
   if (reference) return reference;
 
@@ -636,7 +804,8 @@ async function checkerRecursiveReferenceAbi(
   boundTypeParameters: ReadonlyMap<number, string>,
   budget: { remaining: number },
 ): Promise<CheckerTypeAbi> {
-  if (!type.isTypeReference()) return { kind: "resolved", shape: { kind: "recursive", path: recursivePath } };
+  if (!type.isTypeReference())
+    return { kind: "resolved", shape: { kind: "recursive", path: recursivePath } };
 
   const referenceArguments = await project.checker.getTypeArguments(type);
   const aliasArguments = await type.getAliasTypeArguments();
@@ -685,18 +854,22 @@ async function checkerReferenceAbi(
 
   if (!symbol && !alias) return undefined;
 
-  const target = symbol && symbol.flags & SymbolFlags.Alias
-    ? await project.checker.getAliasedSymbol(symbol)
-    : symbol;
-  const aliasTarget = alias && alias.flags & SymbolFlags.Alias
-    ? await project.checker.getAliasedSymbol(alias)
-    : alias;
-  const declarations = [...new Set([
-    ...(symbol?.declarations ?? []),
-    ...(target?.declarations ?? []),
-    ...(alias?.declarations ?? []),
-    ...(aliasTarget?.declarations ?? []),
-  ])];
+  const target =
+    symbol && symbol.flags & SymbolFlags.Alias
+      ? await project.checker.getAliasedSymbol(symbol)
+      : symbol;
+  const aliasTarget =
+    alias && alias.flags & SymbolFlags.Alias
+      ? await project.checker.getAliasedSymbol(alias)
+      : alias;
+  const declarations = [
+    ...new Set([
+      ...(symbol?.declarations ?? []),
+      ...(target?.declarations ?? []),
+      ...(alias?.declarations ?? []),
+      ...(aliasTarget?.declarations ?? []),
+    ]),
+  ];
 
   if (!declarations.length) return undefined;
 
@@ -705,24 +878,36 @@ async function checkerReferenceAbi(
 
   const declarationShapes = await checkerDeclarationShapes(project, declarations);
 
-  if (declarationShapes.length !== declarations.length) return { kind: "unresolved", reason: "checker-error" };
+  if (declarationShapes.length !== declarations.length)
+    return { kind: "unresolved", reason: "checker-error" };
 
   const referenceArguments = type.isTypeReference()
     ? await project.checker.getTypeArguments(type)
     : [];
-  const arguments_ = referenceArguments.length ? referenceArguments : await type.getAliasTypeArguments();
+  const arguments_ = referenceArguments.length
+    ? referenceArguments
+    : await type.getAliasTypeArguments();
   const argumentShapes: CheckerTypeShape[] = [];
   const nextActive = new Map(active).set(type.id, path);
 
   const referenceTarget = type.isTypeReference() ? await type.getTarget() : undefined;
-  const genericTarget = referenceTarget && (referenceTarget.isTupleType() || referenceTarget.isClassOrInterface())
-    ? referenceTarget
-    : undefined;
+  const genericTarget =
+    referenceTarget && (referenceTarget.isTupleType() || referenceTarget.isClassOrInterface())
+      ? referenceTarget
+      : undefined;
 
   if (genericTarget) nextActive.set(genericTarget.id, `${path}/surface`);
 
   for (const [index, argument] of arguments_.entries()) {
-    const result = await checkerTypeAbi(project, argument, `${path}/typearg/${index}`, nextActive, depth + 1, boundTypeParameters, budget);
+    const result = await checkerTypeAbi(
+      project,
+      argument,
+      `${path}/typearg/${index}`,
+      nextActive,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
 
     if (result.kind === "unresolved") return result;
 
@@ -732,8 +917,16 @@ async function checkerReferenceAbi(
   const bases: CheckerTypeShape[] = [];
 
   if (type.isClassOrInterface()) {
-    for (const [index, base] of (await type.getBaseTypes() ?? []).entries()) {
-      const baseShape = await checkerTypeAbi(project, base, `${path}/base/${index}`, nextActive, depth + 1, boundTypeParameters, budget);
+    for (const [index, base] of ((await type.getBaseTypes()) ?? []).entries()) {
+      const baseShape = await checkerTypeAbi(
+        project,
+        base,
+        `${path}/base/${index}`,
+        nextActive,
+        depth + 1,
+        boundTypeParameters,
+        budget,
+      );
 
       if (baseShape.kind === "unresolved") return baseShape;
 
@@ -743,15 +936,23 @@ async function checkerReferenceAbi(
 
   const surface = genericTarget
     ? await checkerGenericObjectSurface(
-      project,
-      genericTarget,
-      `${path}/surface`,
-      nextActive,
-      depth + 1,
-      boundTypeParameters,
-      budget,
-    )
-    : await checkerObjectAbi(project, type, path, nextActive, depth + 1, boundTypeParameters, budget);
+        project,
+        genericTarget,
+        `${path}/surface`,
+        nextActive,
+        depth + 1,
+        boundTypeParameters,
+        budget,
+      )
+    : await checkerObjectAbi(
+        project,
+        type,
+        path,
+        nextActive,
+        depth + 1,
+        boundTypeParameters,
+        budget,
+      );
 
   if (surface.kind === "unresolved") return surface;
 
@@ -759,8 +960,8 @@ async function checkerReferenceAbi(
     kind: "resolved",
     shape: {
       kind: "reference",
-      declarations: declarationShapes.sort((left, right) =>
-        left.filename.localeCompare(right.filename) || left.start - right.start,
+      declarations: declarationShapes.sort(
+        (left, right) => left.filename.localeCompare(right.filename) || left.start - right.start,
       ),
       arguments: argumentShapes,
       bases,
@@ -830,7 +1031,15 @@ async function checkerTypeParameterAbi(
   const nextActive = new Map(active).set(type.id, path);
   const constraint = await project.checker.getConstraintOfTypeParameter(type);
   const constraintShape = constraint
-    ? await checkerTypeAbi(project, constraint, `${path}/constraint`, nextActive, depth + 1, boundTypeParameters, budget)
+    ? await checkerTypeAbi(
+        project,
+        constraint,
+        `${path}/constraint`,
+        nextActive,
+        depth + 1,
+        boundTypeParameters,
+        budget,
+      )
     : undefined;
 
   if (constraintShape?.kind === "unresolved") return constraintShape;
@@ -850,7 +1059,15 @@ async function checkerTypeParameterAbi(
 
     if (!defaultType) return { kind: "unresolved", reason: "checker-error" };
 
-    defaultShape = await checkerTypeAbi(project, defaultType, `${path}/default`, nextActive, depth + 1, boundTypeParameters, budget);
+    defaultShape = await checkerTypeAbi(
+      project,
+      defaultType,
+      `${path}/default`,
+      nextActive,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
     break;
   }
 
@@ -882,31 +1099,44 @@ async function checkerObjectAbi(
   const propertyShapes: CheckerPropertyShape[] = [];
 
   for (const property of properties) {
-    const resolved = await Promise.all(property.declarations.map((declaration) => declaration.resolve(project)));
-    const declarations = await checkerDeclarationShapes(
-      project,
-      property.declarations,
+    const resolved = await Promise.all(
+      property.declarations.map((declaration) => declaration.resolve(project)),
     );
-    const declarationNodes = resolved.filter((declaration): declaration is Node => declaration !== undefined);
+    const declarations = await checkerDeclarationShapes(project, property.declarations);
+    const declarationNodes = resolved.filter(
+      (declaration): declaration is Node => declaration !== undefined,
+    );
 
-    if (declarationNodes.some((declaration) => {
-      const member = declaration as TypeMemberNode;
+    if (
+      declarationNodes.some((declaration) => {
+        const member = declaration as TypeMemberNode;
 
-      return member.name?.kind === SyntaxKind.PrivateIdentifier || member.modifiers?.some((modifier) =>
-        modifier.kind === SyntaxKind.PrivateKeyword || modifier.kind === SyntaxKind.ProtectedKeyword,
-      ) === true;
-    }))
+        return (
+          member.name?.kind === SyntaxKind.PrivateIdentifier ||
+          member.modifiers?.some(
+            (modifier) =>
+              modifier.kind === SyntaxKind.PrivateKeyword ||
+              modifier.kind === SyntaxKind.ProtectedKeyword,
+          ) === true
+        );
+      })
+    )
       return { kind: "unresolved", reason: "nominal-member" };
 
-    const name = declarationNodes
-      .map((declaration) => (declaration as TypeMemberNode).name?.getText(declaration.getSourceFile()))
-      .find((value) => value !== undefined) ?? String(property.name);
+    const name =
+      declarationNodes
+        .map((declaration) =>
+          (declaration as TypeMemberNode).name?.getText(declaration.getSourceFile()),
+        )
+        .find((value) => value !== undefined) ?? String(property.name);
 
     if (String(property.name).startsWith("__#") || name.startsWith("#"))
       return { kind: "unresolved", reason: "nominal-member" };
 
-    if ((name.startsWith("__@") || name.startsWith("[")) &&
-        !await isTrustedWellKnownSymbolMember(project, declarationNodes))
+    if (
+      (name.startsWith("__@") || name.startsWith("[")) &&
+      !(await isTrustedWellKnownSymbolMember(project, declarationNodes))
+    )
       return { kind: "unresolved", reason: "symbol-member" };
 
     const memberType = await project.checker.getTypeOfSymbol(property);
@@ -914,7 +1144,15 @@ async function checkerObjectAbi(
     if (!memberType || declarations.length !== property.declarations.length)
       return { kind: "unresolved", reason: "checker-error" };
 
-    const member = await checkerTypeAbi(project, memberType, `${path}/${name}`, nextActive, depth + 1, boundTypeParameters, budget);
+    const member = await checkerTypeAbi(
+      project,
+      memberType,
+      `${path}/${name}`,
+      nextActive,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
 
     if (member.kind === "unresolved") return member;
 
@@ -923,7 +1161,10 @@ async function checkerObjectAbi(
       declarations,
       optional: Boolean(property.flags & SymbolFlags.Optional),
       readonly: declarationNodes.some((declaration) =>
-        (declaration as TypeMemberNode).modifiers?.some((modifier) => modifier.kind === SyntaxKind.ReadonlyKeyword)),
+        (declaration as TypeMemberNode).modifiers?.some(
+          (modifier) => modifier.kind === SyntaxKind.ReadonlyKeyword,
+        ),
+      ),
       type: member.shape,
     });
   }
@@ -934,7 +1175,9 @@ async function checkerObjectAbi(
     const shapes: CheckerSignatureShape[] = [];
 
     for (const signature of await project.checker.getSignaturesOfType(type, kind)) {
-      const declaration = await signature.declaration?.resolve(project) as FunctionLikeNode | undefined;
+      const declaration = (await signature.declaration?.resolve(project)) as
+        | FunctionLikeNode
+        | undefined;
 
       if (!declaration) return { kind: "unresolved", reason: "checker-error" };
 
@@ -970,12 +1213,21 @@ async function checkerObjectAbi(
 
         if (!parameterType) return { kind: "unresolved", reason: "checker-error" };
 
-        const parameterShape = await checkerTypeAbi(project, parameterType, `${path}/arg/${index}`, nextActive, depth + 1, signatureTypeParameters, budget);
+        const parameterShape = await checkerTypeAbi(
+          project,
+          parameterType,
+          `${path}/arg/${index}`,
+          nextActive,
+          depth + 1,
+          signatureTypeParameters,
+          budget,
+        );
 
         if (parameterShape.kind === "unresolved") return parameterShape;
 
         parameters.push({
-          optional: parameterNode.questionToken !== undefined || parameterNode.initializer !== undefined,
+          optional:
+            parameterNode.questionToken !== undefined || parameterNode.initializer !== undefined,
           rest: parameterNode.dotDotDotToken !== undefined,
           type: parameterShape.shape,
         });
@@ -985,7 +1237,15 @@ async function checkerObjectAbi(
 
       if (!returnType) return { kind: "unresolved", reason: "checker-error" };
 
-      const returnShape = await checkerTypeAbi(project, returnType, `${path}/return`, nextActive, depth + 1, signatureTypeParameters, budget);
+      const returnShape = await checkerTypeAbi(
+        project,
+        returnType,
+        `${path}/return`,
+        nextActive,
+        depth + 1,
+        signatureTypeParameters,
+        budget,
+      );
 
       if (returnShape.kind === "unresolved") return returnShape;
 
@@ -994,16 +1254,34 @@ async function checkerObjectAbi(
       if (!declarations.length) return { kind: "unresolved", reason: "checker-error" };
 
       const thisParameter = await signature.getThisParameter();
-      const thisType = thisParameter ? await project.checker.getTypeOfSymbol(thisParameter) : undefined;
+      const thisType = thisParameter
+        ? await project.checker.getTypeOfSymbol(thisParameter)
+        : undefined;
       const thisShape = thisType
-        ? await checkerTypeAbi(project, thisType, `${path}/this`, nextActive, depth + 1, signatureTypeParameters, budget)
+        ? await checkerTypeAbi(
+            project,
+            thisType,
+            `${path}/this`,
+            nextActive,
+            depth + 1,
+            signatureTypeParameters,
+            budget,
+          )
         : undefined;
 
       if (thisShape?.kind === "unresolved") return thisShape;
 
       const predicate = await project.checker.getTypePredicateOfSignature(signature);
       const predicateType = predicate?.type
-        ? await checkerTypeAbi(project, predicate.type, `${path}/predicate`, nextActive, depth + 1, signatureTypeParameters, budget)
+        ? await checkerTypeAbi(
+            project,
+            predicate.type,
+            `${path}/predicate`,
+            nextActive,
+            depth + 1,
+            signatureTypeParameters,
+            budget,
+          )
         : undefined;
 
       if (predicateType?.kind === "unresolved") return predicateType;
@@ -1013,18 +1291,20 @@ async function checkerObjectAbi(
         typeParameters: typeParameterShapes,
         ...(thisShape?.kind === "resolved" ? { thisType: thisShape.shape } : {}),
         parameters,
-        ...(predicate ? {
-          predicate: {
-            kind: predicate.kind,
-            ...("parameterName" in predicate && predicate.parameterName !== undefined
-              ? { parameterName: predicate.parameterName }
-              : {}),
-            ...("parameterIndex" in predicate && predicate.parameterIndex !== undefined
-              ? { parameterIndex: predicate.parameterIndex }
-              : {}),
-            ...(predicateType?.kind === "resolved" ? { type: predicateType.shape } : {}),
-          },
-        } : {}),
+        ...(predicate
+          ? {
+              predicate: {
+                kind: predicate.kind,
+                ...("parameterName" in predicate && predicate.parameterName !== undefined
+                  ? { parameterName: predicate.parameterName }
+                  : {}),
+                ...("parameterIndex" in predicate && predicate.parameterIndex !== undefined
+                  ? { parameterIndex: predicate.parameterIndex }
+                  : {}),
+                ...(predicateType?.kind === "resolved" ? { type: predicateType.shape } : {}),
+              },
+            }
+          : {}),
         returns: returnShape.shape,
       });
     }
@@ -1035,8 +1315,24 @@ async function checkerObjectAbi(
   const indexes = [] as CheckerObjectShape["indexes"] extends readonly (infer I)[] ? I[] : never;
 
   for (const info of await project.checker.getIndexInfosOfType(type)) {
-    const key = await checkerTypeAbi(project, info.keyType, `${path}/index-key`, nextActive, depth + 1, boundTypeParameters, budget);
-    const value = await checkerTypeAbi(project, info.valueType, `${path}/index-value`, nextActive, depth + 1, boundTypeParameters, budget);
+    const key = await checkerTypeAbi(
+      project,
+      info.keyType,
+      `${path}/index-key`,
+      nextActive,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
+    const value = await checkerTypeAbi(
+      project,
+      info.valueType,
+      `${path}/index-value`,
+      nextActive,
+      depth + 1,
+      boundTypeParameters,
+      budget,
+    );
 
     if (key.kind === "unresolved") return key;
     if (value.kind === "unresolved") return value;
@@ -1072,20 +1368,32 @@ async function checkerStringMappingOperation(
   const intrinsic = await type.getSymbol();
   const operation = intrinsic?.name;
 
-  if (operation !== "Uppercase" && operation !== "Lowercase" &&
-      operation !== "Capitalize" && operation !== "Uncapitalize") return undefined;
+  if (
+    operation !== "Uppercase" &&
+    operation !== "Lowercase" &&
+    operation !== "Capitalize" &&
+    operation !== "Uncapitalize"
+  )
+    return undefined;
 
   const declarations = intrinsic
     ? await Promise.all(intrinsic.declarations.map((declaration) => declaration.resolve(project)))
     : [];
 
-  if (!declarations.length || declarations.some((declaration) =>
-    declaration?.kind !== SyntaxKind.TypeAliasDeclaration ||
-    (declaration as NamedTypeDeclarationNode).name?.getText(declaration.getSourceFile()) !== operation,
-  )) return undefined;
+  if (
+    !declarations.length ||
+    declarations.some(
+      (declaration) =>
+        declaration?.kind !== SyntaxKind.TypeAliasDeclaration ||
+        (declaration as NamedTypeDeclarationNode).name?.getText(declaration.getSourceFile()) !==
+          operation,
+    )
+  )
+    return undefined;
 
   for (const declaration of declarations)
-    if (!await project.program.isSourceFileDefaultLibrary(declaration!.getSourceFile())) return undefined;
+    if (!(await project.program.isSourceFileDefaultLibrary(declaration!.getSourceFile())))
+      return undefined;
 
   return operation;
 }
@@ -1097,15 +1405,25 @@ async function hasNominalDeclarationMembers(
   for (const handle of declarations) {
     const declaration = await handle.resolve(project);
 
-    if (!declaration || (declaration.kind !== SyntaxKind.ClassDeclaration &&
-        declaration.kind !== SyntaxKind.ClassExpression)) continue;
+    if (
+      !declaration ||
+      (declaration.kind !== SyntaxKind.ClassDeclaration &&
+        declaration.kind !== SyntaxKind.ClassExpression)
+    )
+      continue;
 
     for (const member of (declaration as ClassLikeNode).members ?? []) {
       const node = member as TypeMemberNode;
 
-      if (node.name?.kind === SyntaxKind.PrivateIdentifier || node.modifiers?.some((modifier) =>
-        modifier.kind === SyntaxKind.PrivateKeyword || modifier.kind === SyntaxKind.ProtectedKeyword,
-      )) return true;
+      if (
+        node.name?.kind === SyntaxKind.PrivateIdentifier ||
+        node.modifiers?.some(
+          (modifier) =>
+            modifier.kind === SyntaxKind.PrivateKeyword ||
+            modifier.kind === SyntaxKind.ProtectedKeyword,
+        )
+      )
+        return true;
     }
   }
 
@@ -1122,32 +1440,47 @@ async function isTrustedWellKnownSymbolMember(
     const computed = (declaration as TypeMemberNode).name as ComputedNameNode | undefined;
     const access = computed?.expression as PropertyAccessNode | undefined;
 
-    if (!computed || computed.kind !== SyntaxKind.ComputedPropertyName || !access ||
-        access.kind !== SyntaxKind.PropertyAccessExpression || !access.expression || !access.name ||
-        access.expression.kind !== SyntaxKind.Identifier ||
-        access.expression.getText(access.expression.getSourceFile()) !== "Symbol") return false;
+    if (
+      !computed ||
+      computed.kind !== SyntaxKind.ComputedPropertyName ||
+      !access ||
+      access.kind !== SyntaxKind.PropertyAccessExpression ||
+      !access.expression ||
+      !access.name ||
+      access.expression.kind !== SyntaxKind.Identifier ||
+      access.expression.getText(access.expression.getSourceFile()) !== "Symbol"
+    )
+      return false;
 
     const memberName = access.name.getText(access.name.getSourceFile());
 
-    if (memberName !== "iterator" && memberName !== "asyncIterator" &&
-        memberName !== "toStringTag" && memberName !== "unscopables" && memberName !== "dispose")
+    if (
+      memberName !== "iterator" &&
+      memberName !== "asyncIterator" &&
+      memberName !== "toStringTag" &&
+      memberName !== "unscopables" &&
+      memberName !== "dispose"
+    )
       return false;
 
     const binding = await project.checker.getSymbolAtLocation(access.expression);
 
     if (!binding) return false;
 
-    const target = binding.flags & SymbolFlags.Alias
-      ? await project.checker.getAliasedSymbol(binding)
-      : binding;
+    const target =
+      binding.flags & SymbolFlags.Alias ? await project.checker.getAliasedSymbol(binding) : binding;
     const symbolType = await project.checker.getTypeOfSymbol(target);
-    const selected = symbolType ? await project.checker.getPropertyOfType(symbolType, memberName) : undefined;
+    const selected = symbolType
+      ? await project.checker.getPropertyOfType(symbolType, memberName)
+      : undefined;
     const referenced = await project.checker.getSymbolAtLocation(access.name);
 
     if (!selected || !referenced || selected.id !== referenced.id || !selected.declarations.length)
       return false;
 
-    const selectedDeclarations = await Promise.all(selected.declarations.map((handle) => handle.resolve(project)));
+    const selectedDeclarations = await Promise.all(
+      selected.declarations.map((handle) => handle.resolve(project)),
+    );
 
     if (selectedDeclarations.length !== selected.declarations.length) return false;
 
@@ -1155,12 +1488,19 @@ async function isTrustedWellKnownSymbolMember(
     const redeclarations: PropertySignatureDeclaration[] = [];
 
     for (const selectedDeclaration of selectedDeclarations) {
-      if (!selectedDeclaration || !isPropertySignatureDeclaration(selectedDeclaration)) return false;
+      if (!selectedDeclaration || !isPropertySignatureDeclaration(selectedDeclaration))
+        return false;
 
       const owner = selectedDeclaration.parent;
 
-      if (!owner || !isInterfaceDeclaration(owner) || owner.name.text !== "SymbolConstructor" ||
-          !owner.parent || !isSourceFile(owner.parent)) return false;
+      if (
+        !owner ||
+        !isInterfaceDeclaration(owner) ||
+        owner.name.text !== "SymbolConstructor" ||
+        !owner.parent ||
+        !isSourceFile(owner.parent)
+      )
+        return false;
 
       if (await project.program.isSourceFileDefaultLibrary(selectedDeclaration.getSourceFile()))
         intrinsicOwners.push(owner);
@@ -1177,7 +1517,15 @@ async function isTrustedWellKnownSymbolMember(
       if (!intrinsicOwnerSymbol) return false;
 
       for (const declaration of redeclarations)
-        if (!await isIntrinsicSymbolRedeclaration(project, declaration, memberName, selected, intrinsicOwnerSymbol))
+        if (
+          !(await isIntrinsicSymbolRedeclaration(
+            project,
+            declaration,
+            memberName,
+            selected,
+            intrinsicOwnerSymbol,
+          ))
+        )
           return false;
     }
   }
@@ -1192,17 +1540,28 @@ async function isIntrinsicSymbolRedeclaration(
   intrinsicMember: Symbol,
   intrinsicOwner: Symbol,
 ): Promise<boolean> {
-  if (!isIdentifier(declaration.name) || declaration.name.text !== memberName || declaration.postfixToken ||
-      !declaration.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ReadonlyKeyword) ||
-      !isTypeOperatorNode(declaration.type) || declaration.type.operator !== SyntaxKind.UniqueKeyword ||
-      declaration.type.type.kind !== SyntaxKind.SymbolKeyword)
+  if (
+    !isIdentifier(declaration.name) ||
+    declaration.name.text !== memberName ||
+    declaration.postfixToken ||
+    !declaration.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ReadonlyKeyword) ||
+    !isTypeOperatorNode(declaration.type) ||
+    declaration.type.operator !== SyntaxKind.UniqueKeyword ||
+    declaration.type.type.kind !== SyntaxKind.SymbolKeyword
+  )
     return false;
 
   const source = declaration.getSourceFile();
   const owner = declaration.parent;
 
-  if (!source.isDeclarationFile || !owner || !isInterfaceDeclaration(owner) ||
-      owner.name.text !== "SymbolConstructor" || !owner.parent || !isSourceFile(owner.parent))
+  if (
+    !source.isDeclarationFile ||
+    !owner ||
+    !isInterfaceDeclaration(owner) ||
+    owner.name.text !== "SymbolConstructor" ||
+    !owner.parent ||
+    !isSourceFile(owner.parent)
+  )
     return false;
 
   const ownerSymbol = await project.checker.getSymbolAtLocation(owner.name);
@@ -1238,11 +1597,13 @@ async function checkerDeclarationShapes(
     });
   }
 
-  return [...shapes.values()].sort((left, right) =>
-    left.filename.localeCompare(right.filename) || left.start - right.start || left.end - right.end,
+  return [...shapes.values()].sort(
+    (left, right) =>
+      left.filename.localeCompare(right.filename) ||
+      left.start - right.start ||
+      left.end - right.end,
   );
 }
-
 
 export type {
   CheckerTypeAbi as StructuralTypeResolution,
@@ -1291,7 +1652,8 @@ export function retainComponentPropsTypeEvidence(
   analysis: object,
   evidence: ComponentPropsTypeEvidence,
 ): void {
-  if (propTypeEvidence.has(analysis)) throw new Error("Component type evidence was already retained.");
+  if (propTypeEvidence.has(analysis))
+    throw new Error("Component type evidence was already retained.");
 
   propTypeEvidence.set(analysis, freezeComponentPropsTypeEvidence(evidence));
 }
@@ -1402,10 +1764,15 @@ export type TypingHostOperation =
 export interface TypingHostObservation {
   readonly operation: TypingHostOperation;
   readonly path: string;
-  readonly result: string | boolean | null | undefined | {
-    readonly files: readonly string[];
-    readonly directories: readonly string[];
-  };
+  readonly result:
+    | string
+    | boolean
+    | null
+    | undefined
+    | {
+        readonly files: readonly string[];
+        readonly directories: readonly string[];
+      };
 }
 
 export class TypingHostObservationRecorder {
@@ -1422,9 +1789,10 @@ export class TypingHostObservationRecorder {
 
     if (observation.result === undefined) this.#delegated = true;
 
-    const result = observation.operation === "readFile" && typeof observation.result === "string"
-      ? sourceDigest(observation.result)
-      : observation.result;
+    const result =
+      observation.operation === "readFile" && typeof observation.result === "string"
+        ? sourceDigest(observation.result)
+        : observation.result;
 
     this.#observations.push(
       deepFreeze({
@@ -1897,7 +2265,16 @@ function sealProjectTypingEvidenceUnchecked(
     state.analyses === session.analyses &&
     state.analysisEntries.length === session.analyses.size &&
     state.analysisEntries.every(
-      ({ filename, analysis, result, componentProps, normalized, operationCalls, mapOffset, fingerprint }) =>
+      ({
+        filename,
+        analysis,
+        result,
+        componentProps,
+        normalized,
+        operationCalls,
+        mapOffset,
+        fingerprint,
+      }) =>
         session.analyses.get(filename) === analysis &&
         analysis.result === result &&
         analysis.componentProps === componentProps &&
@@ -1946,7 +2323,7 @@ function sealProjectTypingEvidenceUnchecked(
           types: componentPropsTypeEvidence(analysis.componentProps),
           operations: analysis.operationCalls,
         }
-      : analysis?.operationCalls ?? null;
+      : (analysis?.operationCalls ?? null);
 
     return Object.freeze({
       filename: module.filename,
@@ -1967,7 +2344,8 @@ function sealProjectTypingEvidenceUnchecked(
     });
   });
   const checkingHasErrors =
-    state.baselineHasErrors || compilation.checking.diagnostics.some((item) => item.severity === "error");
+    state.baselineHasErrors ||
+    compilation.checking.diagnostics.some((item) => item.severity === "error");
   const evidence: SealedProjectTypingEvidence = Object.freeze({
     schema: 1,
     state: "sealed",
@@ -1999,7 +2377,9 @@ function sealProjectTypingEvidenceUnchecked(
         keys: Object.freeze(Reflect.ownKeys(result)),
         result,
         fingerprint: compileResultFingerprint(result),
-        diagnosticsFingerprint: sourceDigest(JSON.stringify(canonicalCaptureValue(result.diagnostics))),
+        diagnosticsFingerprint: sourceDigest(
+          JSON.stringify(canonicalCaptureValue(result.diagnostics)),
+        ),
       }),
     ),
   );
@@ -2043,7 +2423,12 @@ function issuedProjectTypingEvidenceUnchecked(
   )
     return undefined;
 
-  if (!sameOwnKeys([...compilation.modules.keys()], binding.moduleOutputs.map((item) => item.filename)))
+  if (
+    !sameOwnKeys(
+      [...compilation.modules.keys()],
+      binding.moduleOutputs.map((item) => item.filename),
+    )
+  )
     return undefined;
 
   for (const output of binding.moduleOutputs) {
@@ -2053,7 +2438,8 @@ function issuedProjectTypingEvidenceUnchecked(
       !result ||
       result !== output.result ||
       compileResultFingerprint(result) !== output.fingerprint ||
-      sourceDigest(JSON.stringify(canonicalCaptureValue(result.diagnostics))) !== output.diagnosticsFingerprint
+      sourceDigest(JSON.stringify(canonicalCaptureValue(result.diagnostics))) !==
+        output.diagnosticsFingerprint
     )
       return undefined;
 
@@ -2105,7 +2491,9 @@ function registerMappedProjectCompilationUnchecked(
           keys: Object.freeze(Reflect.ownKeys(result)),
           result,
           fingerprint: compileResultFingerprint(result),
-          diagnosticsFingerprint: sourceDigest(JSON.stringify(canonicalCaptureValue(result.diagnostics))),
+          diagnosticsFingerprint: sourceDigest(
+            JSON.stringify(canonicalCaptureValue(result.diagnostics)),
+          ),
         }),
       ),
     ),
@@ -2169,7 +2557,9 @@ function isAllowedToolingProjection(
 
   if (
     mappedDiagnostics.length !== mapped.checking.diagnostics.length ||
-    mappedDiagnostics.some((item, index) => !sameDiagnostic(item, mapped.checking.diagnostics[index]))
+    mappedDiagnostics.some(
+      (item, index) => !sameDiagnostic(item, mapped.checking.diagnostics[index]),
+    )
   )
     return false;
 
@@ -2188,7 +2578,10 @@ function isAllowedToolingProjection(
 
     for (const key of beforeKeys) {
       if (key === "diagnostics" || key === "map") continue;
-      if ((before as unknown as Record<PropertyKey, unknown>)[key] !== (after as unknown as Record<PropertyKey, unknown>)[key])
+      if (
+        (before as unknown as Record<PropertyKey, unknown>)[key] !==
+        (after as unknown as Record<PropertyKey, unknown>)[key]
+      )
         return false;
     }
 
@@ -2228,15 +2621,17 @@ function componentEvidence(
       );
       const emittedComponent = matches.length === 1 ? matches[0] : undefined;
       const emittedFirst = emittedComponent?.parameters[0];
-      const emittedComponentJoin: CheckedComponentTypingEvidence["emittedComponentJoin"] = !sourceJoin
-        ? "ambiguous"
-        : !emitted
-        ? "missing"
-        : matches.length === 0
-          ? "missing"
-          : matches.length !== 1 || (first?.span?.start ?? undefined) !== (emittedFirst?.span?.start ?? undefined)
-            ? "ambiguous"
-            : "matched";
+      const emittedComponentJoin: CheckedComponentTypingEvidence["emittedComponentJoin"] =
+        !sourceJoin
+          ? "ambiguous"
+          : !emitted
+            ? "missing"
+            : matches.length === 0
+              ? "missing"
+              : matches.length !== 1 ||
+                  (first?.span?.start ?? undefined) !== (emittedFirst?.span?.start ?? undefined)
+                ? "ambiguous"
+                : "matched";
       const parameterStart = first?.span
         ? (analysis.mapOffset?.(first.span.start) ?? first.span.start)
         : undefined;
@@ -2264,9 +2659,10 @@ function componentEvidence(
                 kind: "unproved" as const,
                 reason: "incomplete-capture" as const,
               };
-              const authoredType = types?.authored && Object.hasOwn(types.authored, name)
-                ? types.authored[name]
-                : undefined;
+              const authoredType =
+                types?.authored && Object.hasOwn(types.authored, name)
+                  ? types.authored[name]
+                  : undefined;
               const prop = metadata.props[name]!;
 
               return Object.freeze({
@@ -2348,16 +2744,20 @@ function canonicalComponents(
 }
 
 function fingerprintCheckingResult(result: ProjectCheckingResult): string {
-  return JSON.stringify(canonicalCaptureValue({
-    snapshotId: result.snapshotId,
-    diagnostics: result.diagnostics,
-    checkingInputs: result.checkingInputs,
-    modules: result.modules,
-  }));
+  return JSON.stringify(
+    canonicalCaptureValue({
+      snapshotId: result.snapshotId,
+      diagnostics: result.diagnostics,
+      checkingInputs: result.checkingInputs,
+      modules: result.modules,
+    }),
+  );
 }
 
 function sameDiagnostic(left: unknown, right: unknown): boolean {
-  return JSON.stringify(canonicalCaptureValue(left)) === JSON.stringify(canonicalCaptureValue(right));
+  return (
+    JSON.stringify(canonicalCaptureValue(left)) === JSON.stringify(canonicalCaptureValue(right))
+  );
 }
 
 function sameOwnKeys(left: readonly PropertyKey[], right: readonly PropertyKey[]): boolean {
@@ -2400,9 +2800,10 @@ function compileResultFingerprint(result: CompileResult): string {
     if (typeof key !== "string" || key === "diagnostics" || key === "map") continue;
 
     const value = (result as unknown as Record<string, unknown>)[key];
-    fields[key] = key === "ir" && typeof value === "object" && value !== null
-      ? digestCanonicalModule(value as CanonicalModule)
-      : canonicalCaptureValue(value);
+    fields[key] =
+      key === "ir" && typeof value === "object" && value !== null
+        ? digestCanonicalModule(value as CanonicalModule)
+        : canonicalCaptureValue(value);
   }
 
   return JSON.stringify(fields);
@@ -2428,11 +2829,13 @@ function canonicalCaptureValue(value: unknown): unknown {
   if (value instanceof Map)
     return {
       kind: "map",
-      entries: [...value].map(([key, item]) => [canonicalCaptureValue(key), canonicalCaptureValue(item)]),
+      entries: [...value].map(([key, item]) => [
+        canonicalCaptureValue(key),
+        canonicalCaptureValue(item),
+      ]),
     };
 
-  if (value instanceof Set)
-    return { kind: "set", values: [...value].map(canonicalCaptureValue) };
+  if (value instanceof Set) return { kind: "set", values: [...value].map(canonicalCaptureValue) };
 
   const record = value as Record<string, unknown>;
   const result: Record<string, unknown> = Object.create(null);
