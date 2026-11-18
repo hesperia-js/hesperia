@@ -1,8 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { expect, test, type APIRequestContext, type Locator } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Request } from "@playwright/test";
 
 interface NativeState {
   readonly graphqlWsUrl: string;
+  readonly instanceId: string;
+  readonly resolverCalls: { readonly incrementalBoard: number };
+}
+interface GateState {
+  readonly started: number;
+  readonly aborted: number;
+  readonly completed: number;
+  readonly pending: boolean;
 }
 interface NativeSubscriptionSnapshot {
   readonly id: string;
@@ -201,6 +209,104 @@ async function disposeGraphQLSocketInBrowser(): Promise<void> {
 
   await fixture.subscription.disposeSocket();
 }
+
+test("compiled GraphQL incremental progress remains visible while the request is open", async ({
+  page,
+  request,
+  browserName,
+}) => {
+  test.setTimeout(60_000);
+  const session = `${browserName}-${randomUUID()}`;
+  const errors: string[] = [];
+  const requests: Request[] = [];
+  const finished: Request[] = [];
+  const failed: Request[] = [];
+  const gate = { gate: "incremental-streamed-details" };
+  const isIncremental = (candidate: Request) =>
+    new URL(candidate.url()).pathname === "/__graphql-native/graphql-incremental";
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("request", (candidate) => {
+    if (isIncremental(candidate)) requests.push(candidate);
+  });
+  page.on("requestfinished", (candidate) => {
+    if (isIncremental(candidate)) finished.push(candidate);
+  });
+  page.on("requestfailed", (candidate) => {
+    if (isIncremental(candidate)) failed.push(candidate);
+  });
+  await control(request, session, "reset", "POST");
+  const state = await control<NativeState>(request, session, "state");
+  const search = new URLSearchParams({
+    session,
+    "subscription-ws": state.graphqlWsUrl,
+    "incremental-mode": "progress",
+  });
+  try {
+    await page.goto(`/graphql?${search}`, { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("incremental-data-state")).toHaveText("streaming");
+    await expect(page.getByTestId("incremental-query-status")).toHaveText("fetching");
+    await expect(page.getByTestId("incremental-query-pending")).toHaveText("true");
+    await expect(page.getByTestId("incremental-result")).toHaveText("null");
+    expect(await renderedJson(page.getByTestId("incremental-progress-value"))).toMatchObject({
+      dataState: "streaming",
+      data: { incrementalBoard: { items: [{ id: "initial", title: "Initial item" }] } },
+      extensions: { fixture: { instanceId: state.instanceId } },
+    });
+    const started = await control<GateState>(request, session, "wait", "GET", {
+      ...gate,
+      phase: "started",
+    });
+    expect(started).toMatchObject({ started: 1, aborted: 0, completed: 0, pending: true });
+    expect(
+      (await control<NativeState>(request, session, "state")).resolverCalls.incrementalBoard,
+    ).toBe(1);
+    expect(requests).toHaveLength(1);
+    expect(finished).toHaveLength(0);
+    expect(failed).toHaveLength(0);
+    const response = await requests[0]!.response();
+    expect(response?.status()).toBe(200);
+    const requestFinished = page.waitForEvent("requestfinished", { predicate: isIncremental });
+    await control(request, session, "release", "POST", gate);
+    await requestFinished;
+    await expect(page.locator("html")).toHaveAttribute("data-ready", "true");
+    await expect(page.getByTestId("incremental-data-state")).toHaveText("complete");
+    await expect(page.getByTestId("incremental-progress-status")).toHaveText("complete");
+    await expect(page.getByTestId("incremental-query-status")).toHaveText("ready");
+    await expect(page.getByTestId("incremental-query-pending")).toHaveText("false");
+    const data = {
+      incrementalBoard: {
+        items: [
+          { id: "initial", title: "Initial item", details: "Initial details" },
+          {
+            id: "streamed",
+            title: "Streamed item",
+            details: "released:incremental-streamed-details",
+          },
+        ],
+      },
+    };
+    expect(await renderedJson(page.getByTestId("incremental-progress-value"))).toMatchObject({
+      dataState: "complete",
+      data,
+      extensions: { fixture: { phase: "subsequent" } },
+    });
+    expect(await renderedJson(page.getByTestId("incremental-result"))).toMatchObject({ data });
+    expect(
+      (await control<NativeState>(request, session, "state")).resolverCalls.incrementalBoard,
+    ).toBe(1);
+    expect(finished).toHaveLength(1);
+    expect(failed).toHaveLength(0);
+    await expect(page.locator("html")).not.toHaveAttribute("data-fault");
+    expect(errors).toEqual([]);
+  } finally {
+    await control(request, session, "release", "POST", gate).catch(() => undefined);
+    if (!page.isClosed()) {
+      await page.evaluate(async () => {
+        await (globalThis as unknown as GraphQLBrowserControls).graphqlFixture?.dispose();
+      });
+    }
+  }
+});
 
 test("compiled GraphQL subscriptions preserve event policies, shared ownership, and terminal provenance", async ({
   page,

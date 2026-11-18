@@ -14,6 +14,9 @@ type NativeSubscriptionProps = {
 
 const subscriptionParameters = new URLSearchParams(globalThis.location.search);
 const subscriptionModeParameter = subscriptionParameters.get("subscription-mode");
+const incrementalMode = subscriptionParameters.get("incremental-mode");
+if (incrementalMode !== null && incrementalMode !== "progress")
+  throw new Error(`Unsupported browser GraphQL incremental mode: ${incrementalMode}`);
 
 function readSubscriptionMode(value: string | null): NativeSubscriptionMode | undefined {
   if (value === null) return undefined;
@@ -116,7 +119,23 @@ function SubscriptionLifecycleJourney() {
   );
 }
 
+function IncrementalJourney() {
+  const board = api.incrementalBoard({});
+  const progress = board.project();
+  return (
+    <main>
+      <output data-testid="incremental-query-status">{board.status()}</output>
+      <output data-testid="incremental-query-pending">{board.pending() ? "true" : "false"}</output>
+      <output data-testid="incremental-progress-status">{progress.status()}</output>
+      <output data-testid="incremental-data-state">{progress.value()?.dataState ?? "none"}</output>
+      <output data-testid="incremental-progress-value">{json(progress.value() ?? null)}</output>
+      <output data-testid="incremental-result">{json(board.value() ?? null)}</output>
+    </main>
+  );
+}
+
 export default function GraphQLNative() {
+  if (incrementalMode === "progress") return <IncrementalJourney />;
   if (subscriptionMode === "events") return <SubscriptionEventsJourney />;
   if (subscriptionMode === "reset" || subscriptionMode === "dispose")
     return <SubscriptionLifecycleJourney />;
