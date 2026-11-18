@@ -5,11 +5,12 @@ import type { Owner, RuntimeContext } from "./owner.ts";
 type ConstructionState = "acquired" | "constructing" | "constructed" | "unacknowledged";
 
 interface PhysicalOwnerFailureSlot {
-  failure?: { readonly reason: unknown };
+  failures?: readonly unknown[];
 }
 
 interface PhysicalOwnerRecord {
   readonly parent: PhysicalOwnerRecord | undefined;
+  readonly failures: PhysicalOwnerFailureSlot[];
   readonly queryPreparations: Set<PhysicalOwnerQueryPreparationRecord>;
   readonly taskInvocations: Set<PhysicalOwnerTaskRecord>;
   ownerRetirement?: PhysicalOwnerRetirementRecord;
@@ -1386,7 +1387,6 @@ class PhysicalServerLifetime {
   readonly retired: Promise<void>;
   owner: Owner | undefined;
   private readonly records: PhysicalOwnerRecord[] = [];
-  readonly cleanupFailures: PhysicalOwnerFailureSlot[] = [];
   private readonly imports = new Map<Promise<unknown>, PhysicalModuleImportRecord>();
   private readonly nativeRetirement: PhysicalModuleImportRecord | undefined;
   private progressiveControllerSettlement: PhysicalProgressiveControllerRecord | undefined;
@@ -1501,6 +1501,7 @@ class PhysicalServerLifetime {
 
     const record: PhysicalOwnerRecord = {
       parent: parentRecord?.record,
+      failures: [],
       queryPreparations: new Set(),
       taskInvocations: new Set(),
       construction: "constructing",
@@ -1733,10 +1734,10 @@ class PhysicalServerLifetime {
             }),
           );
       }
-    }
 
-    for (const slot of this.cleanupFailures)
-      if (slot.failure) failures.push(slot.failure.reason);
+      for (const slot of record.failures)
+        if (slot.failures) failures.push(...slot.failures);
+    }
 
     for (const record of this.imports.values()) {
       if (record.state === "unacknowledged")
@@ -2061,7 +2062,7 @@ export function retainPhysicalOwnerRetirement(
     ]);
   } catch (reason) {
     record.state = "unacknowledged";
-    physical.lifetime.cleanupFailures.push({ failure: { reason } });
+    physical.record.failures.push({ failures: [reason] });
     physical.lifetime.finishRetirement();
   }
 }
@@ -2087,7 +2088,7 @@ export function recordPhysicalOwnerCleanupFailure(
 
   if (!physical) return false;
 
-  physical.lifetime.cleanupFailures.push({ failure: { reason } });
+  physical.record.failures.push({ failures: [reason] });
 
   return true;
 }
@@ -2095,17 +2096,24 @@ export function recordPhysicalOwnerCleanupFailure(
 /** @internal Reserve the actual cleanup attempt before invoking user code. */
 export function reservePhysicalOwnerCleanupFailure(
   owner: Owner,
-): ((reason: unknown) => void) | undefined {
+): ((reasons: readonly unknown[]) => void) | undefined {
   const physical = physicalOwners.get(owner);
 
   if (!physical) return undefined;
 
   const slot: PhysicalOwnerFailureSlot = {};
-  physical.lifetime.cleanupFailures.push(slot);
+  physical.record.failures.push(slot);
 
-  return (reason) => {
-    if (!slot.failure) slot.failure = { reason };
+  return (reasons) => {
+    if (!slot.failures) slot.failures = [...reasons];
   };
+}
+
+/** @internal Compare the actual physical session lifetime of two Owners. */
+export function samePhysicalOwnerLifetime(owner: Owner, other: Owner): boolean {
+  const physical = physicalOwners.get(owner);
+
+  return physical !== undefined && physical.lifetime === physicalOwners.get(other)?.lifetime;
 }
 
 /** @internal Finish a logical cleanup pass without treating it as original-work completion. */

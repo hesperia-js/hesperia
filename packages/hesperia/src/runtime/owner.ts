@@ -13,6 +13,7 @@ import {
   recordPhysicalOwnerCleanupFailure,
   reservePhysicalOwnerCleanupFailure,
   retainPhysicalOwnerRetirement,
+  samePhysicalOwnerLifetime,
 } from "./retirement.ts";
 
 /** Lifecycle phases distinguish cleanup access from final destruction. */
@@ -142,6 +143,8 @@ interface CleanupFailureSlot {
   reason?: unknown;
   causes?: readonly unknown[];
   reportable?: boolean;
+  physicalOwner?: Owner;
+  physicalFailure?: (reasons: readonly unknown[]) => void;
 }
 
 type OwnerRetirementMode = "sync" | "join";
@@ -303,7 +306,7 @@ function storeSynchronousIncompleteFailure(
   slot: CleanupFailureSlot,
   reason: unknown,
   owner: Owner = operation.initiator,
-  physicalFailure?: (reason: unknown) => void,
+  physicalFailure?: (reasons: readonly unknown[]) => void,
 ): void {
   let synchronousIndex = 0;
 
@@ -318,7 +321,7 @@ function storeSynchronousIncompleteFailure(
   slot.reason = reason;
   operation.synchronousFailures.splice(synchronousIndex, 0, reason);
   operation.incomplete = true;
-  if (physicalFailure) physicalFailure(reason);
+  if (physicalFailure) physicalFailure([reason]);
   else recordPhysicalOwnerCleanupFailure(owner, reason);
 }
 
@@ -327,7 +330,7 @@ function dependOnOwnerRetirement(
   dependency: OwnerRetirementOperation,
   dependencySlot?: CleanupFailureSlot,
   owner: Owner = operation.initiator,
-  physicalFailure?: (reason: unknown) => void,
+  physicalFailure?: (reasons: readonly unknown[]) => void,
 ): void {
   if (operation.settled || operation.dependencies.has(dependency)) return;
 
@@ -338,6 +341,8 @@ function dependOnOwnerRetirement(
   };
 
   if (!dependencySlot) operation.failures.push(slot);
+  slot.physicalOwner = owner;
+  slot.physicalFailure = physicalFailure;
 
   if (operation === dependency || retirementDependsOn(dependency, operation)) {
     storeSynchronousIncompleteFailure(
@@ -374,6 +379,12 @@ function dependOnOwnerRetirement(
           reason instanceof AggregateError && reason.message === "Component cleanup failed"
             ? [...reason.errors]
             : [reason];
+        if (
+          slot.physicalOwner &&
+          slot.physicalFailure &&
+          !samePhysicalOwnerLifetime(slot.physicalOwner, dependency.initiator)
+        )
+          slot.physicalFailure(slot.causes);
         operation.incomplete ||= dependency.incomplete;
         operation.pending--;
         finishOwnerRetirement(operation);
@@ -501,7 +512,7 @@ function storeCleanupObservationFault(
   operation: OwnerRetirementOperation,
   slot: CleanupFailureSlot,
   reason: unknown,
-  physicalFailure?: (reason: unknown) => void,
+  physicalFailure?: (reasons: readonly unknown[]) => void,
 ): void {
   storeSynchronousIncompleteFailure(
     operation,
@@ -517,7 +528,7 @@ function observeCleanupReturn(
   operation: OwnerRetirementOperation,
   slot: CleanupFailureSlot,
   value: unknown,
-  physicalFailure?: (reason: unknown) => void,
+  physicalFailure?: (reasons: readonly unknown[]) => void,
 ): void {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") {
     slot.state = "fulfilled";
@@ -539,6 +550,8 @@ function observeCleanupReturn(
       const dependencyIndex = operation.failures.indexOf(dependencySlot);
 
       if (callbackIndex >= 0 && dependencyIndex >= 0 && callbackIndex < dependencyIndex) {
+        dependencySlot.physicalOwner = owner;
+        dependencySlot.physicalFailure = physicalFailure;
         operation.failures.splice(dependencyIndex, 1);
         operation.failures.splice(callbackIndex, 1, dependencySlot);
       } else if (callbackIndex >= 0) {
@@ -567,7 +580,7 @@ function observeCleanupReturn(
         slot.state = "rejected";
         slot.reason = reason;
         operation.pending--;
-        physicalFailure?.(reason);
+        physicalFailure?.([reason]);
         finishOwnerRetirement(operation);
       },
     ]);
@@ -1033,7 +1046,7 @@ export class Owner {
       observeCleanupReturn(this, operation, slot, runCleanup(cleanup), physicalFailure);
     } catch (reason) {
       recordCleanupFailureAtSlot(operation, slot, reason);
-      physicalFailure?.(reason);
+      physicalFailure?.([reason]);
     }
   }
 
@@ -1051,7 +1064,7 @@ export class Owner {
       observeCleanupReturn(this, operation, slot, release(), physicalFailure);
     } catch (reason) {
       recordCleanupFailureAtSlot(operation, slot, reason);
-      physicalFailure?.(reason);
+      physicalFailure?.([reason]);
     }
   }
 
