@@ -1,5 +1,17 @@
-import type { Contract, Graph, GraphOptions, OperationDefinition, OperationTree } from "aeolia";
-import { createContractApi, type HesperiaContractApi } from "./contract.ts";
+import type {
+  Contract,
+  Graph,
+  GraphOptions,
+  NativeTransferSource,
+  OperationDefinition,
+  OperationTree,
+} from "aeolia";
+import {
+  createContractApi,
+  resolveOwnerBoundQueryApiMember,
+  type HesperiaContractApi,
+  type OwnerBoundQueryApiMember,
+} from "./contract.ts";
 import type { Owner } from "../runtime/owner.ts";
 import { isObjectLike } from "../utils.ts";
 import {
@@ -25,6 +37,36 @@ interface AdaptedApiRecord {
   readonly contract: Contract;
   readonly project?: (bound: object) => object;
   readonly policies?: OperationPolicies;
+}
+
+/** One checked, projector-free Query member from its issuing API. @internal */
+export interface ProjectorFreeImportedApiMember {
+  readonly owner: Owner;
+  readonly checkedUse: object;
+  readonly graph: Graph;
+  readonly sourceGraphUse: CheckedGraphSourceUse;
+  readonly member: Function;
+  readonly receiver: object;
+  readonly definition: object;
+  readonly nativeMember: NativeTransferSource;
+  readonly registration: object | undefined;
+  readonly receipt: object;
+  recheck(): void;
+}
+
+interface ProjectorFreeImportedApiMemberReceipt {
+  readonly capability: ProjectorFreeImportedApiMember;
+  readonly owner: Owner;
+  readonly checkedUse: object;
+  readonly rawImportedMarker: object;
+  readonly adaptedApiRecord: AdaptedApiRecord;
+  readonly boundApi: object;
+  readonly memberName: string;
+  readonly contractMember: OwnerBoundQueryApiMember;
+  readonly graphConstruction: RecordedGraphConstruction;
+  readonly graphRecipe: RecordedGraphRecipe;
+  readonly requestScope: RequestApiScope | undefined;
+  readonly requestScopeRecord: PhysicalRequestApiScopeRecord | undefined;
 }
 
 interface CapturedGraphOptions {
@@ -101,6 +143,10 @@ export interface RequestApiScope {
 export type ImportedApi<C extends Contract = Contract> = HesperiaContractApi<C>;
 
 const adaptedApis = new WeakMap<object, AdaptedApiRecord>();
+const projectorFreeImportedApiMemberReceipts = new WeakMap<
+  object,
+  ProjectorFreeImportedApiMemberReceipt
+>();
 const adaptedApiGraphs = new WeakMap<object, Graph>();
 const recordedGraphRecipes = new WeakMap<object, RecordedGraphRecipe>();
 const physicalRequestApiScopes = new WeakMap<RequestApiScope, PhysicalRequestApiScopeRecord>();
@@ -658,6 +704,164 @@ export function bindImported(
   adaptedNamespaces.set(owner, namespaces);
 
   return bindValue(owner, value, cache, namespaces, mode);
+}
+
+/**
+ * Resolve one own-data Query wrapper from a no-project adapted import before any projector or
+ * member lookup can run. The returned object is an opaque per-call issuer capability.
+ * @internal
+ */
+export function resolveProjectorFreeImportedApiMember(
+  owner: Owner,
+  checkedUse: object,
+  rawImportedMarker: unknown,
+  literalMemberName: string,
+): ProjectorFreeImportedApiMember | undefined {
+  owner.assertActive();
+
+  if (
+    checkedUse === null ||
+    (typeof checkedUse !== "object" && typeof checkedUse !== "function") ||
+    rawImportedMarker === null ||
+    (typeof rawImportedMarker !== "object" && typeof rawImportedMarker !== "function") ||
+    typeof literalMemberName !== "string" ||
+    literalMemberName.length === 0
+  )
+    return undefined;
+
+  const marker = rawImportedMarker as object;
+  const adaptedApiRecord = adaptedApis.get(marker);
+
+  if (adaptedApiRecord === undefined || adaptedApiRecord.project !== undefined) return undefined;
+
+  const graphConstruction = readActualGraphConstruction(adaptedApiRecord.graph);
+  const graphRecipe = recordedGraphRecipes.get(adaptedApiRecord.graph);
+
+  if (
+    graphConstruction === undefined ||
+    graphConstruction.graph !== adaptedApiRecord.graph ||
+    graphConstruction.contract !== adaptedApiRecord.contract ||
+    graphConstruction.checkedUse === undefined ||
+    graphRecipe === undefined ||
+    graphRecipe.contract !== adaptedApiRecord.contract
+  )
+    return undefined;
+
+  const context = owner.context;
+  const requestScope = context.target === "server" ? context.requestApiScope : undefined;
+  const requestScopeRecord =
+    requestScope === undefined ? undefined : physicalRequestApiScopes.get(requestScope);
+
+  if (
+    context.target === "server" &&
+    (requestScopeRecord === undefined ||
+      !requestScopeRecord.ownerBound ||
+      requestScopeRecord.rootSignal.aborted)
+  )
+    return undefined;
+
+  const cache = ownerCaches.get(owner) ?? new WeakMap<object, unknown>();
+  ownerCaches.set(owner, cache);
+  const namespaces = adaptedNamespaces.get(owner) ?? new WeakSet<object>();
+  adaptedNamespaces.set(owner, namespaces);
+
+  const boundValue = bindValue(owner, marker, cache, namespaces, "direct");
+
+  if (boundValue === null || typeof boundValue !== "object") return undefined;
+
+  const boundApi = boundValue as object;
+  const contractMember = resolveOwnerBoundQueryApiMember(owner, boundApi, literalMemberName);
+
+  if (contractMember === undefined || adaptedApiGraphs.get(boundApi) !== contractMember.graph)
+    return undefined;
+
+  const receipt = Object.freeze(Object.create(null)) as object;
+  let capability!: ProjectorFreeImportedApiMember;
+
+  const recheck = (): void => {
+    const issued = projectorFreeImportedApiMemberReceipts.get(receipt);
+
+    if (issued === undefined || issued.capability !== capability)
+      throw new TypeError("The projector-free Query member receipt is not authentic");
+
+    owner.assertActive();
+
+    if (
+      issued.owner !== owner ||
+      issued.checkedUse !== checkedUse ||
+      issued.rawImportedMarker !== marker ||
+      issued.adaptedApiRecord !== adaptedApiRecord ||
+      issued.boundApi !== boundApi ||
+      issued.memberName !== literalMemberName ||
+      issued.contractMember !== contractMember ||
+      issued.graphConstruction !== graphConstruction ||
+      issued.graphRecipe !== graphRecipe ||
+      issued.requestScope !== requestScope ||
+      issued.requestScopeRecord !== requestScopeRecord ||
+      adaptedApis.get(marker) !== adaptedApiRecord ||
+      adaptedApiRecord.project !== undefined ||
+      readActualGraphConstruction(adaptedApiRecord.graph) !== graphConstruction ||
+      graphConstruction.graph !== adaptedApiRecord.graph ||
+      graphConstruction.contract !== adaptedApiRecord.contract ||
+      graphConstruction.checkedUse === undefined ||
+      recordedGraphRecipes.get(adaptedApiRecord.graph) !== graphRecipe ||
+      graphRecipe.contract !== adaptedApiRecord.contract ||
+      (requestScope !== undefined &&
+        (owner.context !== context ||
+          context.requestApiScope !== requestScope ||
+          physicalRequestApiScopes.get(requestScope) !== requestScopeRecord ||
+          !requestScopeRecord?.ownerBound ||
+          requestScopeRecord.rootSignal.aborted)) ||
+      ownerCaches.get(owner)?.get(marker) !== boundApi ||
+      adaptedApiGraphs.get(boundApi) !== contractMember.graph ||
+      !Object.isFrozen(boundApi) ||
+      capability.member !== contractMember.apiMember ||
+      capability.receiver !== contractMember.receiver ||
+      capability.definition !== contractMember.definition ||
+      capability.nativeMember !== contractMember.nativeMember ||
+      capability.registration !== contractMember.registration ||
+      capability.graph !== contractMember.graph
+    )
+      throw new TypeError("The projector-free Query member source changed");
+
+    if (resolveOwnerBoundQueryApiMember(owner, boundApi, literalMemberName) !== contractMember)
+      throw new TypeError("The Owner-bound Query member descriptor changed");
+  };
+
+  capability = Object.freeze({
+    owner,
+    checkedUse,
+    graph: contractMember.graph,
+    sourceGraphUse: graphConstruction.checkedUse,
+    member: contractMember.apiMember,
+    receiver: contractMember.receiver,
+    definition: contractMember.definition,
+    nativeMember: contractMember.nativeMember,
+    registration: contractMember.registration,
+    receipt,
+    recheck,
+  });
+
+  projectorFreeImportedApiMemberReceipts.set(
+    receipt,
+    Object.freeze({
+      capability,
+      owner,
+      checkedUse,
+      rawImportedMarker: marker,
+      adaptedApiRecord,
+      boundApi,
+      memberName: literalMemberName,
+      contractMember,
+      graphConstruction,
+      graphRecipe,
+      requestScope,
+      requestScopeRecord,
+    }),
+  );
+  recheck();
+
+  return capability;
 }
 
 function bindValue(
