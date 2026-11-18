@@ -311,14 +311,14 @@ async function cancelInstalledCreatorJson(
   readonly exitCode: number;
   readonly output: string;
   readonly interruptBytes: number;
-  readonly terminalClosed: boolean;
+  readonly terminalExitObserved: boolean;
 }> {
   const decoder = new TextDecoder();
   let output = "";
   let registryReady = false;
   let interruptAttempted = false;
   let interruptBytes: number | undefined;
-  let terminalClosed = false;
+  let terminalExitObserved = false;
   let terminalExitCode: number | undefined;
   let terminalExitSignal: string | null | undefined;
   let observedExitCode: number | undefined;
@@ -336,7 +336,7 @@ async function cancelInstalledCreatorJson(
         output = (output + decoder.decode(data, { stream: true })).slice(-8192);
       },
       exit(_terminal, code, signal) {
-        terminalClosed = true;
+        terminalExitObserved = true;
         terminalExitCode = code;
         terminalExitSignal = signal;
         output = (output + decoder.decode()).slice(-8192);
@@ -366,13 +366,18 @@ async function cancelInstalledCreatorJson(
     registryReady = true;
     if (!child.terminal) throw new Error("Creator terminal was not acquired");
     interruptAttempted = true;
-    interruptBytes = child.terminal.write(Uint8Array.of(0x03));
+    interruptBytes = child.terminal.write("\u0003");
 
     const exitCode = await Promise.race([
       Promise.all([childExit, outputClosed]).then(([code]) => code),
       timedOut,
     ]);
-    return { exitCode, output: normalizeTerminalOutput(output), interruptBytes, terminalClosed };
+    return {
+      exitCode,
+      output: normalizeTerminalOutput(output),
+      interruptBytes,
+      terminalExitObserved,
+    };
   } catch (error) {
     console.error(
       `Creator JSON cancellation observation: ${JSON.stringify({
@@ -382,7 +387,7 @@ async function cancelInstalledCreatorJson(
         childFinished,
         observedExitCode,
         childSignalCode: child.signalCode,
-        terminalClosed,
+        terminalExitObserved,
         terminalExitCode,
         terminalExitSignal,
         terminalHandleClosed: child.terminal?.closed,
@@ -681,7 +686,7 @@ AbortSignal.prototype.addEventListener = function (type, ...args) {
 
       expect(cancelled.exitCode).toBe(130);
       expect(cancelled.interruptBytes).toBe(1);
-      expect(cancelled.terminalClosed).toBe(true);
+      expect(cancelled.terminalExitObserved).toBe(true);
       expect(cancelled.output).not.toContain("Choose a host integration:");
       expect(cancelled.output).toContain("Creation cancelled.");
       expect(cancelledResult.schemaVersion).toBe(1);
