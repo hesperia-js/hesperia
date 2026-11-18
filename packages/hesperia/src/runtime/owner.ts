@@ -1078,6 +1078,30 @@ export class Owner {
   }
 }
 
+/** @internal Authenticated snapshot of one actual Owner's retained cleanup operation. */
+export type OwnerCleanupDispositionV1 =
+  | { readonly state: "not-started" }
+  | { readonly state: "pending" }
+  | { readonly state: "settled" }
+  | { readonly state: "incomplete" };
+
+/**
+ * @internal Read the retained operation of an actual Owner without classifying errors by shape.
+ * @throws {TypeError} If the receiver was not constructed by this Runtime module.
+ */
+export function readOwnerCleanupDisposition(owner: Owner): OwnerCleanupDispositionV1 {
+  if (typeof owner !== "object" || owner === null || !actualOwnerInstances.has(owner))
+    throw new TypeError("Owner cleanup disposition requires an actual Runtime Owner");
+
+  const operation = ownerRetirementByOwner.get(owner);
+
+  if (!operation) return { state: "not-started" };
+  if (operation.incomplete) return { state: "incomplete" };
+  if (!operation.settled) return { state: "pending" };
+
+  return { state: "settled" };
+}
+
 /** @internal Associate a wrapper Promise with the Owner retirement it returns. */
 export function registerOwnerDisposalPromiseAlias(owner: Owner, alias: Promise<void>): void {
   if (!actualOwnerInstances.has(owner))
