@@ -1228,8 +1228,22 @@ export function runCleanup<T>(cleanup: () => T): T {
   }
 }
 
-/** Route a fault through nearest boundaries, forwarding a boundary's own failure upward. */
-export function reportFault(owner: Owner, error: unknown): void {
+/** The actual handler reached and the failure value it received. */
+export interface FaultReportResult {
+  /** A returning Owner handler handles the fault; reaching the root remains a root fault. */
+  readonly kind: "handled" | "root";
+  /** The original value, or the last replacement thrown by an Owner handler. */
+  readonly failure: unknown;
+}
+
+/**
+ * Report through actual ancestor handlers, then the root channel if none handles it.
+ * @param owner The lifetime from which fault propagation starts.
+ * @param error The original failure value, including undefined.
+ * @returns The reached handler scope and its actual received failure.
+ * @throws If the root error channel throws.
+ */
+export function reportFault(owner: Owner, error: unknown): FaultReportResult {
   let current: Owner | null = owner;
   let failure = error;
 
@@ -1238,7 +1252,7 @@ export function reportFault(owner: Owner, error: unknown): void {
       try {
         current.errorHandler(failure);
 
-        return;
+        return { kind: "handled", failure };
       } catch (error) {
         failure = error;
       }
@@ -1248,4 +1262,6 @@ export function reportFault(owner: Owner, error: unknown): void {
   }
 
   owner.context.onError(failure);
+
+  return { kind: "root", failure };
 }
