@@ -254,7 +254,7 @@ jobs:
         run: "bun run build"
       - name: "Install ordinary test browser engines and system dependencies"
         if: "matrix.group == 'bun-tests-ordinary' && runner.os == 'Linux'"
-        timeout-minutes: 25
+        timeout-minutes: 35
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install ordinary test browser engines"
         if: "matrix.group == 'bun-tests-ordinary' && runner.os == 'Windows'"
