@@ -1,18 +1,31 @@
 import { ApolloLink } from "@apollo/client/link";
 import { tap } from "rxjs";
 
+import type { GraphQLFormattedError } from "graphql";
+
 import type { GraphQLResult, GraphQLResultError } from "./types.ts";
 
-const captureContextKey = "__hesperia_graphql_response_capture__";
+const captureContextKey = Symbol("hesperia graphql response capture");
+
+interface ResponseCaptureLinkState {
+  readonly callerContextValue: unknown;
+  isActive(): boolean;
+  record(result: ApolloLink.Result): void;
+  recordLinkStart(): void;
+  recordLinkFailure(error: unknown): void;
+  recordLinkComplete(): void;
+}
 
 /**
  * A single operation's raw response capture.
  *
  * @remarks
- * Merge `context` into exactly one native Apollo call. Read the result after
- * that call settles, then call `dispose()` in a `finally` block. Apollo query
- * deduplication must be disabled for managed calls so each call reaches this
- * capture link with its own context token.
+ * Pass this capture's context to its native Apollo call. The outer capture
+ * link consumes its private Symbol value and restores the caller's previous
+ * value under that Symbol before forwarding. Apollo's merge-only context setter
+ * can leave an own Symbol property with `undefined` when the caller had no
+ * value. Read the result after the call settles, then call `dispose()` in a
+ * `finally` block. Query deduplication must stay disabled for managed calls.
  *
  * @typeParam TData - The declared data shape for the operation.
  */
@@ -27,6 +40,32 @@ export interface GraphQLResponseCapture<TData = unknown> {
    * received or after this capture is disposed.
    */
   getResult(): GraphQLResult<TData> | undefined;
+
+  /**
+   * Returns metadata accumulated from every raw response frame.
+   *
+   * GraphQL errors retain frame order. Extensions come from the latest frame
+   * with a top-level `extensions` field.
+   */
+  getIncrementalMetadata(): Pick<GraphQLResult<TData>, "errors" | "extensions">;
+
+  /** @internal Returns raw frames, terminal state, Link-entry count and completion-error evidence. */
+  getLinkState():
+    | {
+        readonly status: "not-started" | "pending" | "complete";
+        readonly hasNextPresent: boolean;
+        readonly hasNext?: unknown;
+        readonly invocationCount: number;
+        readonly hasCompletedErrors: boolean;
+      }
+    | {
+        readonly status: "error";
+        readonly error: unknown;
+        readonly hasNextPresent: boolean;
+        readonly hasNext?: unknown;
+        readonly invocationCount: number;
+        readonly hasCompletedErrors: boolean;
+      };
 
   /**
    * Stops recording and releases the stored response reference.
@@ -46,29 +85,114 @@ export interface GraphQLResponseCaptureLink {
   /**
    * Creates capture state scoped to one Apollo operation.
    *
+   * @param callerContext - The caller's configured context, whose value under
+   * the private capture Symbol is restored before forwarding.
    * @typeParam TData - The declared data shape for the operation.
    * @returns A fresh capture whose `context` must be passed to that operation.
    */
-  createCapture<TData = unknown>(): GraphQLResponseCapture<TData>;
+  createCapture<TData = unknown>(
+    callerContext?: ApolloLink.OperationContext,
+  ): GraphQLResponseCapture<TData>;
 }
 
-class ResponseCapture<TData> implements GraphQLResponseCapture<TData> {
+class ResponseCapture<TData> implements GraphQLResponseCapture<TData>, ResponseCaptureLinkState {
   readonly context: ApolloLink.OperationContext;
+  readonly callerContextValue: unknown;
 
   #disposed = false;
   #result: GraphQLResult<TData> | undefined;
+  #linkFailure: { readonly error: unknown } | undefined;
+  #linkStarted = false;
+  #linkComplete = false;
+  #linkInvocationCount = 0;
+  #hasCompletedErrors = false;
+  #hasNextPresent = false;
+  #hasNext: unknown;
+  #hasErrors = false;
+  #errors: GraphQLFormattedError[] = [];
+  #hasExtensions = false;
+  #extensions: Record<string, unknown> | undefined;
 
-  constructor() {
-    this.context = { [captureContextKey]: this };
+  constructor(callerContext?: ApolloLink.OperationContext) {
+    this.callerContextValue =
+      callerContext === undefined ? undefined : Reflect.get(callerContext, captureContextKey);
+    const captureContext: ApolloLink.OperationContext = {};
+    Reflect.set(captureContext, captureContextKey, this);
+    this.context = captureContext;
+  }
+
+  isActive(): boolean {
+    return !this.#disposed;
   }
 
   getResult(): GraphQLResult<TData> | undefined {
     return this.#result;
   }
 
+  getLinkState():
+    | {
+        readonly status: "not-started" | "pending" | "complete";
+        readonly hasNextPresent: boolean;
+        readonly hasNext?: unknown;
+        readonly invocationCount: number;
+        readonly hasCompletedErrors: boolean;
+      }
+    | {
+        readonly status: "error";
+        readonly error: unknown;
+        readonly hasNextPresent: boolean;
+        readonly hasNext?: unknown;
+        readonly invocationCount: number;
+        readonly hasCompletedErrors: boolean;
+      } {
+    const incremental = this.#hasNextPresent
+      ? { hasNextPresent: true, hasNext: this.#hasNext }
+      : { hasNextPresent: false };
+
+    if (this.#linkFailure !== undefined) {
+      return {
+        status: "error",
+        error: this.#linkFailure.error,
+        invocationCount: this.#linkInvocationCount,
+        hasCompletedErrors: this.#hasCompletedErrors,
+        ...incremental,
+      };
+    }
+
+    return {
+      status: this.#linkComplete ? "complete" : this.#linkStarted ? "pending" : "not-started",
+      invocationCount: this.#linkInvocationCount,
+      hasCompletedErrors: this.#hasCompletedErrors,
+      ...incremental,
+    };
+  }
+
+  getIncrementalMetadata(): Pick<GraphQLResult<TData>, "errors" | "extensions"> {
+    const metadata: Pick<GraphQLResult<TData>, "errors" | "extensions"> = {};
+
+    if (this.#hasErrors) metadata.errors = this.#errors.length > 0 ? [...this.#errors] : undefined;
+
+    if (this.#hasExtensions) {
+      metadata.extensions = this.#extensions === undefined ? undefined : { ...this.#extensions };
+    }
+
+    return metadata;
+  }
+
   dispose(): void {
     this.#disposed = true;
     this.#result = undefined;
+    this.#linkFailure = undefined;
+    this.#linkStarted = false;
+    this.#linkComplete = false;
+    this.#linkInvocationCount = 0;
+    this.#hasCompletedErrors = false;
+    this.#hasNextPresent = false;
+    this.#hasNext = undefined;
+    this.#hasErrors = false;
+    this.#errors.length = 0;
+    this.#hasExtensions = false;
+    this.#extensions = undefined;
   }
 
   record(result: ApolloLink.Result): void {
@@ -77,6 +201,64 @@ class ResponseCapture<TData> implements GraphQLResponseCapture<TData> {
     }
 
     this.#result = snapshotGraphQLResult<TData>(result);
+
+    const incremental = result as ApolloLink.Result & {
+      readonly hasNext?: unknown;
+      readonly completed?: readonly { readonly errors?: readonly GraphQLFormattedError[] }[];
+      readonly incremental?: readonly { readonly errors?: readonly GraphQLFormattedError[] }[];
+      readonly errors?: readonly GraphQLFormattedError[];
+      readonly extensions?: Record<string, unknown>;
+    };
+
+    if (Object.prototype.hasOwnProperty.call(incremental, "hasNext")) {
+      this.#hasNextPresent = true;
+      this.#hasNext = incremental.hasNext;
+    }
+
+    this.captureErrors(incremental);
+
+    for (const patch of incremental.incremental ?? []) this.captureErrors(patch);
+
+    for (const completion of incremental.completed ?? []) {
+      this.captureErrors(completion);
+      if ((completion.errors?.length ?? 0) > 0) this.#hasCompletedErrors = true;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(incremental, "extensions")) {
+      this.#hasExtensions = true;
+      this.#extensions =
+        incremental.extensions === undefined ? undefined : { ...incremental.extensions };
+    }
+  }
+
+  /** @internal Record entry into this operation's Link chain. */
+  recordLinkStart(): void {
+    if (this.#disposed) return;
+
+    this.#linkStarted = true;
+    this.#linkInvocationCount += 1;
+  }
+
+  /** @internal Record the original terminal error from the Link chain. */
+  recordLinkFailure(error: unknown): void {
+    if (this.#disposed) return;
+
+    this.#linkFailure = { error };
+  }
+
+  /** @internal Record completion of this operation's Link chain. */
+  recordLinkComplete(): void {
+    if (this.#disposed) return;
+
+    this.#linkComplete = true;
+  }
+
+  private captureErrors(source: { readonly errors?: readonly GraphQLFormattedError[] }): void {
+    if (!Object.prototype.hasOwnProperty.call(source, "errors")) return;
+
+    this.#hasErrors = true;
+
+    if (source.errors) this.#errors.push(...source.errors);
   }
 }
 
@@ -87,24 +269,52 @@ class ResponseCapture<TData> implements GraphQLResponseCapture<TData> {
  * @returns The link and a factory for per-call response capture state.
  */
 export function createResponseCaptureLink(): GraphQLResponseCaptureLink {
+  const captures = new WeakMap<object, ResponseCaptureLinkState>();
   const link = new ApolloLink((operation, forward) => {
-    const context = operation.getContext() as ApolloLink.OperationContext & {
-      [captureContextKey]?: unknown;
-    };
-    const candidate = context[captureContextKey];
-    const capture = candidate instanceof ResponseCapture ? candidate : undefined;
+    const candidate = Reflect.get(operation.getContext(), captureContextKey);
+    const issuedCapture =
+      typeof candidate === "object" && candidate !== null ? captures.get(candidate) : undefined;
+    const capture = issuedCapture?.isActive() ? issuedCapture : undefined;
+    capture?.recordLinkStart();
 
-    return forward(operation).pipe(
-      tap((result) => {
-        capture?.record(result);
+    const downstream = (() => {
+      try {
+        if (capture !== undefined) {
+          operation.setContext((previous) => {
+            const forwardedContext = { ...previous };
+            Reflect.set(forwardedContext, captureContextKey, capture.callerContextValue);
+            return forwardedContext;
+          });
+        }
+
+        return forward(operation);
+      } catch (error) {
+        capture?.recordLinkFailure(error);
+        throw error;
+      }
+    })();
+
+    return downstream.pipe(
+      tap({
+        next(result) {
+          capture?.record(result);
+        },
+        error(error: unknown) {
+          capture?.recordLinkFailure(error);
+        },
+        complete() {
+          capture?.recordLinkComplete();
+        },
       }),
     );
   });
 
   return {
     link,
-    createCapture<TData = unknown>() {
-      return new ResponseCapture<TData>();
+    createCapture<TData = unknown>(callerContext?: ApolloLink.OperationContext) {
+      const capture = new ResponseCapture<TData>(callerContext);
+      captures.set(capture, capture);
+      return capture;
     },
   };
 }

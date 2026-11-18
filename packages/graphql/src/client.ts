@@ -1,4 +1,5 @@
 import { ApolloClient, InMemoryCache } from "@apollo/client";
+import { GraphQL17Alpha9Handler } from "@apollo/client/incremental";
 import type {
   DefaultContext,
   ErrorPolicy,
@@ -21,12 +22,17 @@ import {
   createResponseCaptureLink,
   isGraphQLExecutionResult,
 } from "./response.ts";
-import type { GraphQLResult } from "./types.ts";
+import type { GraphQLProgress, GraphQLResult } from "./types.ts";
+import { executeIncrementalQuery } from "./incremental.ts";
 import { createSubscriptionLink, openGraphQLSubscription } from "./subscription.ts";
 
 /** Configuration for a GraphQL operation-definition factory. */
 export interface GraphQLClientOptions {
-  /** Native Apollo transport chain. This factory does not change the supplied link. */
+  /**
+   * Native Apollo transport chain. For incremental queries, Hesperia owns each
+   * ObservableQuery it creates. The supplied link must not refetch, reobserve,
+   * reset or stop those instances. Links may forward and transform responses.
+   */
   readonly link: ApolloLink;
   /**
    * Native context for this factory's security and representation scope.
@@ -41,6 +47,14 @@ export interface GraphQLClientOptions {
   readonly mutationErrorPolicy?: ErrorPolicy;
   /** Default native subscription error policy. Defaults to `none`. */
   readonly subscriptionErrorPolicy?: ErrorPolicy;
+  /** Opt into Apollo's GraphQL 17 incremental response profile. */
+  readonly experimentalIncremental?: GraphQLIncrementalOptions;
+}
+
+/** The experimental multipart response profile used by this factory. */
+export interface GraphQLIncrementalOptions {
+  /** GraphQL 17's `pending`/`incremental`/`completed` response format. */
+  readonly profile: "graphql17-v0.2";
 }
 
 /**
@@ -55,7 +69,8 @@ export type GraphQLQueryOptions<
   TData,
   TVariables extends OperationVariables,
   TKey extends string = string,
-> = Omit<CreateQueryInput<TVariables, GraphQLResult<TData>, TKey>, "fetch"> & {
+  Progress = never,
+> = Omit<CreateQueryInput<TVariables, GraphQLResult<TData>, TKey, Progress>, "fetch"> & {
   /** Typed native query document. Variables are borrowed under ordinary query rules. */
   readonly document: TypedDocumentNode<TData, TVariables>;
   /** Explicit native error policy for this declaration, overriding the factory default. */
@@ -98,13 +113,14 @@ export type GraphQLSubscriptionOptions<
 };
 
 /**
- * Builds ordinary Aeolia definitions over one owned, uncached native client.
+ * Builds Aeolia definitions over one owned, uncached native client.
  * Declaring an operation performs no request. Put definitions in a public
  * Aeolia contract/graph and adapt that same pair with `hesperia/aeolia`.
+ * @typeParam Incremental - Whether this factory enables incremental progress.
  */
-export interface GraphQLClient {
+export interface GraphQLClient<Incremental extends boolean = false> {
   /**
-   * Declare a finite query whose value is the available execution envelope.
+   * Declare a query whose value is the available execution envelope.
    * Field errors resolve by default; errors before execution reject. Explicit
    * native error policies retain their meanings. Transport/decode/cancellation
    * failures remain failures and do not commit a new query value.
@@ -112,8 +128,18 @@ export interface GraphQLClient {
    * @returns A dormant public Aeolia query definition.
    */
   query<TData, TVariables extends OperationVariables, TKey extends string>(
-    options: GraphQLQueryOptions<TData, TVariables, TKey>,
-  ): QueryDefinition<TVariables, GraphQLResult<TData>, TKey>;
+    options: GraphQLQueryOptions<
+      TData,
+      TVariables,
+      TKey,
+      [Incremental] extends [true] ? GraphQLProgress<TData> : never
+    >,
+  ): QueryDefinition<
+    TVariables,
+    GraphQLResult<TData>,
+    TKey,
+    [Incremental] extends [true] ? GraphQLProgress<TData> : never
+  >;
   /**
    * Declare a finite mutation. Execution errors reject by default, preserving
    * the available envelope on an ordinary Error and the native error as cause.
@@ -158,20 +184,29 @@ export interface GraphQLClient {
  *
  * @param options - Native link, explicit fixed context and error-policy defaults.
  * @returns A dormant definition factory. Dispose its graphs before calling `stop`.
- * @throws A TypeError for an unsupported error policy.
+ * @throws A TypeError for an unsupported error policy or incremental profile.
  */
-export function createGraphQLClient(options: GraphQLClientOptions): GraphQLClient {
+export function createGraphQLClient(
+  options: GraphQLClientOptions & { readonly experimentalIncremental: GraphQLIncrementalOptions },
+): GraphQLClient<true>;
+export function createGraphQLClient(
+  options: GraphQLClientOptions & { readonly experimentalIncremental?: undefined },
+): GraphQLClient<false>;
+export function createGraphQLClient(options: GraphQLClientOptions): GraphQLClient<boolean>;
+export function createGraphQLClient(options: GraphQLClientOptions): GraphQLClient<boolean> {
   const captureLink = createResponseCaptureLink();
   const context = { ...options.context };
   const queryPolicy = checkPolicy(options.queryErrorPolicy ?? "all");
   const mutationPolicy = checkPolicy(options.mutationErrorPolicy ?? "none");
   const subscriptionPolicy = checkPolicy(options.subscriptionErrorPolicy ?? "none");
+  const incrementalEnabled = checkIncrementalProfile(options.experimentalIncremental) !== undefined;
   const terminations = new Set<() => void>();
   const native = new ApolloClient({
     link: ApolloLink.from([captureLink.link, createSubscriptionLink(), options.link]),
     cache: new InMemoryCache(),
     queryDeduplication: false,
     devtools: { enabled: false },
+    ...(incrementalEnabled ? { incrementalHandler: new GraphQL17Alpha9Handler() } : {}),
   });
   let stopped = false;
 
@@ -181,12 +216,13 @@ export function createGraphQLClient(options: GraphQLClientOptions): GraphQLClien
     variables: TVariables,
     abortSignal: AbortSignal,
     policy: ErrorPolicy,
+    reportProgress?: (value: GraphQLProgress<TData>) => void,
   ): Promise<GraphQLResult<TData>> {
     if (stopped) throw new Error("The GraphQL client has been stopped");
 
     abortSignal.throwIfAborted();
 
-    const capture = captureLink.createCapture<TData>();
+    const capture = captureLink.createCapture<TData>(context);
     const requestContext: DefaultContext = {
       ...context,
       ...capture.context,
@@ -195,6 +231,23 @@ export function createGraphQLClient(options: GraphQLClientOptions): GraphQLClien
     };
 
     try {
+      if (kind === "query" && incrementalEnabled) {
+        if (!reportProgress)
+          throw new Error("Incremental GraphQL queries require an Aeolia progress reporter");
+
+        return await executeIncrementalQuery({
+          client: native,
+          document,
+          variables,
+          context: requestContext,
+          abortSignal,
+          errorPolicy: policy,
+          capture,
+          fetchPolicy: "no-cache",
+          reportProgress,
+        });
+      }
+
       const result =
         kind === "query"
           ? await native.query<TData, TVariables>({
@@ -214,9 +267,32 @@ export function createGraphQLClient(options: GraphQLClientOptions): GraphQLClien
 
       abortSignal.throwIfAborted();
 
+      const linkState = capture.getLinkState();
+      if (kind === "query" && linkState.status === "error") {
+        if (policy === "ignore")
+          throw createGraphQLResultError(
+            "The GraphQL request did not produce an execution result",
+            undefined,
+            linkState.error,
+          );
+        throw linkState.error;
+      }
+
       if (result.error && !CombinedGraphQLErrors.is(result.error)) throw result.error;
 
       const captured = capture.getResult();
+      if (kind === "query" && linkState.invocationCount > 1)
+        throw createGraphQLResultError(
+          "The GraphQL query reused its Link capture",
+          undefined,
+          result.error,
+        );
+      if (kind === "query" && captured !== undefined && linkState.status !== "complete")
+        throw createGraphQLResultError(
+          "The GraphQL response stream did not complete",
+          applyPolicy(captured, policy),
+          result.error,
+        );
       const envelope = captured && applyPolicy(captured, policy);
 
       if (!envelope || !isGraphQLExecutionResult(envelope)) {
@@ -247,18 +323,22 @@ export function createGraphQLClient(options: GraphQLClientOptions): GraphQLClien
     }
   }
 
-  const client: GraphQLClient = {
-    query(input) {
+  const client = {
+    query<TData, TVariables extends OperationVariables, TKey extends string>(
+      input: GraphQLQueryOptions<TData, TVariables, TKey, GraphQLProgress<TData>>,
+    ) {
       const { document, errorPolicy = queryPolicy, ...definition } = input;
       const policy = checkPolicy(errorPolicy);
 
-      return createQuery({
+      return createQuery<TVariables, GraphQLResult<TData>, TKey, GraphQLProgress<TData>>({
         ...definition,
-        fetch: (variables, { abortSignal }) =>
-          request("query", document, variables, abortSignal, policy),
+        fetch: (variables, { abortSignal, reportProgress }) =>
+          request("query", document, variables, abortSignal, policy, reportProgress),
       });
     },
-    mutation(input) {
+    mutation<TData, TVariables extends OperationVariables>(
+      input: GraphQLMutationOptions<TData, TVariables>,
+    ) {
       const { document, errorPolicy = mutationPolicy, ...definition } = input;
       const policy = checkPolicy(errorPolicy);
 
@@ -320,7 +400,18 @@ export function createGraphQLClient(options: GraphQLClientOptions): GraphQLClien
     },
   };
 
-  return client;
+  return client as unknown as GraphQLClient<boolean>;
+}
+
+function checkIncrementalProfile(
+  options: GraphQLIncrementalOptions | undefined,
+): GraphQLIncrementalOptions["profile"] | undefined {
+  if (options === undefined) return undefined;
+  const profile =
+    options !== null && typeof options === "object" ? Reflect.get(options, "profile") : undefined;
+  if (profile !== "graphql17-v0.2")
+    throw new TypeError(`Unsupported GraphQL incremental profile: ${String(profile)}`);
+  return profile;
 }
 
 function checkPolicy(policy: ErrorPolicy): ErrorPolicy {
@@ -342,4 +433,4 @@ function applyPolicy<TData>(
   return available;
 }
 
-export type { GraphQLResult, GraphQLResultError } from "./types.ts";
+export type { GraphQLProgress, GraphQLResult, GraphQLResultError } from "./types.ts";
