@@ -435,7 +435,7 @@ jobs:
         run: "bun run build"
       - name: "Install all browser engines"
         if: "runner.os == 'Linux'"
-        timeout-minutes: 25
+        timeout-minutes: 35
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install all browser engines"
         if: "runner.os == 'Windows'"
@@ -514,7 +514,7 @@ jobs:
         run: "bun run build"
       - name: "Install browser engines and system dependencies"
         if: "runner.os == 'Linux'"
-        timeout-minutes: 25
+        timeout-minutes: 35
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install browser engines"
         if: "runner.os == 'Windows'"
@@ -594,7 +594,7 @@ jobs:
         run: "bun run build"
       - name: "Install the selected browser engine and system dependencies"
         if: "runner.os == 'Linux'"
-        timeout-minutes: 25
+        timeout-minutes: 35
         run: 'node node_modules/playwright/cli.js install --with-deps "$GOLDEN_PROJECT"'
         shell: bash
       - name: "Install the selected browser engine"
