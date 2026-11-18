@@ -598,7 +598,7 @@ export interface AsyncBoundaryHost {
   readonly owner: Owner;
 
   /** Keep content uncommitted until an owned render wait completes. */
-  capture(owner: Owner, promise: Promise<void>): void;
+  capture(owner: Owner, promise: Promise<unknown>): void;
 
   /** Retain a source and observe value only when the owner consumes its value or awaits it. */
   consumeQuery<T>(

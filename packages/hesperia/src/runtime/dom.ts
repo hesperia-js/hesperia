@@ -170,7 +170,28 @@ interface OwnedObjectURL {
 }
 
 /** Values accepted by the synchronous browser renderer. */
-export type Rendered = Node | string | number | boolean | null | undefined | readonly Rendered[];
+/** Native server output consumed by the host's HTML serializer. */
+export type ServerNode =
+  | {
+      readonly type: "element";
+      readonly key?: string;
+      readonly tag: string;
+      readonly namespace?: string;
+      readonly attributes: Readonly<Record<string, unknown>>;
+      readonly children: readonly Rendered[];
+    }
+  | { readonly type: "text"; readonly key?: string; readonly value: string }
+  | { readonly type: "child"; readonly key?: string; readonly children: readonly Rendered[] };
+
+export type Rendered =
+  | Node
+  | ServerNode
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | readonly Rendered[];
 
 export { defineComponent, dynamic } from "./components.ts";
 export type {
