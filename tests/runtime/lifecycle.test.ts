@@ -31,6 +31,30 @@ function container(): Element {
 }
 
 describe("browser component lifetimes", () => {
+  test("stops remaining commit callbacks after a component is disposed", () => {
+    const target = container();
+    const calls: string[] = [];
+    const Child = defineComponent((owner) => {
+      owner.onCommit(() => {
+        calls.push("dispose");
+        owner.dispose();
+      });
+
+      owner.onCommit(() => calls.push("late"));
+
+      return element(owner, "span");
+    });
+    const App = defineComponent((owner) => component(owner, Child, {}));
+    const app = mount(target, App, {});
+
+    try {
+      expect(calls).toStrictEqual(["dispose"]);
+      expect(target.querySelector("span")).toBeNull();
+    } finally {
+      app.dispose();
+    }
+  });
+
   test("removing one resource lifecycle during resume does not skip the next", () => {
     const target = container();
     const resumed: string[] = [];
