@@ -173,3 +173,6 @@ jobs:
       - name: Run request scope integration with the preview SDK
         if: hashFiles('hesperia/tests/data/request-scope.integration.test.ts') != ''
         run: bun test --timeout=45000 tests/data/request-scope.integration.test.ts
+      - name: Run native HTTP ledger integration with the preview SDK
+        if: hashFiles('hesperia/tests/runtime/native-http-ledger.test.ts') != ''
+        run: bun test --timeout=45000 tests/runtime/native-http-ledger.test.ts
