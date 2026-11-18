@@ -179,7 +179,11 @@ function buildTree(
           const options = args[1] === undefined ? undefined : { ...args[1] };
           assertAuthority();
 
-          return createPreparedQueryView<unknown, unknown, any>(
+          return createPreparedQueryView<
+            Awaited<ReturnType<typeof prepareProfileQueryInput>>,
+            unknown,
+            unknown
+          >(
             owner,
             graph,
             (track) => prepareProfileQueryInput(args[0], registration.profile, track),
