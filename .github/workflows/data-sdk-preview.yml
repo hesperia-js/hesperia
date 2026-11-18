@@ -176,3 +176,5 @@ jobs:
       - name: Run native HTTP ledger integration with the preview SDK
         if: hashFiles('hesperia/tests/runtime/native-http-ledger.test.ts') != ''
         run: bun test --timeout=45000 tests/runtime/native-http-ledger.test.ts
+      - name: Run error-boundary lifecycle tests
+        run: bun test --timeout=45000 tests/runtime/error-boundary.test.ts
