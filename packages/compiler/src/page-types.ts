@@ -141,8 +141,10 @@ export function generatePageDeclarations(
   ];
   const declaration =
     PAGE_DECLARATION_MARKER +
-    "\nexport {};\ndeclare global {\n" +
-    [...helpers, ...routeResultAliases, ...aliases].join("\n") +
+    "\nexport {};\n" +
+    [...helpers, ...routeResultAliases].map((line) => line.slice(2)).join("\n") +
+    "\ndeclare global {\n" +
+    aliases.join("\n") +
     "\n}\n";
 
   return {
