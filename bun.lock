@@ -159,6 +159,9 @@
     "packages/hosting": {
       "name": "@hesperia/hosting",
       "version": "1.0.0-alpha.3",
+      "dependencies": {
+        "hesperia": "workspace:*",
+      },
     },
     "packages/language-server": {
       "name": "@hesperia/language-server",
