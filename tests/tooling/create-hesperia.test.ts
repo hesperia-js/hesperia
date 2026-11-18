@@ -407,6 +407,56 @@ Bun.spawn = (command, options = {}) => {
   }
 });
 
+test("retains the completed scaffold when a real installer fails", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-create-installer-failure-"));
+  const destination = join(root, "application");
+  const script = join(root, "postinstall.mjs");
+  const marker = join(root, "postinstall-ran");
+  const progress: string[] = [];
+
+  try {
+    await writeFile(
+      script,
+      `await Bun.write(${JSON.stringify(marker)}, "ran");\nprocess.exit(23);\n`,
+    );
+
+    const result = await executeCreator(
+      resolveCreator({ destination, hostIntegration: "none", install: true }),
+      {
+        signal: new AbortController().signal,
+        installerOutput: { stdout: process.stdout.fd, stderr: process.stderr.fd },
+        onProgress(event) {
+          if (event.kind === "created") {
+            writeFileSync(
+              join(event.projectRoot, "package.json"),
+              JSON.stringify({
+                name: event.packageName,
+                private: true,
+                scripts: { postinstall: `"${process.execPath}" "${script}"` },
+              }),
+            );
+          }
+
+          if (event.kind === "install") progress.push(event.status);
+        },
+      },
+    );
+
+    expect(result.status).toBe("failed");
+
+    if (result.status !== "failed") throw new Error("Expected the installer to fail");
+
+    expect(result.message).toContain("Dependency installation failed with exit code");
+    expect(result.projectRoot).toBe(destination);
+    expect(result.cleanup).toStrictEqual({ status: "not-needed", retainedPaths: [] });
+    expect(progress).toStrictEqual(["started"]);
+    expect(await readFile(marker, "utf8")).toBe("ran");
+    expect(await readFile(join(destination, "app.tsx"), "utf8")).toContain("application");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}, 45_000);
+
 test("refuses to overwrite existing files before execution or after resolution", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-create-existing-"));
   const destination = join(root, "existing");
