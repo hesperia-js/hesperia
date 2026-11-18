@@ -1028,3 +1028,269 @@ test("reset forwards the graph promise for marker, bound, and projected APIs", a
     graph.dispose();
   }
 });
+
+test("query progress projections seed late and reset for the next actual execution", async () => {
+  const runs: Array<{
+    report: (value: number) => void;
+    work: { promise: Promise<string>; resolve: (value: string) => void };
+  }> = [];
+  const query = createQuery<string, string, string, number>({
+    name: "adapter.progress-executions",
+    key: (input) => input,
+    fetch: (_input, { reportProgress }) => {
+      const work = Promise.withResolvers<string>();
+      runs.push({ report: reportProgress, work });
+
+      return work.promise;
+    },
+  });
+  const contract = defineContract({
+    namespace: "adapter-progress-executions",
+    operations: { query },
+  });
+  const graph = createGraph({ contract });
+  const owner = makeOwner();
+
+  try {
+    const view = createContractApi(owner, graph, contract).query("same");
+    const ready = view.ready;
+    const history = view.project({ kind: "accumulate", max: 8 });
+    const latest = view.project();
+    const observation = observeQueryProgress(view.source);
+    const firstExecution = observation.capture().execution;
+
+    expect(firstExecution).toBeDefined();
+    expect(runs).toHaveLength(1);
+    expect(view.value()).toBeUndefined();
+    runs[0]!.report(1);
+    runs[0]!.report(2);
+
+    const late = view.project({ kind: "accumulate", max: 8 });
+    const lateSum = view.project({
+      kind: "reduce",
+      initial: 10,
+      step: (sum, value) => sum + value,
+    });
+
+    expect(history.value()).toStrictEqual([1, 2]);
+    expect(late.value()).toStrictEqual([2]);
+    expect(lateSum.value()).toBe(12);
+    expect(latest.value()).toBe(2);
+    expect(view.value()).toBeUndefined();
+
+    runs[0]!.work.resolve("first");
+    await expect(ready).resolves.toBe("first");
+    expect(view.value()).toBe("first");
+    expect(history.status()).toBe("complete");
+
+    const refreshed = view.revalidate();
+    const secondExecution = observation.capture().execution;
+
+    expect(runs).toHaveLength(2);
+    expect(secondExecution).toBeDefined();
+    expect(secondExecution).not.toBe(firstExecution);
+    expect(history.value()).toStrictEqual([]);
+    expect(late.value()).toStrictEqual([]);
+    expect(lateSum.value()).toBe(10);
+    expect(latest.value()).toBeUndefined();
+    expect(history.status()).toBe("pending");
+    expect(view.value()).toBe("first");
+
+    runs[0]!.report(99);
+    expect(history.value()).toStrictEqual([]);
+    runs[1]!.report(3);
+    expect(history.value()).toStrictEqual([3]);
+    expect(late.value()).toStrictEqual([3]);
+    expect(lateSum.value()).toBe(13);
+    expect(latest.value()).toBe(3);
+    expect(view.value()).toBe("first");
+
+    runs[1]!.work.resolve("second");
+    await refreshed;
+    expect(view.value()).toBe("second");
+    expect(history.status()).toBe("complete");
+    expect(observation.capture().execution).toBe(secondExecution);
+  } finally {
+    for (const run of runs) run.work.resolve("cleanup");
+    await owner.dispose();
+    graph.dispose();
+  }
+});
+
+test("a failed projection keeps its own failure through the same query's failed terminal", async () => {
+  const work = Promise.withResolvers<string>();
+  const terminalFailure = new Error("query failed");
+  const reducerFailure = new Error("projection failed");
+  let report!: (value: number) => void;
+  const query = createQuery<string, string, string, number>({
+    name: "adapter.progress-terminal-failure",
+    key: (input) => input,
+    fetch: (_input, options) => {
+      report = options.reportProgress;
+      return work.promise;
+    },
+  });
+  const ordinary = createQuery({
+    name: "adapter.progress-ordinary",
+    key: (input: string) => input,
+    fetch: async (input: string) => `ordinary ${input}`,
+  });
+  const contract = defineContract({
+    namespace: "adapter-progress-terminal",
+    operations: { query, ordinary },
+  });
+  const graph = createGraph({ contract });
+  const owner = makeOwner();
+
+  try {
+    const api = createContractApi(owner, graph, contract);
+    const view = api.query("one");
+    const finite = api.ordinary("one");
+    const ready = view.ready;
+    void ready.catch(() => undefined);
+    const observation = observeQueryProgress(view.source);
+    const execution = observation.capture().execution;
+    const history = view.project({ kind: "accumulate", max: 8 });
+    const projected = view.project({
+      kind: "reduce",
+      initial: [] as readonly number[],
+      step: (values, value) => {
+        if (value === 2) {
+          work.reject(terminalFailure);
+          throw reducerFailure;
+        }
+
+        return [...values, value];
+      },
+    });
+
+    await expect(finite.ready).resolves.toBe("ordinary one");
+    report(1);
+    report(2);
+    await expect(ready).rejects.toBe(terminalFailure);
+
+    expect(observation.capture().execution).toBe(execution);
+    expect(observation.capture().status).toBe("failed");
+    expect(projected.value()).toStrictEqual([1]);
+    expect(projected.status()).toBe("failed");
+    expect(projected.error()).toBe(reducerFailure);
+    expect(history.value()).toStrictEqual([1, 2]);
+    expect(history.status()).toBe("failed");
+    expect(history.error()).toBe(terminalFailure);
+    expect(view.error()).toBe(terminalFailure);
+    expect(view.value()).toBeUndefined();
+    expect(finite.value()).toBe("ordinary one");
+    expect(finite.error()).toBeUndefined();
+  } finally {
+    work.resolve("cleanup");
+    await owner.dispose();
+    graph.dispose();
+  }
+});
+
+test("an interrupted reducer cannot publish over the manual query value", async () => {
+  const work = Promise.withResolvers<string>();
+  let report!: (value: number) => void;
+  const query = createQuery<string, string, string, number>({
+    name: "adapter.progress-interrupted-reducer",
+    key: (input) => input,
+    fetch: (_input, options) => {
+      report = options.reportProgress;
+      return work.promise;
+    },
+  });
+  const contract = defineContract({
+    namespace: "adapter-progress-interrupted",
+    operations: { query },
+  });
+  const graph = createGraph({ contract });
+  const owner = makeOwner();
+
+  try {
+    const view = createContractApi(owner, graph, contract).query("one");
+    const observation = observeQueryProgress(view.source);
+    const execution = observation.capture().execution;
+    const projected = view.project({
+      kind: "reduce",
+      initial: 0,
+      step: (total, value) => {
+        if (value === 2) view.set("manual");
+        return total + value;
+      },
+    });
+
+    report(1);
+    expect(projected.value()).toBe(1);
+    report(2);
+    expect(observation.capture().execution).toBe(execution);
+    expect(observation.capture().status).toBe("interrupted");
+    expect(projected.value()).toBe(1);
+    expect(projected.status()).toBe("interrupted");
+    expect(view.value()).toBe("manual");
+
+    report(3);
+    work.resolve("late");
+    await work.promise;
+    expect(projected.value()).toBe(1);
+    expect(projected.status()).toBe("interrupted");
+    expect(view.value()).toBe("manual");
+  } finally {
+    work.resolve("cleanup");
+    await owner.dispose();
+    graph.dispose();
+  }
+});
+
+test("owner disposal inside a reducer revokes only that query projection", async () => {
+  const work = Promise.withResolvers<string>();
+  let report!: (value: number) => void;
+  let reducerCalls = 0;
+  const query = createQuery<string, string, string, number>({
+    name: "adapter.progress-revoked-reducer",
+    key: (input) => input,
+    fetch: (_input, options) => {
+      report = options.reportProgress;
+      return work.promise;
+    },
+  });
+  const contract = defineContract({ namespace: "adapter-progress-revoked", operations: { query } });
+  const graph = createGraph({ contract });
+  const owner = makeOwner();
+  const otherOwner = makeOwner();
+
+  try {
+    const view = createContractApi(owner, graph, contract).query("one");
+    const other = createContractApi(otherOwner, graph, contract).query("one");
+    const otherReady = other.ready;
+    const otherProgress = other.project({ kind: "accumulate", max: 4 });
+    const projected = view.project({
+      kind: "reduce",
+      initial: 0,
+      step: (total, value) => {
+        reducerCalls++;
+        owner.dispose();
+        return total + value;
+      },
+    });
+
+    expect(other.source).toBe(view.source);
+    report(1);
+    expect(reducerCalls).toBe(1);
+    expect(() => projected.value()).toThrow();
+    expect(() => view.value()).toThrow();
+    expect(otherProgress.value()).toStrictEqual([1]);
+
+    report(2);
+    expect(reducerCalls).toBe(1);
+    expect(otherProgress.value()).toStrictEqual([1, 2]);
+    work.resolve("completed");
+    await expect(otherReady).resolves.toBe("completed");
+    expect(other.value()).toBe("completed");
+    expect(otherProgress.status()).toBe("complete");
+  } finally {
+    work.resolve("cleanup");
+    await owner.dispose();
+    await otherOwner.dispose();
+    graph.dispose();
+  }
+});

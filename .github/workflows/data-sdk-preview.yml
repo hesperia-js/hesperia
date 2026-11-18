@@ -112,6 +112,9 @@ jobs:
         run: bun run typecheck
       - name: Run Data and lifecycle tests with the preview SDK
         run: bun test --timeout=45000 tests/data/contract-adapter.integration.test.ts tests/runtime/lifecycle.test.ts
+      - name: Run the finite GraphQL owner with the preview SDK
+        if: github.event.pull_request.number == 51
+        run: bun test --timeout=45000 tests/data/graphql.integration.test.ts
       - name: Run the GraphQL incremental owner with the preview SDK
         if: github.event.pull_request.number == 51
         run: bun test --timeout=45000 tests/data/graphql-incremental.integration.test.ts
@@ -142,7 +145,7 @@ jobs:
           if-no-files-found: warn
       - name: Install browser engines on Linux
         if: github.event.pull_request.number == 51 && runner.os == 'Linux'
-        timeout-minutes: 15
+        timeout-minutes: 25
         run: node node_modules/playwright/cli.js install --with-deps chromium firefox webkit
       - name: Install browser engines on Windows
         if: github.event.pull_request.number == 51 && runner.os == 'Windows'
