@@ -10,7 +10,7 @@ import { debounce, throttle } from "hesperia/scheduling";
 import { beforeLeave, navigation, type HesperiaNavigation } from "hesperia/navigation";
 // @ts-expect-error beforeLeave is exposed by hesperia/navigation, not hesperia/routing.
 import { beforeLeave as legacyBeforeLeave } from "hesperia/routing"; // oxlint-disable-line no-unused-vars
-import { Router } from "hesperia/routing";
+import { Router, route } from "hesperia/routing";
 import { env } from "hesperia/env";
 import { SETTINGS } from "hesperia/config/public";
 import { defineConfig, type Plugin } from "@hesperia/tooling";
@@ -239,3 +239,18 @@ void wrongOptional;
 // @ts-expect-error numeric state is not a string
 const wrong: string = count();
 void wrong;
+
+function checkLiteralRouteTagTypes(): void {
+  const declaration = route({ tags: ["products", "catalog"], load: () => "product" as const });
+  const tags: readonly ["products", "catalog"] = declaration.tags;
+  const result: "product" = declaration.load();
+  // @ts-expect-error route tag declarations are readonly
+  declaration.tags = [];
+  // @ts-expect-error route tag elements cannot be replaced
+  declaration.tags[0] = "other";
+  // @ts-expect-error route tag arrays cannot be extended
+  declaration.tags.push("other");
+  void [tags, result];
+}
+
+void checkLiteralRouteTagTypes;
