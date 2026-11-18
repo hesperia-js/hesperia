@@ -108,6 +108,17 @@ export class CheckingInputSnapshot {
     );
   }
 
+  /** Verify an issued array contains exactly the rows captured by this snapshot owner. */
+  ownsCaptured(value: readonly CapturedCheckingInput[]): boolean {
+    if (!Array.isArray(value) || !Object.isFrozen(value)) return false;
+    const expected = [...this.#captured.values()].filter((input) =>
+      isCheckingInput(input.filename),
+    );
+    return (
+      value.length === expected.length && expected.every((input, index) => value[index] === input)
+    );
+  }
+
   #identity(filename: string): string {
     const canonical = resolve(filename);
     const lexicalKey = pathKey(canonical);
