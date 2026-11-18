@@ -68,6 +68,9 @@ test("typing evidence stays tied to the actual emitted module population", async
 test("checked origin retains an emitted JSX component and its checked props", async () => {
   const filename = "checked-origin-component.tsx";
   const source = `import { type Component } from "hesperia";
+export function formatTitle(value: string) {
+  return value.trim();
+}
 export function Page(props: Component.Props<{ title: string; serial: bigint }>) {
   return <main>{props.title()}</main>;
 }`;

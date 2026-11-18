@@ -2610,7 +2610,7 @@ function componentEvidence(
 ): readonly CheckedComponentTypingEvidence[] {
   const propAnalysis = analysis.componentProps;
   const propTypes = propAnalysis ? componentPropsTypeEvidence(propAnalysis) : undefined;
-  const checked = canonicalComponents(analysis.result.ir, filename);
+  const checked = canonicalComponents(analysis.result.ir, filename, analysis);
   const emittedComponents = emitted ? canonicalComponents(emitted.ir, filename) : [];
 
   return Object.freeze(
@@ -2707,6 +2707,7 @@ interface CanonicalComponentOccurrence {
 function canonicalComponents(
   root: CanonicalModule,
   filename: string,
+  analysis?: ModuleAnalysis,
 ): readonly CanonicalComponentOccurrence[] {
   const found: CanonicalComponentOccurrence[] = [];
 
@@ -2721,12 +2722,34 @@ function canonicalComponents(
     const node = value as {
       readonly kind?: string;
       readonly component?: boolean;
+      readonly generator?: boolean;
+      readonly props?: unknown;
       readonly span?: { readonly start: number; readonly end: number };
       readonly parameters?: readonly { readonly span?: { readonly start: number } }[];
     };
+    const firstParameter = node.parameters?.[0];
+    const firstParameterStart = firstParameter?.span
+      ? (analysis?.mapOffset?.(firstParameter.span.start) ?? firstParameter.span.start)
+      : undefined;
+    const checkedProps = analysis?.componentProps?.byParameterStart;
+    const checkedPropsOffset =
+      firstParameterStart !== undefined &&
+      Number.isSafeInteger(firstParameterStart) &&
+      firstParameterStart >= 0
+        ? String(firstParameterStart)
+        : undefined;
+    const hasCheckedProps =
+      checkedPropsOffset !== undefined &&
+      checkedProps !== undefined &&
+      Object.prototype.hasOwnProperty.call(checkedProps, checkedPropsOffset) &&
+      checkedProps[checkedPropsOffset] !== undefined;
+    const checkedFunctionProps =
+      node.kind === "function" &&
+      node.generator !== true &&
+      (node.props !== undefined || hasCheckedProps);
 
     if (
-      node.component === true &&
+      (node.component === true || checkedFunctionProps) &&
       (node.kind === "function" || node.kind === "arrow" || node.kind === "function-expression") &&
       node.span
     )
