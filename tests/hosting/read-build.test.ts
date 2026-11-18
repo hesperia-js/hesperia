@@ -486,38 +486,68 @@ function digest(value: string | Uint8Array): string {
   return new Bun.CryptoHasher("sha256").update(value).digest("hex");
 }
 
+async function writeTargetedRouting(
+  written: Awaited<ReturnType<typeof targetedFixture>>,
+  policy: unknown,
+): Promise<void> {
+  const routing = JSON.stringify(policy, null, 2) + "\n";
+  const record = JSON.parse(written.source);
+
+  record.hosting.assets.push({
+    path: "/assets/static-routing.json",
+    sha256: digest(routing),
+    contentType: "application/json",
+  });
+
+  await filesystem.writeFile(join(written.assetsRoot, "static-routing.json"), routing);
+  await filesystem.writeFile(written.recordPath, JSON.stringify(record, null, 2) + "\n");
+}
+
+function browserRouting(publicFiles: string[] = []) {
+  return {
+    version: 1,
+    kind: "browser-static-routing",
+    mountURL: "/dashboard",
+    pages: [{ id: "", pattern: "/", segments: [] }],
+    publicFiles,
+    outcomes: { page: 200, missingPage: 404, missingManaged: 404 },
+  };
+}
+
 test("a targeted browser capture serves its recorded route and drains on close", async () => {
   const root = await filesystem.mkdtemp(join(tmpdir(), "hesperia-targeted-host-"));
 
   try {
-    const written = await targetedFixture(root);
-    const routing =
-      JSON.stringify(
-        {
-          version: 1,
-          kind: "browser-static-routing",
-          mountURL: "/dashboard",
-          pages: [{ id: "", pattern: "/", segments: [] }],
-          publicFiles: [],
-          outcomes: { page: 200, missingPage: 404, missingManaged: 404 },
-        },
-        null,
-        2,
-      ) + "\n";
-    const record = JSON.parse(written.source);
-
-    record.hosting.assets.push({
-      path: "/assets/static-routing.json",
-      sha256: digest(routing),
-      contentType: "application/json",
-    });
-
-    await filesystem.writeFile(join(written.assetsRoot, "static-routing.json"), routing);
-    await filesystem.writeFile(written.recordPath, JSON.stringify(record, null, 2) + "\n");
+    const written = await targetedFixture(root, declarations[0], "binary");
+    await writeTargetedRouting(written, browserRouting(["/raw/caf%C3%A9%20%23%25.bin"]));
 
     const resource = await createTargetedHost(await readTargetedBuild(root));
 
     if (resource.kind !== "browser") throw new Error("Expected the browser host");
+
+    const publicResponse = resource.host.handle(
+      new Request("http://localhost/dashboard/raw/caf%C3%A9%20%23%25.bin"),
+    );
+
+    expect(publicResponse?.status).toBe(200);
+    expect(new Uint8Array(await publicResponse!.arrayBuffer())).toEqual(written.binary);
+
+    const missing = resource.host.handle(
+      new Request("http://localhost/dashboard/missing", { headers: { accept: "text/html" } }),
+    );
+
+    expect(missing?.status).toBe(404);
+    await missing!.body!.cancel();
+    expect(resource.host.handle(new Request("http://localhost/outside"))).toBeUndefined();
+    expect(
+      resource.host.handle(new Request("http://localhost/dashboard", { method: "POST" })),
+    ).toBeUndefined();
+
+    const missingAsset = resource.host.handle(
+      new Request("http://localhost/dashboard/_hesperia/assets/missing.js"),
+    );
+
+    expect(missingAsset?.status).toBe(404);
 
     const response = resource.host.handle(
       new Request("http://localhost/dashboard", { headers: { accept: "text/html" } }),
@@ -542,6 +572,75 @@ test("a targeted browser capture serves its recorded route and drains on close",
     await filesystem.rm(root, { recursive: true, force: true });
   }
 });
+
+test.each([
+  { policy: { ...browserRouting(), mountURL: "/other" }, error: "mount does not match" },
+  { policy: { ...browserRouting(), mountURL: "/dashboard/" }, error: "must already be canonical" },
+  {
+    policy: { ...browserRouting(), publicFiles: ["/unexpected"] },
+    error: "public URLs do not match",
+  },
+  {
+    policy: { ...browserRouting(), publicFiles: ["/same", "/same"] },
+    error: "routing public URLs must be unique",
+  },
+  { policy: { ...browserRouting(), pages: [] }, error: "requires at least one captured page" },
+  {
+    policy: { ...browserRouting(), pages: [browserRouting().pages[0], browserRouting().pages[0]] },
+    error: "routing page identities must be unique",
+  },
+  {
+    policy: {
+      ...browserRouting(),
+      pages: [{ id: "broken", pattern: "/broken", segments: [{ kind: "unknown", value: "x" }] }],
+    },
+    error: "unsupported routing segment kind",
+  },
+  {
+    policy: { ...browserRouting(), outcomes: { page: 201, missingPage: 404, missingManaged: 404 } },
+    error: "unsupported browser/static HTTP outcomes",
+  },
+  { policy: { ...browserRouting(), extra: true }, error: "unexpected or missing fields" },
+])("targeted host rejects a mismatched or malformed routing capture", async ({ policy, error }) => {
+  const root = await filesystem.mkdtemp(join(tmpdir(), "hesperia-targeted-invalid-"));
+
+  try {
+    const written = await targetedFixture(root);
+    await writeTargetedRouting(written, policy);
+    await expect(createTargetedHost(await readTargetedBuild(root))).rejects.toThrow(error);
+  } finally {
+    await filesystem.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("targeted host refuses a capture without its routing policy", async () => {
+  const root = await filesystem.mkdtemp(join(tmpdir(), "hesperia-targeted-no-routing-"));
+
+  try {
+    await targetedFixture(root);
+    await expect(createTargetedHost(await readTargetedBuild(root))).rejects.toThrow(
+      "missing its static routing asset",
+    );
+  } finally {
+    await filesystem.rm(root, { recursive: true, force: true });
+  }
+});
+
+test.each([declarations[1], declarations[3], declarations[4]])(
+  "targeted host refuses the unavailable $runtime/$profile server profile",
+  async (declaration) => {
+    const root = await filesystem.mkdtemp(join(tmpdir(), "hesperia-targeted-unavailable-"));
+
+    try {
+      await targetedFixture(root, declaration, "empty", "old", true);
+      await expect(createTargetedHost(await readTargetedBuild(root))).rejects.toThrow(
+        "production-target-unavailable",
+      );
+    } finally {
+      await filesystem.rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 function hasProductionMode<Hosting extends { readonly mode: "development" | "production" }>(
   hosting: Hosting,
