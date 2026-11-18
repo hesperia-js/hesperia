@@ -93,6 +93,9 @@
     "packages/create-hesperia": {
       "name": "create-hesperia",
       "version": "1.0.0-alpha.3",
+      "dependencies": {
+        "citty": "0.2.2",
+      },
       "bin": {
         "create-hesperia": "./dist/cli.js",
       },

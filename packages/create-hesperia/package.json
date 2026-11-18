@@ -7,6 +7,9 @@
     "url": "https://github.com/hesperia-js/hesperia.git",
     "directory": "packages/create-hesperia"
   },
+  "dependencies": {
+    "citty": "0.2.2"
+  },
   "bin": {
     "create-hesperia": "./dist/cli.js"
   },
