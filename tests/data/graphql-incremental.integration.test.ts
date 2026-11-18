@@ -13,13 +13,13 @@ const document = parse(`query Board { board { id ... @defer { detail } } }`) as 
 >;
 
 test("incremental query reports a partial result before its real terminal result", async () => {
-  let release: (() => void) | undefined;
+  const gate: { release?: () => void } = {};
   let calls = 0;
   const link = new ApolloLink(
     () =>
       new Observable<ApolloLink.Result>((observer) => {
         calls += 1;
-        release = () => {
+        gate.release = () => {
           observer.next({
             incremental: [{ id: "detail", data: { detail: "arrived" } }],
             completed: [{ id: "detail" }],
@@ -63,8 +63,8 @@ test("incremental query reports a partial result before its real terminal result
       await streaming;
       expect(settled).toBe(false);
       expect(observation.capture().value?.dataState).toBe("streaming");
-      if (!release) throw new Error("The native Link did not start");
-      release();
+      if (!gate.release) throw new Error("The native Link did not start");
+      gate.release();
       expect((await ready).data).toEqual({ board: { id: "one", detail: "arrived" } });
       expect(observation.capture().status).toBe("complete");
       expect(observation.capture().value?.dataState).toBe("complete");
