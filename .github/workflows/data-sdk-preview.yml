@@ -82,7 +82,7 @@ jobs:
         env:
           AEOLIA_PREVIEW_ARCHIVE: ${{ runner.temp }}/aeolia-data-preview/aeolia.tgz
         run: |
-          archive_hash="$(tar -xOf "$AEOLIA_PREVIEW_ARCHIVE" package/dist/index.js | sha256sum | cut -d' ' -f1)"
+          archive_hash="$(cd "$RUNNER_TEMP/aeolia-data-preview" && tar -xOf ./aeolia.tgz package/dist/index.js | sha256sum | cut -d' ' -f1)"
           installed_hash="$(sha256sum node_modules/aeolia/dist/index.js | cut -d' ' -f1)"
           test "$archive_hash" = "$installed_hash"
           echo "Installed SDK dist/index.js SHA-256: $installed_hash"
