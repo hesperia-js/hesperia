@@ -11,12 +11,12 @@ import {
   type TupleType,
 } from "typescript/unstable/async";
 import type {
-  CapturedCheckingInput,
   CheckingSession,
   ProjectCheckingOptions,
   ProjectCheckingResult,
   VirtualModule,
 } from "./checking.ts";
+import type { CheckingInputSnapshot } from "./checking-inputs.ts";
 import type { CompileResult, ModuleAnalysis } from "./compilation.ts";
 import type { ProjectCompilation } from "./project-compilation.ts";
 import { encodeCanonicalModule, type CanonicalModule } from "./ir.ts";
@@ -1875,9 +1875,10 @@ export async function captureTypingInputEnvironment(
   snapshotId: number,
   root: string,
   options: ProjectCheckingOptions,
-  checkingInputs: readonly CapturedCheckingInput[],
+  checkingInputs: CheckingInputSnapshot,
   host: TypingHostObservationRecorder,
-  additionalGaps: readonly string[] = [],
+  additionalGaps: readonly string[],
+  sessionOwned: () => boolean,
 ): Promise<TypingInputEnvironment> {
   const gaps = new Set<string>([
     "query-capsules-not-sealed",
@@ -1890,6 +1891,8 @@ export async function captureTypingInputEnvironment(
   let rootFiles: readonly string[] = Object.freeze([]);
 
   try {
+    if (!sessionOwned()) gaps.add("final-program-owner-changed");
+
     projectCompilerOptions = freezeCaptureValue(project.compilerOptions);
     programCompilerOptions = freezeCaptureValue(project.program.getCompilerOptions());
     rootFiles = Object.freeze([...project.rootFiles]);
@@ -1898,36 +1901,65 @@ export async function captureTypingInputEnvironment(
   }
 
   try {
-    const filenames = await project.program.getSourceFileNames();
+    if (sessionOwned()) {
+      const filenames = await project.program.getSourceFileNames();
 
-    for (const filename of filenames) {
-      try {
-        const source = await project.program.getSourceFile(filename);
-        const metadata = await project.program.getSourceFileMetadata(filename);
+      if (!sessionOwned()) {
+        gaps.add("final-program-owner-changed");
+        gaps.add("final-program-inventory-abandoned");
+      } else {
+        for (const filename of filenames) {
+          if (!sessionOwned()) {
+            gaps.add("final-program-owner-changed");
+            break;
+          }
 
-        if (!source || !metadata) {
-          gaps.add("final-program-source-missing");
-          continue;
+          try {
+            const source = await project.program.getSourceFile(filename);
+
+            if (!sessionOwned()) {
+              gaps.add("final-program-owner-changed");
+              break;
+            }
+
+            const metadata = await project.program.getSourceFileMetadata(filename);
+
+            if (!sessionOwned()) {
+              gaps.add("final-program-owner-changed");
+              break;
+            }
+
+            if (!source || !metadata) {
+              gaps.add("final-program-source-missing");
+              continue;
+            }
+
+            sourceFiles.push(
+              Object.freeze({
+                filename,
+                source: source.text,
+                digest: sourceDigest(source.text),
+                isDefaultLibrary: metadata.isDefaultLibrary,
+                isFromExternalLibrary: metadata.isFromExternalLibrary,
+                packageJsonType: metadata.packageJsonType,
+                packageJsonDirectory: metadata.packageJsonDirectory,
+                impliedNodeFormat: metadata.impliedNodeFormat,
+              }),
+            );
+          } catch {
+            gaps.add(
+              sessionOwned() ? "final-program-source-unavailable" : "final-program-owner-changed",
+            );
+
+            if (!sessionOwned()) break;
+          }
         }
-
-        sourceFiles.push(
-          Object.freeze({
-            filename,
-            source: source.text,
-            digest: sourceDigest(source.text),
-            isDefaultLibrary: metadata.isDefaultLibrary,
-            isFromExternalLibrary: metadata.isFromExternalLibrary,
-            packageJsonType: metadata.packageJsonType,
-            packageJsonDirectory: metadata.packageJsonDirectory,
-            impliedNodeFormat: metadata.impliedNodeFormat,
-          }),
-        );
-      } catch {
-        gaps.add("final-program-source-unavailable");
       }
-    }
+    } else gaps.add("final-program-owner-changed");
   } catch {
-    gaps.add("final-program-inventory-unavailable");
+    gaps.add(
+      sessionOwned() ? "final-program-inventory-unavailable" : "final-program-owner-changed",
+    );
   }
 
   const hostSnapshot = host.snapshot();
@@ -1973,7 +2005,7 @@ export async function captureTypingInputEnvironment(
       externalResolverProvided: options.resolution !== undefined,
     }),
     checkingInputs: Object.freeze(
-      checkingInputs.map(({ filename, source, digest }) => {
+      checkingInputs.captured.map(({ filename, source, digest }) => {
         const digestMatchesSource = digest === sourceDigest(source);
         if (!digestMatchesSource) gaps.add("checking-input-digest-mismatch");
         return Object.freeze({ filename, source, digest, digestMatchesSource });
@@ -2578,7 +2610,7 @@ function componentEvidence(
 ): readonly CheckedComponentTypingEvidence[] {
   const propAnalysis = analysis.componentProps;
   const propTypes = propAnalysis ? componentPropsTypeEvidence(propAnalysis) : undefined;
-  const checked = canonicalComponents(analysis.result.ir, filename);
+  const checked = canonicalComponents(analysis.result.ir, filename, analysis);
   const emittedComponents = emitted ? canonicalComponents(emitted.ir, filename) : [];
 
   return Object.freeze(
@@ -2675,6 +2707,7 @@ interface CanonicalComponentOccurrence {
 function canonicalComponents(
   root: CanonicalModule,
   filename: string,
+  analysis?: ModuleAnalysis,
 ): readonly CanonicalComponentOccurrence[] {
   const found: CanonicalComponentOccurrence[] = [];
 
@@ -2689,12 +2722,34 @@ function canonicalComponents(
     const node = value as {
       readonly kind?: string;
       readonly component?: boolean;
+      readonly generator?: boolean;
+      readonly props?: unknown;
       readonly span?: { readonly start: number; readonly end: number };
       readonly parameters?: readonly { readonly span?: { readonly start: number } }[];
     };
+    const firstParameter = node.parameters?.[0];
+    const firstParameterStart = firstParameter?.span
+      ? (analysis?.mapOffset?.(firstParameter.span.start) ?? firstParameter.span.start)
+      : undefined;
+    const checkedProps = analysis?.componentProps?.byParameterStart;
+    const checkedPropsOffset =
+      firstParameterStart !== undefined &&
+      Number.isSafeInteger(firstParameterStart) &&
+      firstParameterStart >= 0
+        ? String(firstParameterStart)
+        : undefined;
+    const hasCheckedProps =
+      checkedPropsOffset !== undefined &&
+      checkedProps !== undefined &&
+      Object.prototype.hasOwnProperty.call(checkedProps, checkedPropsOffset) &&
+      checkedProps[checkedPropsOffset] !== undefined;
+    const checkedFunctionProps =
+      node.kind === "function" &&
+      node.generator !== true &&
+      (node.props !== undefined || hasCheckedProps);
 
     if (
-      node.component === true &&
+      (node.component === true || checkedFunctionProps) &&
       (node.kind === "function" || node.kind === "arrow" || node.kind === "function-expression") &&
       node.span
     )
