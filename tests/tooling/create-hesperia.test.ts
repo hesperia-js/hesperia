@@ -447,6 +447,7 @@ test("retains the completed scaffold when a real installer fails", async () => {
     if (result.status !== "failed") throw new Error("Expected the installer to fail");
 
     expect(result.message).toContain("Dependency installation failed with exit code");
+    expect(result.retirement).toBe("complete");
     expect(result.projectRoot).toBe(destination);
     expect(result.cleanup).toStrictEqual({ status: "not-needed", retainedPaths: [] });
     expect(progress).toStrictEqual(["started"]);
@@ -579,6 +580,7 @@ test("reaps a running installer after cancellation and retains the scaffold", as
     expect(result.installer?.pid).toBe(observedInstaller?.pid);
     expect(result.installer?.reaped).toBe(true);
     expect(result.installer?.pendingResource).toBe(false);
+    expect(result.retirement).toBe("complete");
     expect(await readFile(join(destination, "app.tsx"), "utf8")).toContain("application");
   } finally {
     controller.abort();
