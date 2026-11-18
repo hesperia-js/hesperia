@@ -4114,6 +4114,63 @@ def late_traced_kernel_identity(pid: int, supervisor_generation: Generation) -> 
     return after
 
 
+def cleanup_pending_traced_generations(
+    pending: dict[int, PendingTraceGeneration],
+    forced_pids: list[int],
+    cleanup_errors: list[dict[str, Any]],
+) -> None:
+    for pid, attachment in list(pending.items()):
+        deferred = False
+
+        try:
+            if not pidfd_ready(attachment.pidfd):
+                if attachment.exit_only:
+                    deferred = True
+                    continue
+
+                try:
+                    identity = read_proc_kernel_identity(pid, "pending traced process failure cleanup")
+                    validate_retained_generation(
+                        identity, pid, attachment.start_ticks, "pending traced process failure cleanup"
+                    )
+                except (CaptureError, OSError) as identity_error:
+                    cleanup_errors.append(
+                        {"pid": pid, "error": f"Could not recheck pending traced process before pidfd cleanup: {identity_error}"}
+                    )
+                    attachment.exit_only = True
+                    deferred = True
+                    continue
+
+                try:
+                    signal.pidfd_send_signal(attachment.pidfd, signal.SIGKILL)
+                    forced_pids.append(pid)
+                except ProcessLookupError:
+                    if not pidfd_ready(attachment.pidfd):
+                        raise
+
+                deadline = time.monotonic() + 5
+
+                while time.monotonic() < deadline and not pidfd_ready(attachment.pidfd):
+                    time.sleep(PROCESS_POLL_SECONDS)
+
+            if not pidfd_ready(attachment.pidfd):
+                cleanup_errors.append(
+                    {"pid": pid, "procStarttimeTicks": attachment.start_ticks, "error": "Pending traced process pidfd was not ready after SIGKILL cleanup"}
+                )
+        except BaseException as cleanup_error:
+            cleanup_errors.append(
+                {"pid": pid, "procStarttimeTicks": attachment.start_ticks, "error": f"Pending traced process pidfd cleanup failed: {cleanup_error}"}
+            )
+        finally:
+            if not deferred:
+                pending.pop(pid, None)
+
+                try:
+                    os.close(attachment.pidfd)
+                except OSError as cleanup_error:
+                    cleanup_errors.append({"pid": pid, "error": f"Could not close pending traced process pidfd: {cleanup_error}"})
+
+
 def drain_late_traced_generations(
     supervisor: subprocess.Popen[bytes],
     supervisor_generation: Generation,
@@ -4302,9 +4359,6 @@ def drain_late_traced_generations(
                 attachment = generations.get(pid) or pending_trace_generations.get(pid)
 
                 if attachment is None:
-                    continue
-
-                if isinstance(attachment, PendingTraceGeneration) and attachment.exit_only:
                     continue
 
                 late.add(pid)
@@ -5426,48 +5480,7 @@ def main() -> int:
             tid_groups,
         )
 
-        for pid, attachment in list(pending_trace_generations.items()):
-            try:
-                if not pidfd_ready(attachment.pidfd):
-                    try:
-                        identity = read_proc_kernel_identity(pid, "pending traced process failure cleanup")
-
-                        validate_retained_generation(
-                            identity, pid, attachment.start_ticks, "pending traced process failure cleanup"
-                        )
-                    except BaseException as identity_error:
-                        cleanup_errors.append(
-                            {"pid": pid, "error": f"Could not recheck pending traced process before pidfd cleanup: {identity_error}"}
-                        )
-
-                    try:
-                        signal.pidfd_send_signal(attachment.pidfd, signal.SIGKILL)
-
-                        forced_pids.append(pid)
-                    except ProcessLookupError:
-                        if not pidfd_ready(attachment.pidfd):
-                            raise
-
-                    deadline = time.monotonic() + 5
-
-                    while time.monotonic() < deadline and not pidfd_ready(attachment.pidfd):
-                        time.sleep(PROCESS_POLL_SECONDS)
-
-                if not pidfd_ready(attachment.pidfd):
-                    cleanup_errors.append(
-                        {"pid": pid, "procStarttimeTicks": attachment.start_ticks, "error": "Pending traced process pidfd was not ready after SIGKILL cleanup"}
-                    )
-            except BaseException as cleanup_error:
-                cleanup_errors.append(
-                    {"pid": pid, "procStarttimeTicks": attachment.start_ticks, "error": f"Pending traced process pidfd cleanup failed: {cleanup_error}"}
-                )
-            finally:
-                pending_trace_generations.pop(pid, None)
-
-                try:
-                    os.close(attachment.pidfd)
-                except OSError as cleanup_error:
-                    cleanup_errors.append({"pid": pid, "error": f"Could not close pending traced process pidfd: {cleanup_error}"})
+        cleanup_pending_traced_generations(pending_trace_generations, forced_pids, cleanup_errors)
 
         for pid, attachment in list(pending_popen.items()):
             ready_before_cleanup = False
@@ -5551,6 +5564,22 @@ def main() -> int:
                 )
             except BaseException as cleanup_error:
                 cleanup_errors.append({"pid": supervisor.pid, "error": str(cleanup_error)})
+
+        for pid, attachment in list(pending_trace_generations.items()):
+            try:
+                if not pidfd_ready(attachment.pidfd):
+                    cleanup_errors.append(
+                        {"pid": pid, "procStarttimeTicks": attachment.start_ticks, "error": "Pending traced process custody could not be re-established during failure cleanup"}
+                    )
+            except BaseException as cleanup_error:
+                cleanup_errors.append({"pid": pid, "error": f"Could not check deferred pending pidfd: {cleanup_error}"})
+            finally:
+                pending_trace_generations.pop(pid, None)
+
+                try:
+                    os.close(attachment.pidfd)
+                except OSError as cleanup_error:
+                    cleanup_errors.append({"pid": pid, "error": f"Could not close pending traced process pidfd: {cleanup_error}"})
 
         if display_server is not None and display_generation is not None:
             try:

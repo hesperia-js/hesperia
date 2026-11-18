@@ -1450,7 +1450,10 @@ sys.stdin.buffer.read(1)
                         os.close(cleanup_pidfd)
 
     def test_failure_cleanup_drains_late_traced_children_without_signaling_foreign_generations(self) -> None:
-        for authority in ("retained-tracer", "changed-generation", "foreign-tracer"):
+        for authority in (
+            "retained-tracer", "changed-generation", "foreign-tracer",
+            "exit-only-retained", "exit-only-foreign", "missing-identity-retained", "pending-retained",
+        ):
             with self.subTest(authority=authority):
                 self.check_failure_cleanup_late_child(authority)
 
@@ -1603,6 +1606,35 @@ else:
                     forced: list[int] = []
                     errors: list[dict[str, object]] = []
 
+                    if authority == "pending-retained":
+                        pending[child_pid] = observer.PendingTraceGeneration(
+                            child_pid, int(identity["ppid"]), int(identity["startTicks"]),
+                            os.pidfd_open(child_pid, 0), observer.utc_now(),
+                        )
+                        observer.cleanup_pending_traced_generations(pending, forced, errors)
+                        self.assertEqual(errors, [])
+                        self.assertNotIn(child_pid, pending)
+                        self.assertIn(child_pid, forced)
+                        self.assertTrue(observer.pidfd_ready(child_fd))
+                        return
+
+                    if authority in ("exit-only-retained", "exit-only-foreign", "missing-identity-retained"):
+                        pending[child_pid] = observer.PendingTraceGeneration(
+                            child_pid, int(identity["ppid"]), int(identity["startTicks"]),
+                            os.pidfd_open(child_pid, 0), observer.utc_now(),
+                            exit_only=authority != "missing-identity-retained",
+                        )
+                        if authority == "missing-identity-retained":
+                            with mock.patch.object(observer, "read_proc_kernel_identity", side_effect=FileNotFoundError):
+                                observer.cleanup_pending_traced_generations(pending, forced, errors)
+                            self.assertTrue(errors)
+                            errors.clear()
+                        else:
+                            observer.cleanup_pending_traced_generations(pending, forced, errors)
+                        self.assertTrue(pending[child_pid].exit_only)
+                        self.assertNotIn(child_pid, forced)
+                        self.assertFalse(observer.pidfd_ready(child_fd))
+
                     if boundary is None:
                         observer.terminate_retained_generation(parent_generation, forced)
                     else:
@@ -1619,7 +1651,7 @@ else:
 
                     if authority == "changed-generation":
                         supervisor_generation.start_ticks += 1
-                    elif authority == "foreign-tracer":
+                    elif authority in ("foreign-tracer", "exit-only-foreign"):
                         selected_supervisor = unrelated
                         selected_generation = unrelated_generation
 
@@ -1751,7 +1783,7 @@ else:
 
                         return
 
-                    if authority != "retained-tracer":
+                    if authority in ("changed-generation", "foreign-tracer", "exit-only-foreign"):
                         expected_error = (
                             "PID generation changed while its pidfd was retained"
                             if authority == "changed-generation"
