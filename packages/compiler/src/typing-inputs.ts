@@ -1948,9 +1948,7 @@ export async function captureTypingInputEnvironment(
             );
           } catch {
             gaps.add(
-              sessionOwned()
-                ? "final-program-source-unavailable"
-                : "final-program-owner-changed",
+              sessionOwned() ? "final-program-source-unavailable" : "final-program-owner-changed",
             );
 
             if (!sessionOwned()) break;
@@ -1960,9 +1958,7 @@ export async function captureTypingInputEnvironment(
     } else gaps.add("final-program-owner-changed");
   } catch {
     gaps.add(
-      sessionOwned()
-        ? "final-program-inventory-unavailable"
-        : "final-program-owner-changed",
+      sessionOwned() ? "final-program-inventory-unavailable" : "final-program-owner-changed",
     );
   }
 
