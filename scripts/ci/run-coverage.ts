@@ -817,7 +817,9 @@ function validateWorkerManifest(
       item.argv[2] === "--cwd" &&
       isAbsolute(String(item.argv[3])) &&
       (item.argv[4] === "--callbacks=readFile,fileExists" ||
-        item.argv[4] === "--callbacks=readFile,fileExists,directoryExists");
+        item.argv[4] === "--callbacks=readFile,fileExists,directoryExists" ||
+        item.argv[4] ===
+          "--callbacks=readFile,fileExists,directoryExists,getAccessibleEntries,realpath");
     const validExecutable =
       isRecord(item) &&
       expectedExecutablePath !== undefined &&
