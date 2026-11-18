@@ -3,11 +3,17 @@ import { createContractApi, type HesperiaContractApi } from "./contract.ts";
 import type { Owner } from "../runtime/owner.ts";
 import { isObjectLike } from "../utils.ts";
 import {
+  acquirePhysicalExecutionGraphConstruction,
+  acquirePhysicalRequestGraphConstruction,
   assertPhysicalGraphConstructionUse,
   beginPhysicalGraphConstruction,
   completePhysicalGraphConstruction,
   failPhysicalGraphConstruction,
+  physicalNativeExecutionForOwner,
+  physicalNativeRequestForOwner,
   type PhysicalGraphConstruction,
+  type PhysicalNativeExecutionLifetime,
+  type PhysicalNativeRequestLifetime,
 } from "../runtime/retirement.ts";
 import type { NativeOperationPolicy } from "../validation/native-operation.ts";
 
@@ -65,12 +71,47 @@ interface TypedRecordedGraphRecipe<C extends Contract> extends RecordedGraphReci
   readonly createRequestGraph: (construction?: PhysicalGraphConstruction) => Graph<C>;
 }
 
+/** The server-session-local graph and its unchanged public contract. */
+export interface RequestApiPair<C extends Contract = Contract> {
+  readonly graph: Graph<C>;
+  readonly contract: C;
+}
+
+/** Shared API scope used by all component owners in one server session. */
+export interface RequestApiScope {
+  /**
+   * Select or create the request-local counterpart for an adapted source graph.
+   * The scope reuses one counterpart for each source graph and contract pair.
+   *
+   * @throws {TypeError} If the same source graph and contract are selected
+   * recursively while the counterpart is being constructed.
+   */
+  select<C extends Contract>(sourceGraph: Graph<C>, contract: C): RequestApiPair<C>;
+  /**
+   * Release abort listeners and dispose every request graph after owner cleanup.
+   * @param reason - The owner's release reason; pending work already receives
+   * the root signal's reason when it aborts.
+   * @throws The retained failure, or an AggregateError for several failures,
+   * after attempting every graph release.
+   */
+  dispose(reason?: unknown): void;
+}
+
 /** The shape of an adapted API before a component owner is known. */
 export type ImportedApi<C extends Contract = Contract> = HesperiaContractApi<C>;
 
 const adaptedApis = new WeakMap<object, AdaptedApiRecord>();
 const adaptedApiGraphs = new WeakMap<object, Graph>();
 const recordedGraphRecipes = new WeakMap<object, RecordedGraphRecipe>();
+const physicalRequestApiScopes = new WeakMap<RequestApiScope, PhysicalRequestApiScopeRecord>();
+
+interface PhysicalRequestApiScopeRecord {
+  readonly rootSignal: AbortSignal;
+  selectionStarted: boolean;
+  ownerBound: boolean;
+  readonly setNativeRequest: (request: PhysicalNativeRequestLifetime) => void;
+  readonly setNativeExecution: (execution: PhysicalNativeExecutionLifetime) => void;
+}
 
 /**
  * Capture the compiler-qualified public createGraph call for request-local
@@ -361,6 +402,237 @@ function snapshotPolicies(
   return captured;
 }
 
+/**
+ * Create one server session's matching graph/contract pair per adapted source graph.
+ * Root abortion cancels pending work while retaining readables through owner
+ * cleanup. Scope disposal releases the graphs and reports retained failures.
+ * @param rootSignal - Shared root lifetime signal for the server session.
+ * @returns The request-local graph selector and cleanup scope.
+ */
+export function createRequestApiScope(rootSignal: AbortSignal): RequestApiScope {
+  return requestApiScope(rootSignal);
+}
+
+/** @internal Bind one issued scope to its actual admitted server request before selection. */
+export function bindPhysicalRequestApiScope(owner: Owner, scope: RequestApiScope): void {
+  const nativeRequest = physicalNativeRequestForOwner(owner);
+
+  if (!nativeRequest)
+    throw new TypeError("A native request API scope requires its admitted original session Owner");
+
+  const record = physicalRequestApiScopes.get(scope);
+
+  if (!record || record.rootSignal !== owner.signal || record.selectionStarted || record.ownerBound)
+    throw new TypeError("A request API scope binds once to its original Owner before selection");
+
+  record.setNativeRequest(nativeRequest);
+  record.ownerBound = true;
+}
+
+/** @internal Bind one issued scope to its actual admitted server execution before selection. */
+export function bindPhysicalExecutionApiScope(owner: Owner, scope: RequestApiScope): void {
+  const nativeExecution = physicalNativeExecutionForOwner(owner);
+
+  if (!nativeExecution)
+    throw new TypeError(
+      "A native execution API scope requires its admitted original session Owner",
+    );
+
+  const record = physicalRequestApiScopes.get(scope);
+
+  if (!record || record.rootSignal !== owner.signal || record.selectionStarted || record.ownerBound)
+    throw new TypeError("An execution API scope binds once to its original Owner before selection");
+
+  record.setNativeExecution(nativeExecution);
+  record.ownerBound = true;
+}
+
+function requestApiScope(rootSignal: AbortSignal): RequestApiScope {
+  const pairs = new WeakMap<object, WeakMap<object, RequestApiPair>>();
+  const selecting = new WeakSet<Graph>();
+  const releases = new Set<() => void>();
+  const cancellationFailures: unknown[] = [];
+  let nativeRequest: PhysicalNativeRequestLifetime | undefined;
+  let nativeExecution: PhysicalNativeExecutionLifetime | undefined;
+  let disposed = false;
+  const record: PhysicalRequestApiScopeRecord = {
+    rootSignal,
+    selectionStarted: false,
+    ownerBound: false,
+    setNativeRequest(request) {
+      nativeRequest = request;
+    },
+    setNativeExecution(execution) {
+      nativeExecution = execution;
+    },
+  };
+
+  const assertOpen = (): void => {
+    if (disposed || rootSignal.aborted)
+      throw new TypeError("Cannot bind an Aeolia API after its request scope has ended");
+  };
+
+  const createPair = <C extends Contract>(
+    sourceGraph: Graph<C>,
+    contract: C,
+    recipe: TypedRecordedGraphRecipe<C>,
+    byContract: WeakMap<object, RequestApiPair>,
+  ): RequestApiPair<C> => {
+    if (selecting.has(sourceGraph))
+      throw new TypeError("An Aeolia graph is already being selected in this request scope");
+
+    selecting.add(sourceGraph);
+
+    try {
+      assertOpen();
+
+      const construction = nativeRequest
+        ? acquirePhysicalRequestGraphConstruction(nativeRequest, sourceGraph)
+        : nativeExecution
+          ? acquirePhysicalExecutionGraphConstruction(nativeExecution, sourceGraph)
+          : undefined;
+      const graph = recipe.createRequestGraph(construction);
+      let released = false;
+
+      const onRootAbort = (): void => {
+        if (released || disposed) return;
+
+        try {
+          graph.cancelPending(rootSignal.reason);
+        } catch (error) {
+          cancellationFailures.push(error);
+        }
+      };
+
+      const release = (): void => {
+        if (released) return;
+
+        released = true;
+        const failures: unknown[] = [];
+
+        try {
+          rootSignal.removeEventListener("abort", onRootAbort);
+        } catch (error) {
+          failures.push(error);
+        }
+
+        try {
+          graph.dispose();
+        } catch (error) {
+          failures.push(error);
+        }
+
+        throwRequestCleanupFailures(failures);
+      };
+
+      try {
+        assertOpen();
+
+        releases.add(release);
+
+        rootSignal.addEventListener("abort", onRootAbort, { once: true });
+
+        assertOpen();
+
+        const pair: RequestApiPair<C> = Object.freeze({ graph, contract });
+
+        byContract.set(contract, pair);
+
+        return pair;
+      } catch (error) {
+        releases.delete(release);
+
+        try {
+          release();
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "Request Aeolia graph setup cleanup failed",
+          );
+        }
+
+        throw error;
+      }
+    } finally {
+      selecting.delete(sourceGraph);
+    }
+  };
+
+  const scope: RequestApiScope = {
+    select<C extends Contract>(sourceGraph: Graph<C>, contract: C): RequestApiPair<C> {
+      record.selectionStarted = true;
+
+      assertOpen();
+
+      const recordedRecipe = recordedGraphRecipes.get(sourceGraph);
+
+      if (!recordedRecipe)
+        throw new TypeError("Server Aeolia API binding requires a compiler-recorded graph recipe");
+
+      if (!isRecordedGraphRecipeFor(recordedRecipe, contract))
+        throw new TypeError("Aeolia API contract does not match its recorded graph creation");
+
+      const recipe = recordedRecipe;
+
+      let byContract = pairs.get(sourceGraph);
+
+      if (!byContract) {
+        byContract = new WeakMap<object, RequestApiPair>();
+        pairs.set(sourceGraph, byContract);
+      }
+
+      const existing = byContract.get(contract);
+
+      if (existing) {
+        assertOpen();
+
+        return existing as RequestApiPair<C>;
+      }
+
+      return createPair(sourceGraph, contract, recipe, byContract);
+    },
+
+    dispose(_reason?: unknown): void {
+      // Cancellation cleanup can dispose the scope before its listener records a failure.
+      const failures = cancellationFailures.splice(0);
+
+      if (!disposed) {
+        disposed = true;
+
+        for (const release of releases) {
+          try {
+            release();
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+
+        releases.clear();
+      }
+
+      throwRequestCleanupFailures(failures);
+    },
+  };
+
+  physicalRequestApiScopes.set(scope, record);
+
+  return scope;
+}
+
+function throwRequestCleanupFailures(failures: readonly unknown[]): void {
+  if (failures.length === 1) throw failures[0];
+
+  if (failures.length > 1)
+    throw new AggregateError(failures, "Request Aeolia graph cleanup failed");
+}
+
+function isRecordedGraphRecipeFor<C extends Contract>(
+  recipe: RecordedGraphRecipe,
+  contract: C,
+): recipe is TypedRecordedGraphRecipe<C> {
+  return recipe.contract === contract;
+}
+
 const ownerCaches = new WeakMap<Owner, WeakMap<object, unknown>>();
 const adaptedNamespaces = new WeakMap<Owner, WeakSet<object>>();
 
@@ -410,13 +682,28 @@ function bindValue(
   if (record !== undefined) {
     owner.assertActive();
 
-    const bound = createContractApi(owner, record.graph, record.contract, record.policies);
+    let graph = record.graph;
+    let contract = record.contract;
 
-    adaptedApiGraphs.set(bound as object, record.graph);
+    if (owner.context.target === "server") {
+      const requestScope = owner.context.requestApiScope;
+
+      if (!requestScope)
+        throw new TypeError("Server Aeolia API binding requires a request API scope");
+
+      const pair = requestScope.select(record.graph, record.contract);
+
+      graph = pair.graph;
+      contract = pair.contract;
+    }
+
+    const bound = createContractApi(owner, graph, contract, record.policies);
+
+    adaptedApiGraphs.set(bound as object, graph);
 
     const adaptedValue = record.project ? record.project(bound) : bound;
 
-    if (isObjectLike(adaptedValue)) adaptedApiGraphs.set(adaptedValue, record.graph);
+    if (isObjectLike(adaptedValue)) adaptedApiGraphs.set(adaptedValue, graph);
 
     cache.set(value, adaptedValue);
 
