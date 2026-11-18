@@ -10,7 +10,7 @@ import { debounce, throttle } from "hesperia/scheduling";
 import { beforeLeave, navigation, type HesperiaNavigation } from "hesperia/navigation";
 // @ts-expect-error beforeLeave is exposed by hesperia/navigation, not hesperia/routing.
 import { beforeLeave as legacyBeforeLeave } from "hesperia/routing"; // oxlint-disable-line no-unused-vars
-import { Router, route } from "hesperia/routing";
+import { Router, route, type Route } from "hesperia/routing";
 import { env } from "hesperia/env";
 import { SETTINGS } from "hesperia/config/public";
 import { defineConfig, type Plugin } from "@hesperia/tooling";
@@ -243,14 +243,28 @@ void wrong;
 function checkLiteralRouteTagTypes(): void {
   const declaration = route({ tags: ["products", "catalog"], load: () => "product" as const });
   const tags: readonly ["products", "catalog"] = declaration.tags;
-  const result: "product" = declaration.load();
+  const values = ["mutable"];
+  const fromArray = route({ tags: values });
+  const optional = route({});
+  const optionalGuard: Route.Guard | undefined = optional.guard;
+  const optionalHeaders: Readonly<Record<string, string>> | undefined = optional.headers;
+  const optionalLoad: unknown = optional.load;
+  const optionalTags: readonly string[] | undefined = optional.tags;
+  const pattern = route<"products/[id]">({ guard: ({ params }) => params.id.length > 0 });
+  const typedGuard: Route.Guard<"products/[id]"> | undefined = pattern.guard;
+  // @ts-expect-error misspelled untagged declaration fields remain errors
+  route({ load: () => "", gaurd: () => false });
+  // @ts-expect-error misspelled tagged declaration fields remain errors
+  route({ tags: ["products"], gaurd: () => false });
   // @ts-expect-error route tag declarations are readonly
   declaration.tags = [];
   // @ts-expect-error route tag elements cannot be replaced
   declaration.tags[0] = "other";
   // @ts-expect-error route tag arrays cannot be extended
   declaration.tags.push("other");
-  void [tags, result];
+  // @ts-expect-error a mutable input array is readonly through the declaration
+  fromArray.tags.push("other");
+  void [tags, optionalGuard, optionalHeaders, optionalLoad, optionalTags, typedGuard];
 }
 
 void checkLiteralRouteTagTypes;
