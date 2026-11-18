@@ -40,6 +40,7 @@ function createSession() {
   return {
     state: { revision: 0, writes: [] },
     resolverCalls: { echo: 0, contextEcho: 0, state: 0, incrementalBoard: 0 },
+    incrementalTransport: { started: 0, terminalFrames: 0, finished: 0, closedEarly: 0 },
     gates: new Map(),
     subscriptions: new Map(),
     socketClose: 0,
@@ -626,8 +627,9 @@ async function handleIncrementalRequest(request, response, url) {
     finished: Promise.withResolvers(),
   };
   const onResponseClose = () => {
-    if (response.writableEnded) return;
+    if (response.writableFinished) return;
 
+    session.incrementalTransport.closedEarly += 1;
     controller.abort(new DOMException("Fixture response closed", "AbortError"));
     releaseIncrementalGates(operation);
   };
@@ -648,6 +650,10 @@ async function handleIncrementalRequest(request, response, url) {
   }
 
   incrementalRequests.add(operation);
+  session.incrementalTransport.started += 1;
+  response.once("finish", () => {
+    session.incrementalTransport.finished += 1;
+  });
   response.once("close", onResponseClose);
 
   try {
@@ -695,6 +701,7 @@ async function handleIncrementalRequest(request, response, url) {
         boundary,
         withIncrementalFixtureExtension(next.value, "subsequent"),
       );
+      if (next.value.hasNext === false) session.incrementalTransport.terminalFrames += 1;
     }
 
     if (!response.destroyed && !response.writableEnded) response.end(`--${boundary}--\r\n`);
@@ -704,7 +711,6 @@ async function handleIncrementalRequest(request, response, url) {
     if (!response.writableEnded && !controller.signal.aborted)
       controller.abort(new DOMException("Fixture incremental request finished", "AbortError"));
 
-    response.removeListener("close", onResponseClose);
     releaseIncrementalGates(operation);
 
     try {
@@ -742,6 +748,7 @@ async function handleControlRequest(request, response, url) {
       revision: session.state.revision,
       writes: [...session.state.writes],
       resolverCalls: { ...session.resolverCalls },
+      incrementalTransport: { ...session.incrementalTransport },
       gates: [...session.gates.values()].map(gateSnapshot),
     });
 
@@ -761,6 +768,7 @@ async function handleControlRequest(request, response, url) {
     session.resolverCalls.contextEcho = 0;
     session.resolverCalls.state = 0;
     session.resolverCalls.incrementalBoard = 0;
+    session.incrementalTransport = { started: 0, terminalFrames: 0, finished: 0, closedEarly: 0 };
     session.gates.clear();
     sendJson(response, 200, { reset: true, instanceId });
 

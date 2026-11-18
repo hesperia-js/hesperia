@@ -5,6 +5,12 @@ interface NativeState {
   readonly graphqlWsUrl: string;
   readonly instanceId: string;
   readonly resolverCalls: { readonly incrementalBoard: number };
+  readonly incrementalTransport: {
+    readonly started: number;
+    readonly terminalFrames: number;
+    readonly finished: number;
+    readonly closedEarly: number;
+  };
 }
 interface GateState {
   readonly started: number;
@@ -257,17 +263,20 @@ test("compiled GraphQL incremental progress remains visible while the request is
       phase: "started",
     });
     expect(started).toMatchObject({ started: 1, aborted: 0, completed: 0, pending: true });
-    expect(
-      (await control<NativeState>(request, session, "state")).resolverCalls.incrementalBoard,
-    ).toBe(1);
+    const beforeRelease = await control<NativeState>(request, session, "state");
+    expect(beforeRelease.resolverCalls.incrementalBoard).toBe(1);
+    expect(beforeRelease.incrementalTransport).toEqual({
+      started: 1,
+      terminalFrames: 0,
+      finished: 0,
+      closedEarly: 0,
+    });
     expect(requests).toHaveLength(1);
     expect(finished).toHaveLength(0);
     expect(failed).toHaveLength(0);
     const response = await requests[0]!.response();
     expect(response?.status()).toBe(200);
-    const requestFinished = page.waitForEvent("requestfinished", { predicate: isIncremental });
     await control(request, session, "release", "POST", gate);
-    await requestFinished;
     await expect(page.locator("html")).toHaveAttribute("data-ready", "true");
     await expect(page.getByTestId("incremental-data-state")).toHaveText("complete");
     await expect(page.getByTestId("incremental-progress-status")).toHaveText("complete");
@@ -291,11 +300,20 @@ test("compiled GraphQL incremental progress remains visible while the request is
       extensions: { fixture: { phase: "subsequent" } },
     });
     expect(await renderedJson(page.getByTestId("incremental-result"))).toMatchObject({ data });
+    await expect
+      .poll(
+        async () => (await control<NativeState>(request, session, "state")).incrementalTransport,
+      )
+      .toEqual({ started: 1, terminalFrames: 1, finished: 1, closedEarly: 0 });
     expect(
       (await control<NativeState>(request, session, "state")).resolverCalls.incrementalBoard,
     ).toBe(1);
-    expect(finished).toHaveLength(1);
-    expect(failed).toHaveLength(0);
+    await expect.poll(() => finished.length + failed.length).toBe(1);
+    expect(requests).toHaveLength(1);
+    if (failed.length > 0) {
+      expect(browserName).toBe("chromium");
+      expect(failed[0]!.failure()?.errorText).toBe("net::ERR_ABORTED");
+    }
     await expect(page.locator("html")).not.toHaveAttribute("data-fault");
     expect(errors).toEqual([]);
   } finally {
