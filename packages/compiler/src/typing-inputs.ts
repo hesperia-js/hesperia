@@ -264,38 +264,12 @@ interface FunctionLikeNode extends Node {
   readonly parameters?: readonly Node[];
 }
 
-interface CallExpressionNode extends Node {
-  readonly expression?: Node;
-  readonly arguments?: readonly Node[];
-}
-
-interface IdentifierNode extends Node {
-  readonly text?: string;
-}
-
-interface ExpressionNode extends Node {
-  readonly expression?: Node;
-}
-
-interface VariableDeclarationNode extends Node {
-  readonly initializer?: Node;
-}
-
 interface TypeMemberNode extends Node {
   readonly name?: Node;
   readonly modifiers?: readonly Node[];
   readonly questionToken?: Node;
   readonly dotDotDotToken?: Node;
   readonly initializer?: Node;
-}
-
-interface ParameterNode extends Node {
-  readonly type?: Node;
-}
-
-interface NamedDeclarationNode extends Node {
-  readonly name?: Node;
-  readonly type?: Node;
 }
 
 interface ComputedNameNode extends Node {
@@ -1632,7 +1606,7 @@ export type CheckedTypeEvidence =
       readonly algorithm: "ts-shape-v1";
       readonly digest: string;
       /** Full native shape and declaration provenance stay in the private checked cohort. */
-      readonly shape: StructuralTypeShape;
+      readonly shape: CheckerTypeShape;
     }
   | { readonly kind: "unproved"; readonly reason: TypeEvidenceFailure };
 
@@ -1662,14 +1636,11 @@ function componentPropsTypeEvidence(analysis: object): ComponentPropsTypeEvidenc
   return propTypeEvidence.get(analysis);
 }
 
-async function resolveStructuralType(
-  project: Project,
-  type: Type,
-): Promise<StructuralTypeResolution> {
+async function resolveStructuralType(project: Project, type: Type): Promise<CheckerTypeAbi> {
   return checkerTypeAbi(project, type);
 }
 
-function checkedTypeEvidence(type: StructuralTypeResolution): CheckedTypeEvidence {
+function checkedTypeEvidence(type: CheckerTypeAbi): CheckedTypeEvidence {
   if (type.kind === "unresolved") {
     const reason: TypeEvidenceFailure =
       type.reason === "checker-error"
@@ -1989,7 +1960,7 @@ export async function captureTypingInputEnvironment(
           }),
         ),
       ),
-      resolutionOverrides: Object.freeze({ ...(options.resolutionOverrides?.browser ?? {}) }),
+      resolutionOverrides: Object.freeze({ ...options.resolutionOverrides?.browser }),
       allowUnsafeHTML: options.allowUnsafeHTML === true,
       allowUnsafeEmbed: options.allowUnsafeEmbed === true,
       documentShell: options.documentShell === true,
@@ -2353,7 +2324,7 @@ function sealProjectTypingEvidenceUnchecked(
     captureState: "incomplete-capture",
     environment: state.environment,
     modules: Object.freeze(modules),
-    certificates: Object.freeze([]),
+    certificates: Object.freeze([] as const),
     projectPolicy: Object.freeze({ kind: "unproved", reason: "missing-policy" }),
     unavailableTypeLocations: Object.freeze([
       "state-value",
