@@ -435,7 +435,7 @@ jobs:
         run: "bun run build"
       - name: "Install all browser engines"
         if: "runner.os == 'Linux'"
-        timeout-minutes: 25
+        timeout-minutes: 35
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install all browser engines"
         if: "runner.os == 'Windows'"
