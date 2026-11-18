@@ -307,9 +307,21 @@ async function cancelInstalledCreatorJson(
   destination: string,
   env: Record<string, string | undefined>,
   installerStarted: Promise<void>,
-): Promise<{ readonly exitCode: number; readonly output: string }> {
+): Promise<{
+  readonly exitCode: number;
+  readonly output: string;
+  readonly interruptBytes: number;
+  readonly terminalClosed: boolean;
+}> {
   const decoder = new TextDecoder();
   let output = "";
+  let registryReady = false;
+  let interruptAttempted = false;
+  let interruptBytes: number | undefined;
+  let terminalClosed = false;
+  let terminalExitCode: number | undefined;
+  let terminalExitSignal: string | null | undefined;
+  let observedExitCode: number | undefined;
   let finishOutput!: () => void;
   const outputClosed = new Promise<void>((resolve) => {
     finishOutput = resolve;
@@ -321,10 +333,13 @@ async function cancelInstalledCreatorJson(
       cols: 100,
       rows: 30,
       data(_terminal, data) {
-        output += decoder.decode(data, { stream: true });
+        output = (output + decoder.decode(data, { stream: true })).slice(-8192);
       },
-      exit() {
-        output += decoder.decode();
+      exit(_terminal, code, signal) {
+        terminalClosed = true;
+        terminalExitCode = code;
+        terminalExitSignal = signal;
+        output = (output + decoder.decode()).slice(-8192);
         finishOutput();
       },
     },
@@ -332,6 +347,7 @@ async function cancelInstalledCreatorJson(
   let childFinished = false;
   const childExit = child.exited.then((code) => {
     childFinished = true;
+    observedExitCode = code;
     return code;
   });
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -347,14 +363,33 @@ async function cancelInstalledCreatorJson(
       }),
       timedOut,
     ]);
+    registryReady = true;
     if (!child.terminal) throw new Error("Creator terminal was not acquired");
-    child.terminal.write("\u0003");
+    interruptAttempted = true;
+    interruptBytes = child.terminal.write(Uint8Array.of(0x03));
 
     const exitCode = await Promise.race([
       Promise.all([childExit, outputClosed]).then(([code]) => code),
       timedOut,
     ]);
-    return { exitCode, output: normalizeTerminalOutput(output) };
+    return { exitCode, output: normalizeTerminalOutput(output), interruptBytes, terminalClosed };
+  } catch (error) {
+    console.error(
+      `Creator JSON cancellation observation: ${JSON.stringify({
+        registryReady,
+        interruptAttempted,
+        interruptBytes,
+        childFinished,
+        observedExitCode,
+        childSignalCode: child.signalCode,
+        terminalClosed,
+        terminalExitCode,
+        terminalExitSignal,
+        terminalHandleClosed: child.terminal?.closed,
+        outputTail: normalizeTerminalOutput(output).slice(-2048),
+      })}`,
+    );
+    throw error;
   } finally {
     if (timeout) clearTimeout(timeout);
     if (!childFinished) {
@@ -645,6 +680,8 @@ AbortSignal.prototype.addEventListener = function (type, ...args) {
       workspaceRemovable = cancelledResult.retirement === "complete";
 
       expect(cancelled.exitCode).toBe(130);
+      expect(cancelled.interruptBytes).toBe(1);
+      expect(cancelled.terminalClosed).toBe(true);
       expect(cancelled.output).not.toContain("Choose a host integration:");
       expect(cancelled.output).toContain("Creation cancelled.");
       expect(cancelledResult.schemaVersion).toBe(1);
