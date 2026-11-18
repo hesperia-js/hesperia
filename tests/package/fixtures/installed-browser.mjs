@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../../support/browser-launch.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
@@ -64,7 +65,7 @@ async function clickWithoutNavigationWait(page, selector) {
 }
 
 for (const [name, engine] of Object.entries(engines)) {
-  const browser = await engine.launch();
+  const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
   try {
     const page = await browser.newPage();
@@ -294,6 +295,28 @@ for (const [name, engine] of Object.entries(engines)) {
 
     await Promise.all([page.waitForURL(schedulingTarget.href), leaveScheduling]);
     await page.locator("#count").waitFor();
+    assert.deepEqual(errors, []);
+
+    await page.goto(applicationUrl + "form");
+
+    const nameInput = page.locator("#form-name");
+
+    await nameInput.fill(" aDa ");
+    await page.locator("#validate-form").click();
+    await page.waitForFunction(
+      () => document.querySelector("#form-status")?.textContent === "success",
+    );
+
+    assert.equal(await page.locator("#form-result").textContent(), "Hello, ADA");
+
+    await page.locator("#reset-form-validation").click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#form-status")?.textContent === "idle" &&
+        document.querySelector("#form-result")?.textContent === "",
+    );
+
+    assert.equal(await nameInput.inputValue(), " aDa ");
     assert.deepEqual(errors, []);
 
     results.push(name);

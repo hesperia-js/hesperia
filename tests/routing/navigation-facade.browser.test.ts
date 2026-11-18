@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chromium, firefox, webkit } from "playwright";
 import { resolve } from "node:path";
@@ -60,7 +61,7 @@ afterAll(async () => {
 
 for (const engine of [chromium, firefox, webkit]) {
   test(`${engine.name()} routes two iframe Windows independently through one runtime`, async () => {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
     const page = await browser.newPage();
 
     try {
@@ -181,7 +182,7 @@ for (const engine of [chromium, firefox, webkit]) {
   }, 30_000);
 
   test(`${engine.name()} default: same-origin query navigation is routed`, async () => {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
     try {
       const page = await browser.newPage();
@@ -261,7 +262,7 @@ for (const engine of [chromium, firefox, webkit]) {
 
   for (const mode of modes) {
     test(`${engine.name()} ${mode}: authored navigation uses the routed facade`, async () => {
-      const browser = await engine.launch();
+      const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
       try {
         const page = await browser.newPage();
@@ -407,7 +408,7 @@ for (const engine of [chromium, firefox, webkit]) {
     }, 30_000);
 
     test(`${engine.name()} ${mode}: exact explicit-fragment navigation skips route work`, async () => {
-      const browser = await engine.launch();
+      const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
       try {
         const page = await browser.newPage();
@@ -529,7 +530,7 @@ for (const engine of [chromium, firefox, webkit]) {
     }, 30_000);
 
     test(`${engine.name()} ${mode}: direct History writes stay native`, async () => {
-      const browser = await engine.launch();
+      const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
       try {
         const page = await browser.newPage();

@@ -7,7 +7,7 @@ import { devProject, type ProjectServer } from "../../packages/tooling/src/serve
 const applicationFixture = join(import.meta.dir, "fixtures/applications/development-browser");
 const browserDriver = join(import.meta.dir, "fixtures/drivers/development-browser.mjs");
 
-test("development browsers forward authored unsafe warnings and reload fresh state after an edit", async () => {
+test("development browsers recover edits published while their EventSource request is held", async () => {
   const parent = resolve(import.meta.dir, "../../.hesperia");
 
   await mkdir(parent, { recursive: true });

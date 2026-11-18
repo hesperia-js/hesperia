@@ -14,6 +14,7 @@ Keep branches short-lived and use these names in this repository:
 | ------------------- | --------------------- | ------------------------ |
 | `feature/<name>`    | New features          | `feature/native-routing` |
 | `fix/<name>`        | Fixes and hotfixes    | `fix/route-matching`     |
+| `work/<name>`       | Other project work    | `work/cli-checks`        |
 | `release/<VERSION>` | Release stabilization | `release/1.0.0`          |
 
 Fork branch names are exempt, though following the same convention is welcome.
@@ -24,8 +25,8 @@ branch version must match the shared root and publishable-package versions, with
 a `v` prefix. See [CI and npm releases](docs/ci.md) for required checks, supported
 versions, and publishing steps.
 
-Open feature and fix pull requests against `main`. During release stabilization,
-open release-fix pull requests from `fix/<name>` against the relevant
+Open feature, fix, and work pull requests against `main`. During release
+stabilization, open release-fix pull requests from `fix/<name>` against the relevant
 `release/<VERSION>` branch.
 
 Use the [pull request template](.github/pull_request_template.md) to explain the

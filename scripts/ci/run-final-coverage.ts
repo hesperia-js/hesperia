@@ -41,6 +41,7 @@ import {
 } from "./coverage-group-artifacts.ts";
 import { browserCssCoverageReceiptNames } from "./browser-css-coverage-contract.ts";
 import { checkCoverage } from "./check-coverage.ts";
+import { captureSaxeIntegrationCoverage } from "./check-saxe-integration-coverage.ts";
 
 const repoPath = resolve(import.meta.dir, "../..");
 const launcherPath = resolve(repoPath, "scripts/ci/coverage-owner-launcher.ts");
@@ -985,6 +986,14 @@ async function main(): Promise<void> {
       process.stderr.write(
         `${run.family} coverage completed with original run ${run.artifacts.runId}\n`,
       );
+    }
+
+    if (!aggregateRoot && (!group || group === "bun-tests-ordinary")) {
+      const report = await captureSaxeIntegrationCoverage(repoPath);
+
+      if (!report.supportedFive.floorPassed) {
+        throw new Error("Saxe integration coverage is below its supported-mode floor");
+      }
     }
 
     if (group) {
