@@ -1245,10 +1245,12 @@ test("owner disposal inside a reducer revokes only that query projection", async
   const work = Promise.withResolvers<string>();
   let report!: (value: number) => void;
   let reducerCalls = 0;
+  let fetchCalls = 0;
   const query = createQuery<string, string, string, number>({
     name: "adapter.progress-revoked-reducer",
     key: (input) => input,
     fetch: (_input, options) => {
+      fetchCalls++;
       report = options.reportProgress;
       return work.promise;
     },
@@ -1273,7 +1275,10 @@ test("owner disposal inside a reducer revokes only that query projection", async
       },
     });
 
-    expect(other.source).toBe(view.source);
+    expect(fetchCalls).toBe(1);
+    expect(observeQueryProgress(other.source).capture().execution).toBe(
+      observeQueryProgress(view.source).capture().execution,
+    );
     report(1);
     expect(reducerCalls).toBe(1);
     expect(() => projected.value()).toThrow();
