@@ -1,4 +1,12 @@
-import { computed, signal, type Computed, type SignalOptions, type WritableSignal } from "aeolia";
+import {
+  captureReactiveConstruction,
+  computed,
+  signal,
+  type Computed,
+  type ReactiveConstruction,
+  type SignalOptions,
+  type WritableSignal,
+} from "aeolia";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { createBinding, type Binding } from "./runtime/binding.ts";
 import { Owner, RenderFault } from "./runtime/owner.ts";
@@ -8,6 +16,9 @@ import type { InferredTask, Task, TaskContext, TaskFactory, TaskInvocation } fro
 import { createForm } from "./validation/form.ts";
 import type { Form, FormOptions } from "./validation/form.ts";
 import * as eventHelpers from "./events.ts";
+
+const nativeArgumentSlice = Array.prototype.slice;
+const nativeArgumentApply = Reflect.apply;
 
 /** Native event listener helpers available from the `hesperia/client` namespace. */
 export { eventHelpers as events };
@@ -96,15 +107,156 @@ export interface Client {
   unsafeHTML(host: Rendered, html: unknown): Rendered;
 }
 
+/** @internal The actual first-party call retained before its accessor is exposed. */
+export interface ActualReactiveConstruction {
+  readonly owner: Owner;
+  readonly kind: "state" | "derived";
+  readonly construction: ReactiveConstruction<unknown>;
+  readonly source: WritableSignal<unknown> | Computed<unknown>;
+  readonly accessor: object;
+  readonly factory: typeof signal | typeof computed;
+  readonly callee: Function;
+  readonly receiver: unknown;
+  /** Shallow call-time slots; referenced objects and callbacks retain live identity. */
+  readonly arguments: readonly unknown[];
+  readonly optionsSupplied: boolean;
+}
+
+const reactiveConstructions = new WeakMap<object, ActualReactiveConstruction>();
+const reactiveConstructionLedgers = new WeakMap<Owner, ActualReactiveConstruction[]>();
+const activeReactiveCalls = new WeakMap<Owner, Set<ActualReactiveConstruction>[]>();
+
+/** @internal Capture an actual new first-party constructor result during this exact call. */
+export function captureActualReactiveCall<T>(
+  owner: Owner,
+  construct: () => T,
+): { readonly value: T; readonly receipt: ActualReactiveConstruction } {
+  owner.assertActive();
+
+  const scopes = activeReactiveCalls.get(owner) ?? [];
+  const receipts = new Set<ActualReactiveConstruction>();
+
+  scopes.push(receipts);
+  activeReactiveCalls.set(owner, scopes);
+
+  try {
+    const value = construct();
+    const receipt = readActualReactiveConstruction(owner, value);
+
+    if (!receipt || !receipts.has(receipt))
+      throw new RenderFault(
+        "resume-source",
+        "The generated call did not return its actual new client construction",
+      );
+
+    return Object.freeze({ value, receipt });
+  } finally {
+    scopes.pop();
+
+    if (!scopes.length) activeReactiveCalls.delete(owner);
+  }
+}
+
+/** @internal Read only a receipt issued by the actual client constructor for this Owner. */
+export function readActualReactiveConstruction(
+  owner: Owner,
+  value: unknown,
+): ActualReactiveConstruction | undefined {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") return;
+
+  const receipt = reactiveConstructions.get(value);
+
+  return receipt?.owner === owner ? receipt : undefined;
+}
+
+/**
+ * @internal Return exact first-party reactive construction receipts in issuer receipt order.
+ * This is evidence order, separate from Host checked-call entry order.
+ * @param owner The live Owner whose actual Client constructors were issued.
+ * @returns A frozen defensive snapshot containing the same authentic receipt objects.
+ * @throws {RenderFault} If the Owner is no longer active or a retained receipt is inconsistent.
+ */
+export function readActualReactiveConstructionLedger(
+  owner: Owner,
+): readonly ActualReactiveConstruction[] {
+  owner.assertActive();
+
+  const snapshot = (reactiveConstructionLedgers.get(owner) ?? []).slice();
+
+  for (const receipt of snapshot) {
+    if (
+      receipt.owner !== owner ||
+      receipt.source !== receipt.construction.source ||
+      reactiveConstructions.get(receipt.accessor) !== receipt ||
+      reactiveConstructions.get(receipt.source) !== receipt
+    )
+      throw new RenderFault(
+        "resume-source",
+        "The Owner construction ledger contains a mismatched actual receipt",
+      );
+  }
+
+  return Object.freeze(snapshot);
+}
+
+function retainReactiveConstruction(
+  owner: Owner,
+  accessor: object,
+  kind: ActualReactiveConstruction["kind"],
+  construction: ReactiveConstruction<unknown>,
+  source: WritableSignal<unknown> | Computed<unknown>,
+  factory: typeof signal | typeof computed,
+  callee: Function,
+  receiver: unknown,
+  args: readonly unknown[],
+  optionsSupplied: boolean,
+): void {
+  const receipt = Object.freeze({
+    owner,
+    kind,
+    construction,
+    source,
+    accessor,
+    factory,
+    callee,
+    receiver,
+    arguments: Object.freeze(args),
+    optionsSupplied,
+  });
+
+  reactiveConstructions.set(accessor, receipt);
+  reactiveConstructions.set(construction.source, receipt);
+
+  const ledger = reactiveConstructionLedgers.get(owner);
+  if (ledger && owner.state !== "cleaning" && owner.state !== "destroyed") ledger.push(receipt);
+
+  for (const scope of activeReactiveCalls.get(owner) ?? []) scope.add(receipt);
+}
+
+function ensureReactiveConstructionLedger(owner: Owner): void {
+  if (reactiveConstructionLedgers.has(owner)) return;
+
+  const ledger: ActualReactiveConstruction[] = [];
+  owner.onRelease(() => {
+    if (reactiveConstructionLedgers.get(owner) === ledger)
+      reactiveConstructionLedgers.delete(owner);
+  });
+  reactiveConstructionLedgers.set(owner, ledger);
+}
+
 /** Construct the capability retained by generated component code across continuations. */
 export function createClient(owner: Owner): Client {
   const capability: Client = {
     events: eventHelpers,
 
-    state<T>(initial: T, options: SignalOptions<T> = {}): State<T> {
+    state<T>(initial: T, options?: SignalOptions<T>): State<T> {
       owner.assertActive();
 
-      const source = signal(initial, options);
+      const optionsSupplied = arguments.length > 1;
+      const actualArguments = nativeArgumentApply(nativeArgumentSlice, arguments, []) as unknown[];
+      ensureReactiveConstructionLedger(owner);
+      const source = optionsSupplied ? signal(initial, options) : signal(initial);
+      const construction = captureReactiveConstruction(source);
 
       const read = (() => {
         owner.assertReadable();
@@ -112,6 +264,19 @@ export function createClient(owner: Owner): Client {
         return source.get();
       }) as State<T>;
 
+      retainReactiveConstruction(
+        owner,
+        read,
+        "state",
+        construction,
+        source,
+        signal,
+        capability.state,
+        this,
+        actualArguments,
+        optionsSupplied,
+      );
+      owner.assertActive();
       Object.defineProperty(read, "source", { value: source });
 
       read.set = (value) => {
@@ -129,10 +294,14 @@ export function createClient(owner: Owner): Client {
       return read;
     },
 
-    derived<T>(compute: () => T, options: SignalOptions<T> = {}): Derived<T> {
+    derived<T>(compute: () => T, options?: SignalOptions<T>): Derived<T> {
       owner.assertActive();
 
-      const source = computed(compute, options);
+      const optionsSupplied = arguments.length > 1;
+      const actualArguments = nativeArgumentApply(nativeArgumentSlice, arguments, []) as unknown[];
+      ensureReactiveConstructionLedger(owner);
+      const source = optionsSupplied ? computed(compute, options) : computed(compute);
+      const construction = captureReactiveConstruction(source);
 
       const read = (() => {
         owner.assertReadable();
@@ -140,6 +309,19 @@ export function createClient(owner: Owner): Client {
         return source.get();
       }) as Derived<T>;
 
+      retainReactiveConstruction(
+        owner,
+        read,
+        "derived",
+        construction,
+        source,
+        computed,
+        capability.derived,
+        this,
+        actualArguments,
+        optionsSupplied,
+      );
+      owner.assertActive();
       Object.defineProperty(read, "source", { value: source });
 
       return read;

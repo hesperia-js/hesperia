@@ -4,9 +4,12 @@ import type { Owner, RuntimeContext } from "./owner.ts";
 
 type ConstructionState = "acquired" | "constructing" | "constructed" | "unacknowledged";
 
+interface PhysicalOwnerFailureSlot {
+  failure?: { readonly reason: unknown };
+}
+
 interface PhysicalOwnerRecord {
   readonly parent: PhysicalOwnerRecord | undefined;
-  readonly failures: unknown[];
   readonly queryPreparations: Set<PhysicalOwnerQueryPreparationRecord>;
   readonly taskInvocations: Set<PhysicalOwnerTaskRecord>;
   ownerRetirement?: PhysicalOwnerRetirementRecord;
@@ -1383,6 +1386,7 @@ class PhysicalServerLifetime {
   readonly retired: Promise<void>;
   owner: Owner | undefined;
   private readonly records: PhysicalOwnerRecord[] = [];
+  readonly cleanupFailures: PhysicalOwnerFailureSlot[] = [];
   private readonly imports = new Map<Promise<unknown>, PhysicalModuleImportRecord>();
   private readonly nativeRetirement: PhysicalModuleImportRecord | undefined;
   private progressiveControllerSettlement: PhysicalProgressiveControllerRecord | undefined;
@@ -1497,7 +1501,6 @@ class PhysicalServerLifetime {
 
     const record: PhysicalOwnerRecord = {
       parent: parentRecord?.record,
-      failures: [],
       queryPreparations: new Set(),
       taskInvocations: new Set(),
       construction: "constructing",
@@ -1730,9 +1733,10 @@ class PhysicalServerLifetime {
             }),
           );
       }
-
-      failures.push(...record.failures);
     }
+
+    for (const slot of this.cleanupFailures)
+      if (slot.failure) failures.push(slot.failure.reason);
 
     for (const record of this.imports.values()) {
       if (record.state === "unacknowledged")
@@ -2057,7 +2061,7 @@ export function retainPhysicalOwnerRetirement(
     ]);
   } catch (reason) {
     record.state = "unacknowledged";
-    physical.record.failures.push(reason);
+    physical.lifetime.cleanupFailures.push({ failure: { reason } });
     physical.lifetime.finishRetirement();
   }
 }
@@ -2083,9 +2087,25 @@ export function recordPhysicalOwnerCleanupFailure(
 
   if (!physical) return false;
 
-  physical.record.failures.push(reason);
+  physical.lifetime.cleanupFailures.push({ failure: { reason } });
 
   return true;
+}
+
+/** @internal Reserve the actual cleanup attempt before invoking user code. */
+export function reservePhysicalOwnerCleanupFailure(
+  owner: Owner,
+): ((reason: unknown) => void) | undefined {
+  const physical = physicalOwners.get(owner);
+
+  if (!physical) return undefined;
+
+  const slot: PhysicalOwnerFailureSlot = {};
+  physical.lifetime.cleanupFailures.push(slot);
+
+  return (reason) => {
+    if (!slot.failure) slot.failure = { reason };
+  };
 }
 
 /** @internal Finish a logical cleanup pass without treating it as original-work completion. */
