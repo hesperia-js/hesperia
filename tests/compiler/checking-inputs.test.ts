@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -67,7 +68,7 @@ test("typing evidence stays tied to the actual emitted module population", async
 test("checked origin retains an emitted JSX component and its checked props", async () => {
   const filename = "checked-origin-component.tsx";
   const source = `import { type Component } from "hesperia";
-export function Page(props: Component.Props<{ title: string }>) {
+export function Page(props: Component.Props<{ title: string; serial: bigint }>) {
   return <main>{props.title()}</main>;
 }`;
   const session = await openCheckingProject(
@@ -81,19 +82,54 @@ export function Page(props: Component.Props<{ title: string }>) {
     const analysis = session.analyses.get(filename);
     const compilation = emitCheckingSession(session);
     const evidence = issuedProjectTypingEvidence(compilation);
+    const sourceDigest = `sha256-${createHash("sha256").update(source).digest("hex")}`;
 
     expect(checking.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
     expect(analysis?.componentProps?.diagnostics).toEqual([]);
     expect(Object.keys(analysis?.componentProps?.byParameterStart ?? {})).toHaveLength(1);
     expect(origin?.analyses.get(filename)?.analysis).toBe(analysis);
     expect(analysis && checkedAnalysisOrigin(analysis)?.origin).toBe(origin);
+    expect(origin?.project).toBe(session.project);
+    expect(origin?.population).toHaveLength(1);
+    expect(origin?.population[0]).toMatchObject({ filename, source, sourceDigest });
     expect(compilation.modules.get(filename)?.code).toBeTruthy();
     expect(evidence).toMatchObject({
       state: "sealed",
       captureState: "incomplete-capture",
+      checkingResultJoin: true,
+      analysisJoin: true,
       modulePopulationJoin: true,
     });
     expect(evidence?.modules.map((item) => item.filename)).toEqual([filename]);
+    const moduleEvidence = evidence?.modules[0];
+    expect(moduleEvidence?.sourceDigest).toBe(sourceDigest);
+    expect(moduleEvidence?.sourceJoin).toBe(true);
+    expect(moduleEvidence?.components).toHaveLength(1);
+    const component = moduleEvidence?.components[0];
+    expect(component?.emittedComponentJoin).toBe("matched");
+    expect(component?.parameterStart).toBe(source.indexOf("props: Component"));
+    expect(component?.props).toMatchObject({
+      kind: "props",
+      entries: [
+        {
+          name: "serial",
+          category: "value",
+          optional: false,
+          mappedType: { kind: "unproved", reason: "unsupported-type" },
+        },
+        {
+          name: "title",
+          category: "value",
+          optional: false,
+          mappedType: {
+            kind: "structural",
+            schema: 1,
+            algorithm: "ts-shape-v1",
+            shape: { kind: "primitive", name: "string" },
+          },
+        },
+      ],
+    });
   } finally {
     await session.dispose();
   }
