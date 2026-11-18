@@ -345,6 +345,34 @@ requires author approval. CI reports whether tests pass; it does not provide
 that approval. Review changes to the test, fixture, and expected output
 together.
 
+## Supported Hesperia releases
+
+Hesperia intends two stable major releases each year: one during May through
+July and one during October through December. These are target windows, not
+exact dates or a limit on the number of major releases.
+
+Formal long-term support (LTS) applies only to stable Hesperia major versions.
+When a stable successor supersedes a major, that superseded major's full
+one-year LTS window starts on the successor's stable release date. Prereleases
+receive no separate formal LTS and do not start the preceding stable major's
+LTS clock.
+
+A major's initial active period is additional to its full one-year LTS window.
+
+LTS releases are limited to compatible patch fixes on the supported major's
+latest existing minor line. Users on an older minor line must upgrade within
+that major to receive those fixes. Hesperia does not add feature-bearing minor
+releases during LTS. A major keeps its declared minimum browser support
+throughout its lifetime. LTS does not promise every possible correction or a
+response time.
+
+Aeolia is a separate library and does not inherit Hesperia's release or support
+policy.
+
+The VS Code editor extension follows a separate Marketplace release lifecycle,
+described in [editor release guidance](editor-release.md). This Hesperia support
+calendar does not apply to it.
+
 ## npm release setup
 
 The [release workflow](../.github/workflows/release.yml) runs after a
