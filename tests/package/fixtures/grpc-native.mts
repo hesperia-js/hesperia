@@ -4,7 +4,6 @@ import { createRequire } from "node:module";
 import { isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Code, ConnectError } from "@connectrpc/connect";
-import { Window } from "happy-dom";
 import { withAeolia } from "hesperia/aeolia";
 import { bindImported, defineComponent, mount, text } from "hesperia/runtime";
 import { Http2SessionManager } from "@connectrpc/connect-node";
@@ -652,6 +651,8 @@ async function main(): Promise<void> {
     graphs.push(boundGraph);
 
     const imported = withAeolia(boundGraph, contract);
+    const domModule = import.meta.resolve("happy-dom");
+    const { Window } = await import(domModule);
     const window = new Window({ url: "https://grpc-bound.test/" });
     let application: ReturnType<typeof mount> | undefined;
     const bindings: { query?: ReturnType<typeof imported.query> } = {};
