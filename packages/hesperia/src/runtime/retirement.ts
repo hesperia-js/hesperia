@@ -56,6 +56,12 @@ interface PhysicalOwnerQueryPreparationRecord {
   rejected: boolean;
   failures: unknown[];
   observerInstalling: boolean;
+  singleRegistration?: {
+    completion?: unknown;
+    deliveryStarted: boolean;
+    deliveryFinished: boolean;
+    notificationPending: boolean;
+  };
 }
 
 interface PhysicalModuleImportRecord {
@@ -86,6 +92,7 @@ interface PhysicalProgressiveControllerRecord {
 const nativePromiseThen = Promise.prototype.then;
 const NativePromise = Promise;
 const nativeApply = Reflect.apply;
+const nativeDefineProperty = Object.defineProperty;
 
 const contextLifetimes = new WeakMap<RuntimeContext, PhysicalServerLifetime>();
 const physicalOwners = new WeakMap<
@@ -1221,13 +1228,13 @@ function physicalOwnerQueryPreparationRecord(
   return record;
 }
 
-/** @internal Reserve under the actual Owner immediately before input preparation. */
-export function acquirePhysicalOwnerQueryPreparation(
+function reservePhysicalOwnerQueryPreparation(
   owner: Owner,
+  requireNativeBrand: boolean,
 ): PhysicalOwnerQueryPreparation | undefined {
   const physical = physicalOwners.get(owner);
 
-  if (!physical || nativePromiseBrand === undefined) return undefined;
+  if (!physical || (requireNativeBrand && nativePromiseBrand === undefined)) return undefined;
 
   if (
     physical.record.closed ||
@@ -1252,6 +1259,30 @@ export function acquirePhysicalOwnerQueryPreparation(
 
   physical.record.queryPreparations.add(record);
   physicalOwnerQueryPreparations.set(ticket, record);
+
+  return ticket;
+}
+
+/** @internal Reserve under the actual Owner immediately before input preparation. */
+export function acquirePhysicalOwnerQueryPreparation(
+  owner: Owner,
+): PhysicalOwnerQueryPreparation | undefined {
+  return reservePhysicalOwnerQueryPreparation(owner, true);
+}
+
+/** @internal Reserve the single-registration path even when native branding is unavailable. */
+export function acquireSingleRegistrationQueryPreparation(
+  owner: Owner,
+): PhysicalOwnerQueryPreparation | undefined {
+  const ticket = reservePhysicalOwnerQueryPreparation(owner, false);
+  const record = physicalOwnerQueryPreparationRecord(ticket);
+
+  if (record)
+    record.singleRegistration = {
+      deliveryStarted: false,
+      deliveryFinished: false,
+      notificationPending: false,
+    };
 
   return ticket;
 }
@@ -1381,6 +1412,228 @@ export function completePhysicalOwnerQueryPreparationDelivery(
   record.deliveryPending = false;
 
   finishPhysicalOwnerQueryPreparation(record);
+}
+
+function singleRegistrationQueryPreparation(
+  ticket: PhysicalOwnerQueryPreparation | undefined,
+): PhysicalOwnerQueryPreparationRecord | undefined {
+  const record = physicalOwnerQueryPreparationRecord(ticket);
+
+  if (record && !record.singleRegistration)
+    throw new TypeError("A query preparation requires its single-registration ticket");
+
+  return record;
+}
+
+function unacknowledgedQueryPreparation(
+  record: PhysicalOwnerQueryPreparationRecord,
+  message: string,
+  cause?: unknown,
+): void {
+  record.failures.push(new Error(message, { cause }));
+}
+
+function notifySingleRegistrationQueryPreparation(
+  record: PhysicalOwnerQueryPreparationRecord,
+): void {
+  const single = record.singleRegistration!;
+
+  if (
+    single.notificationPending ||
+    record.state !== "pending" ||
+    record.deliveryPending ||
+    record.observerInstalling
+  )
+    return;
+
+  single.notificationPending = true;
+  record.pendingObservers++;
+
+  try {
+    const signal = new NativePromise<void>((resolve) => resolve());
+    nativeDefineProperty(signal, "constructor", { value: undefined });
+    nativeApply(nativePromiseThen, signal, [
+      () => {
+        single.notificationPending = false;
+        record.pendingObservers--;
+
+        try {
+          finishPhysicalOwnerQueryPreparation(record);
+        } catch (reason) {
+          unacknowledgedQueryPreparation(
+            record,
+            "Query preparation retirement notification failed",
+            reason,
+          );
+          record.state = "unacknowledged";
+          record.owner.queryPreparations.add(record);
+
+          try {
+            record.lifetime.finishRetirement();
+          } catch {
+            // Keep the failed record attached when the lifetime cannot be notified.
+          }
+        }
+      },
+    ]);
+  } catch (reason) {
+    unacknowledgedQueryPreparation(
+      record,
+      "Query preparation retirement notification could not be scheduled",
+      reason,
+    );
+  }
+}
+
+/** @internal Retain the raw result by identity without inspecting or observing it. */
+export function recordSingleRegistrationQueryPreparationRaw(
+  ticket: PhysicalOwnerQueryPreparation | undefined,
+  raw: unknown,
+): void {
+  const record = singleRegistrationQueryPreparation(ticket);
+
+  if (!record) return;
+
+  if (record.state !== "invoking" || record.originalAssigned) return;
+
+  record.original = raw;
+  record.originalAssigned = true;
+}
+
+/** @internal Record the completion and exact method obtained for B2's existing registration. */
+export function beginSingleRegistrationQueryPreparation(
+  ticket: PhysicalOwnerQueryPreparation | undefined,
+  completion: unknown,
+  method: unknown,
+): void {
+  const record = singleRegistrationQueryPreparation(ticket);
+
+  if (!record) return;
+
+  if (record.state !== "invoking" || !record.originalAssigned || record.completionAssigned) return;
+
+  record.completionAssigned = true;
+  record.singleRegistration!.completion = completion;
+  record.deliveryPending = true;
+  record.observerInstalling = true;
+
+  if (nativePromiseBrand === undefined)
+    unacknowledgedQueryPreparation(record, "Native Promise branding is unavailable");
+  else {
+    try {
+      if (!nativePromiseBrand(record.original))
+        unacknowledgedQueryPreparation(record, "Query preparation original is not a native Promise");
+    } catch (reason) {
+      unacknowledgedQueryPreparation(record, "Query preparation original branding failed", reason);
+    }
+  }
+
+  if (record.original !== completion)
+    unacknowledgedQueryPreparation(
+      record,
+      "Query preparation original differs from its completion",
+    );
+
+  if (method !== nativePromiseThen)
+    unacknowledgedQueryPreparation(
+      record,
+      "Query preparation registration is not the native intrinsic",
+    );
+}
+
+/** @internal Record the first actual callback before its existing body runs. */
+export function beginSingleRegistrationQueryPreparationDelivery(
+  ticket: PhysicalOwnerQueryPreparation | undefined,
+  outcome: "fulfilled" | "rejected",
+): boolean {
+  const record = singleRegistrationQueryPreparation(ticket);
+  const single = record?.singleRegistration;
+
+  if (!record || !single || single.deliveryStarted) return false;
+
+  single.deliveryStarted = true;
+  record.rejected = outcome === "rejected";
+
+  return true;
+}
+
+/** @internal Retire the first callback only after its existing body has returned or thrown. */
+export function finishSingleRegistrationQueryPreparationDelivery(
+  ticket: PhysicalOwnerQueryPreparation | undefined,
+  first: boolean,
+): void {
+  if (!first) return;
+
+  const record = singleRegistrationQueryPreparation(ticket);
+  const single = record?.singleRegistration;
+
+  if (!record || !single || !single.deliveryStarted || single.deliveryFinished) return;
+
+  single.deliveryFinished = true;
+  record.deliveryPending = false;
+  notifySingleRegistrationQueryPreparation(record);
+}
+
+/** @internal Finish the actual registration only after its call returns. */
+export function finishSingleRegistrationQueryPreparationRegistration(
+  ticket: PhysicalOwnerQueryPreparation | undefined,
+): void {
+  const record = singleRegistrationQueryPreparation(ticket);
+
+  if (!record || record.state !== "invoking" || !record.completionAssigned) return;
+
+  record.observerInstalling = false;
+  record.state = "pending";
+  notifySingleRegistrationQueryPreparation(record);
+}
+
+/** @internal Preserve setup failure separately from the original authored failure channel. */
+export function failSingleRegistrationQueryPreparation(
+  ticket: PhysicalOwnerQueryPreparation | undefined,
+  reason: unknown,
+): void {
+  const record = singleRegistrationQueryPreparation(ticket);
+  const single = record?.singleRegistration;
+
+  if (!record || !single || record.state !== "invoking") return;
+
+  unacknowledgedQueryPreparation(
+    record,
+    "Query preparation setup did not acknowledge original work",
+    reason,
+  );
+  record.observerInstalling = false;
+  record.deliveryPending = single.deliveryStarted && !single.deliveryFinished;
+  record.state = "pending";
+  notifySingleRegistrationQueryPreparation(record);
+}
+
+/** @internal Finish the existing synchronous path only when the raw result is not a native Promise. */
+export function finishSynchronousQueryPreparation(
+  ticket: PhysicalOwnerQueryPreparation | undefined,
+): void {
+  const record = singleRegistrationQueryPreparation(ticket);
+
+  if (!record || record.state !== "invoking") return;
+
+  if (!record.originalAssigned)
+    unacknowledgedQueryPreparation(record, "Query preparation did not return its original value");
+  else if (nativePromiseBrand === undefined)
+    unacknowledgedQueryPreparation(record, "Native Promise branding is unavailable");
+  else {
+    try {
+      if (nativePromiseBrand(record.original))
+        unacknowledgedQueryPreparation(
+          record,
+          "A native Promise entered synchronous query preparation",
+        );
+    } catch (reason) {
+      unacknowledgedQueryPreparation(record, "Query preparation original branding failed", reason);
+    }
+  }
+
+  record.state = "pending";
+  notifySingleRegistrationQueryPreparation(record);
 }
 
 class PhysicalServerLifetime {
