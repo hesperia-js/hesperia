@@ -47,14 +47,18 @@ type PatternParams<S extends string> = string extends S
     : SegmentParams<S>;
 
 /**
- * Declare a route while retaining its authored configuration for checking.
- * @typeParam Configuration The authored route declaration.
+ * Declare a tagged route and retain its loader result for checking.
+ * @typeParam Tags The authored literal tags.
+ * @typeParam Loader The request loader.
  * @param configuration The authored route declaration.
- * @returns The same configuration object.
+ * @returns The same configuration with readonly tags and the original loader type.
  */
-export function route<const Configuration extends Route.Declaration>(
-  configuration: Configuration,
-): Configuration;
+export function route<const Tags extends readonly string[], Loader extends Route.Load>(
+  configuration: Route.Declaration & { readonly tags: Tags; readonly load: Loader },
+): Omit<Route.Declaration, "tags" | "load"> & {
+  readonly tags: Readonly<Tags>;
+  readonly load: Loader;
+};
 /**
  * Declare a route with readonly literal tag types for compiler inspection.
  * Server members are not included in the browser manifest.
@@ -66,15 +70,32 @@ export function route<const Tags extends readonly string[]>(
   configuration: Route.Declaration & { readonly tags: Tags },
 ): Route.Declaration & { readonly tags: Readonly<Tags> };
 /**
+ * Declare a route and retain its loader result for checking.
+ * @typeParam Loader The request loader.
+ * @param configuration The authored route declaration.
+ * @returns The same configuration with the original loader type.
+ */
+export function route<Loader extends Route.Load>(
+  configuration: Route.Declaration & { readonly load: Loader },
+): Omit<Route.Declaration, "load"> & { readonly load: Loader };
+/**
  * Declare a route with an explicit path pattern for its guard parameters.
  * @typeParam Pattern Route path pattern.
  * @param configuration The authored route declaration.
  * @returns The same configuration object.
  */
-export function route<
-  Pattern extends string = string,
-  Configuration extends Route.Declaration<Pattern> = Route.Declaration<Pattern>,
->(configuration: Configuration): Configuration;
+export function route<Pattern extends string = string>(
+  configuration: Route.Declaration<Pattern>,
+): Route.Declaration<Pattern>;
+/** @internal Retain the checked configuration for a literal explicit route pattern. */
+export function route<Pattern extends string, Configuration extends Route.Declaration<Pattern>>(
+  configuration: Route.Declaration<Pattern> &
+    Configuration &
+    Record<Exclude<keyof Configuration, keyof Route.Declaration<Pattern>>, never>,
+): Omit<Route.Declaration<Pattern>, "load"> &
+  (Configuration extends { readonly load: infer Loader extends Route.Load }
+    ? { readonly load: Loader }
+    : { readonly load?: Route.Load });
 export function route(configuration: object): object {
   return configuration;
 }
