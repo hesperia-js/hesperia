@@ -751,6 +751,25 @@ export class Owner {
     }
   }
 
+  /** @internal Whether actual physical admission and the full Owner ancestry permit dispatch. */
+  isDispatchEligible(): boolean {
+    if (!physicalOwnerAdmissionOpen(this)) return false;
+
+    if (this.state === "suspended" || this.state === "cleaning" || this.state === "destroyed")
+      return false;
+
+    for (let current: Owner | null = this.parent; current; current = current.parent) {
+      if (
+        current.state === "suspended" ||
+        current.state === "cleaning" ||
+        current.state === "destroyed"
+      )
+        return false;
+    }
+
+    return true;
+  }
+
   /** Reject public reads after final destruction; cleanup reads remain permitted. */
   assertReadable(): void {
     if (this.state === "destroyed") {
