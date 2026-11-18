@@ -64,6 +64,41 @@ test("typing evidence stays tied to the actual emitted module population", async
   }
 });
 
+test("checked origin retains an emitted JSX component and its checked props", async () => {
+  const filename = "checked-origin-component.tsx";
+  const source = `import { type Component } from "hesperia";
+export function Page(props: Component.Props<{ title: string }>) {
+  return <main>{props.title()}</main>;
+}`;
+  const session = await openCheckingProject(
+    [{ filename, source }],
+    requestTypingEvidenceCapture({ root: join(import.meta.dir, "../..") }),
+  );
+
+  try {
+    const checking = session.result;
+    const origin = checkedSourceOrigin(session, checking);
+    const analysis = session.analyses.get(filename);
+    const compilation = emitCheckingSession(session);
+    const evidence = issuedProjectTypingEvidence(compilation);
+
+    expect(checking.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(analysis?.componentProps?.diagnostics).toEqual([]);
+    expect(Object.keys(analysis?.componentProps?.byParameterStart ?? {})).toHaveLength(1);
+    expect(origin?.analyses.get(filename)?.analysis).toBe(analysis);
+    expect(analysis && checkedAnalysisOrigin(analysis)?.origin).toBe(origin);
+    expect(compilation.modules.get(filename)?.code).toBeTruthy();
+    expect(evidence).toMatchObject({
+      state: "sealed",
+      captureState: "incomplete-capture",
+      modulePopulationJoin: true,
+    });
+    expect(evidence?.modules.map((item) => item.filename)).toEqual([filename]);
+  } finally {
+    await session.dispose();
+  }
+});
+
 test("captures a declaration on first existence check and keeps its bytes immutable", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-checking-inputs-"));
   const physicalRoot = join(root, "physical");
