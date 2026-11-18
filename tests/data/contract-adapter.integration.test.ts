@@ -1119,6 +1119,7 @@ test("query progress projections seed late and reset for the next actual executi
 
 test("a failed projection keeps its own failure through the same query's failed terminal", async () => {
   const work = Promise.withResolvers<string>();
+    console.error("Q266_DIAG: setup-work");
   const terminalFailure = new Error("query failed");
   const reducerFailure = new Error("projection failed");
   let report!: (value: number) => void;
@@ -1143,12 +1144,16 @@ test("a failed projection keeps its own failure through the same query's failed 
   const owner = makeOwner();
 
   try {
+    console.error("Q266_DIAG: before-api");
     const api = createContractApi(owner, graph, contract);
     const view = api.query("one");
+    console.error("Q266_DIAG: after-progress-query");
     const finite = api.ordinary("one");
+    console.error("Q266_DIAG: after-ordinary-query");
     const ready = view.ready;
     void ready.catch(() => undefined);
     const observation = observeQueryProgress(view.source);
+    console.error("Q266_DIAG: after-observation");
     const execution = observation.capture().execution;
     const history = view.project({ kind: "accumulate", max: 8 });
     const projected = view.project({
@@ -1156,7 +1161,9 @@ test("a failed projection keeps its own failure through the same query's failed 
       initial: [] as readonly number[],
       step: (values, value) => {
         if (value === 2) {
+    console.error("Q266_DIAG: reducer-before-reject");
           work.reject(terminalFailure);
+    console.error("Q266_DIAG: reducer-after-reject");
           throw reducerFailure;
         }
 
@@ -1164,10 +1171,18 @@ test("a failed projection keeps its own failure through the same query's failed 
       },
     });
 
+    console.error("Q266_DIAG: before-finite-ready");
     await expect(finite.ready).resolves.toBe("ordinary one");
+    console.error("Q266_DIAG: after-finite-ready");
+    console.error("Q266_DIAG: before-report-1");
     report(1);
+    console.error("Q266_DIAG: after-report-1");
+    console.error("Q266_DIAG: before-report-2");
     report(2);
+    console.error("Q266_DIAG: after-report-2");
+    console.error("Q266_DIAG: before-terminal-ready");
     await expect(ready).rejects.toBe(terminalFailure);
+    console.error("Q266_DIAG: after-terminal-ready");
 
     expect(observation.capture().execution).toBe(execution);
     expect(observation.capture().status).toBe("failed");
@@ -1182,9 +1197,12 @@ test("a failed projection keeps its own failure through the same query's failed 
     expect(finite.value()).toBe("ordinary one");
     expect(finite.error()).toBeUndefined();
   } finally {
+    console.error("Q266_DIAG: cleanup-start");
     work.resolve("cleanup");
     await owner.dispose();
+    console.error("Q266_DIAG: owner-disposed");
     graph.dispose();
+    console.error("Q266_DIAG: graph-disposed");
   }
 });
 
