@@ -6,7 +6,7 @@ permissions:
   contents: read
 jobs:
   preview:
-    if: github.event.pull_request.number == 40 || github.event.pull_request.number == 51
+    if: github.event.pull_request.number == 40 || github.event.pull_request.number == 51 || github.event.pull_request.head.ref == 'work/m3-native-graph-custody-r1'
     name: "Data SDK preview (${{ matrix.os }}, runner-only override)"
     strategy:
       fail-fast: false
@@ -112,6 +112,9 @@ jobs:
         run: bun run typecheck
       - name: Run Data and lifecycle tests with the preview SDK
         run: bun test --timeout=45000 tests/data/contract-adapter.integration.test.ts tests/runtime/lifecycle.test.ts
+      - name: Run native graph custody integration with the preview SDK
+        if: github.event.pull_request.head.ref == 'work/m3-native-graph-custody-r1'
+        run: bun test --timeout=45000 tests/data/native-graph-custody.integration.test.ts
       - name: Run the GraphQL incremental owner with the preview SDK
         if: github.event.pull_request.number == 51
         run: bun test --timeout=45000 tests/data/graphql-incremental.integration.test.ts
