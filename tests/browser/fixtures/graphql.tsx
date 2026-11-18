@@ -120,7 +120,7 @@ function SubscriptionLifecycleJourney() {
 }
 
 function IncrementalJourney() {
-  const board = api.incrementalBoard({});
+  const board = api.incrementalBoard({}, {});
   const progress = board.project();
   return (
     <main>
