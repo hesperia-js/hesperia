@@ -51,7 +51,11 @@ such as `1.4.0-beta.2` are excluded. From stable 1.0 onward, incompatible change
 to the documented public API are introduced in a new major version.
 
 **Minor line:** releases sharing a major and minor version, such as `1.4.x`.
-Minor lines determine shared LTS windows, not the scope of a perpetual purchase.
+When a stable successor major supersedes a major, the preceding major freezes
+at its latest existing minor line. During its LTS window, that major receives
+compatible patch fixes only, with no new features or minor releases. Minor
+lines identify the recipients of those patches; they do not set separate
+maintenance dates or commercial purchase boundaries.
 
 **Customer modifications:** customer changes to Software code, including additions,
 removals, and subsystem changes. Ordinary installation, bundling, tree-shaking,
@@ -62,10 +66,14 @@ This description does not redefine Modifications under MPL.
 product integrating Software, rather than standalone Software or a substantially
 equivalent derivative offered as a separate library.
 
-**LTS window:** twelve months from a minor line's initial stable release date.
-Every customer shares the line's published dates. Purchases, renewals, and
-replacement grants do not reset them.
-The project publishes each line's start and end dates with the changelog for its
+**Active major period:** the period beginning with a major's stable release and
+ending when a stable successor supersedes it. This initial active period is
+additional to the major's full one-year LTS window.
+
+**LTS window:** twelve months beginning when a stable successor major supersedes
+the preceding stable major. Every customer shares the major's published dates.
+Purchases, renewals, and replacement grants do not reset them. The project
+publishes each major's start and end dates with the changelog for the successor's
 initial stable release through the official distribution channels.
 
 **Qualifying defect:** either a reproducible bug in unmodified official Software
@@ -138,8 +146,11 @@ The public license is in [COPYING](COPYING).
 ### 4.1. Recurring
 
 One recurring purchase covers one customer across all stable Software releases
-for twelve months. Maintenance covers eligible stable lines within their
-LTS windows; version eligibility does not revive an unsupported stable release.
+for twelve months. During the active paid term, the customer may move to newer
+stable major versions under that commercial grant. Maintenance eligibility
+follows the covered major lines and the lifecycle in section 7.1. Eligibility
+does not extend a major's active period or LTS window, or revive an unsupported
+stable release.
 
 Further distribution by the customer relying on this commercial grant requires
 an active paid term. Renewal requires payment for another term. Automatic or manual renewal is
@@ -157,10 +168,13 @@ modified, or built version. Section 8 governs ordinary expiry.
 
 ### 4.2. Perpetual
 
-A one-time purchase covers one specified major line, including all its existing
-and future stable minor and patch releases. The customer may continue modifying and
-distributing that line in customer products without renewal payments, subject
-to this agreement.
+A one-time purchase covers one specified major line, including its stable minor
+releases during the major's active period and compatible patch releases during
+LTS. When that major freezes at its final minor, coverage stays on that major
+and final minor; it does not move to the successor major. Previously covered
+releases within that major remain covered. The customer may continue modifying
+and distributing the covered line in customer products without renewal payments,
+subject to this agreement.
 Perpetual means no ordinary time-based expiry, not immunity from refund or
 breach provisions.
 
@@ -169,11 +183,12 @@ replacement grant supplies the additional line. The purchase does not cover
 other major lines. Later stable minor and patch releases within the covered
 major line require no additional purchase.
 
-Maintenance follows each stable minor line's own shared twelve-month LTS window,
-with the outstanding-report protection in section 7. Buying a major line does
-not restart existing minor-line windows. A later stable minor line within the
-covered major has its own window from its initial stable release. Coverage does
-not promise that future releases will be produced or extend a minor line's LTS.
+Maintenance for a covered major line applies during its active period and its
+subsequent shared twelve-month LTS window, with the outstanding-report protection
+in section 7. Buying a major line does not restart an existing LTS window. A
+later stable minor line within the covered major has no separate LTS window.
+Coverage does not promise that future releases will be produced or extend a
+major's LTS.
 
 ## 5. Products, contractors, and downstream customers
 
@@ -250,26 +265,50 @@ under MPL must satisfy MPL, even if the customer has commercial coverage elsewhe
 
 ### 7.1. Shared lifecycle
 
-Every stable minor line has a twelve-month LTS window from its initial stable
-release. An older line remains supported during its window even when a newer
-line exists. Record the dates when the initial stable release is published.
+Each stable major has an active period from its initial stable release until a
+stable successor supersedes it. The successor's stable release starts that
+major's full one-year LTS window. Its initial active period is additional to
+that full year. Prereleases receive no separate formal LTS and do not start the
+previous stable major's clock.
 
-An active recurring customer has maintenance for all stable minor lines covered by the paid
-term, subject to each line's maintenance period. After ordinary expiry, that
-eligibility survives for those covered lines; proof of installation or actual use
-is not required. A line first released after the paid term is not newly covered
-unless an express replacement grant provides it. A line first released as stable
-after the paid term is not covered merely because a prerelease existed during
-that term. Surviving maintenance does not restore proprietary distribution
-permissions. Purchase and
-release records establish this coverage.
+When the stable successor supersedes a major, the preceding major freezes at
+its latest existing minor line. During LTS, maintenance consists only of
+compatible patch fixes on that final minor line. No new features or minor
+releases are introduced. Customers on an older minor line must upgrade within
+the same major to receive those fixes. The browser minimum declared for a major
+remains unchanged for that major's lifetime, including in any discretionary
+maintenance patch issued after LTS. Record the dates with the
+successor's initial stable release.
+
+An active recurring customer has maintenance for major lines with an official
+stable release covered by the paid term, subject to each major's active period
+or LTS window. After ordinary expiry, that eligibility survives for covered
+stable releases through each major's active period or LTS window. A qualifying
+defect first introduced only in a stable minor first released after the paid
+term, and first reported after expiry, does not create a new maintenance
+entitlement merely because that minor belongs to a previously covered major.
+This does not remove a fix already owed under section 7.3 for a qualifying
+report concerning an eligible release. It also does not limit an express
+replacement grant under section 7.4. Proof of installation or actual use is not
+required.
+A successor major first released as stable after the paid term is not newly
+covered unless an express replacement grant provides it. A prerelease during
+the term does not establish coverage of a major that first becomes stable
+afterward. Surviving maintenance does not restore proprietary distribution
+permissions. Purchase and release records establish this coverage.
 
 ### 7.2. Reports and fixes
 
 The licensor will fix qualifying defects in covered stable releases reported
-within the applicable LTS window within a reasonable time considering severity,
-impact, technical complexity, and available workarounds. No fixed numerical
-response or resolution deadline is promised.
+while their major is in its active period or applicable LTS window. The licensor
+will do so within a reasonable time considering severity, impact, technical
+complexity, and available workarounds. No fixed numerical response or resolution
+deadline is promised.
+
+During LTS, a fix is issued as a compatible patch on the covered major's frozen
+final minor line. Receiving that fix does not itself extend an expired recurring
+term, restore a refunded or revoked commercial grant, or supply commercial rights
+to a successor major.
 
 Reports use the project's issue tracker, currently GitHub Issues. The project
 publishes a private channel for security reports before commercial activation;
@@ -278,10 +317,11 @@ Security fixes may be prepared privately before coordinated public release;
 private preparation does not remove the public-release obligation below.
 
 Timeliness is determined by receipt of the report through the designated issue
-tracker or private security channel within the applicable LTS window, not by
-the date the project completes validation. Later validation that the reported
-defect qualifies preserves that report's receipt date for section 7.3. A report
-that does not concern a qualifying defect creates no fix obligation.
+tracker or private security channel during the major's active period or within
+its applicable LTS window, not by the date the project completes validation.
+Later validation that the reported defect qualifies preserves that report's
+receipt date for section 7.3. A report that does not concern a qualifying defect
+creates no fix obligation.
 
 Fixes go into the public codebase and public Software releases and are communicated
 to customers with an applicable maintenance entitlement, including a surviving
@@ -302,19 +342,20 @@ development and integration work through this maintenance commitment.
 
 ### 7.3. Outstanding reports
 
-A qualifying defect in a covered stable release reported within
-its eligible LTS window remains owed until resolved, even if coverage or the
-recurring term ends first. This does not reopen general support for the line
-or accept new reports outside its maintenance coverage.
+A qualifying defect in a covered stable release reported while its major is in
+its active period or applicable LTS window remains owed until resolved, even if
+coverage or the recurring term ends first. This does not reopen general support
+for the line or accept new reports outside its maintenance coverage.
 Termination for an uncured breach is the exception: section 10 ends the affected
 purchase's contractual maintenance and fix obligations, including outstanding
 reports.
 
 ### 7.4. Replacement grants
 
-Resolution may be a fix in the existing minor line or an expressly designated
-stable release containing the fix, including where reasonable backporting is
-not possible. A designation identifies the fixed release and its major line.
+Resolution may be a fix in an existing minor line, subject during LTS to
+section 7.1's receiving-line rule, or an expressly designated stable release
+containing the fix, including where reasonable backporting is not possible. A
+designation identifies the fixed release and its major line.
 A fix within a commercially covered major line requires no additional purchase.
 If resolution requires another major line, the replacement grant covers that
 major line under the perpetual terms below.
@@ -323,7 +364,8 @@ A customer whose applicable perpetual grant remains valid receives commercial
 rights to the designated replacement major line at no additional charge and
 retains rights to the original major line. The replacement includes existing
 and future stable minor and patch releases within that major, with maintenance
-under each minor line's own shared LTS window. No existing window is reset.
+under that major's active period and subsequent shared LTS window. No existing
+LTS window is reset.
 Successive qualifying defects may require successive replacement grants. This
 does not supply rights to other, undesignated major lines.
 
@@ -348,6 +390,24 @@ fix and applicable entitlement can satisfy maintenance even if the customer
 cannot deploy that runtime. The licensor offers migration guidance; the customer
 owns rollout and infrastructure migration. This does not promise bespoke
 migration services, a codemod for every change, or indefinite runtime compatibility.
+
+### 7.6. Unsupported releases and optional upgrades
+
+Outside the applicable maintenance entitlement, the licensor may consider an
+exceptional fix on any one of these independent grounds:
+
+- The unsupported release has a sufficiently large affected user base.
+- The issue has a small fix and also affects supported releases.
+- The issue poses a major security risk to customers and Hesperia.
+
+Each ground independently permits consideration. None creates an automatic
+entitlement to a fix, restarts a support period, or extends a commercial grant.
+The outstanding qualifying reports preserved by section 7.3 remain owed.
+
+The licensor may offer a discounted new license when upgrading would better
+serve the customer. Such an offer does not replace or extinguish an owed fix,
+and does not grant the successor major without an applicable purchase or an
+express replacement grant under section 7.4.
 
 ## 8. Expiry
 
@@ -389,8 +449,9 @@ the refund. The refunded customer cannot continue distribution under that grant.
 The complete-application sharing permission in section 5 survives for independent
 recipients and subsequent recipients of authorized shared copies, including those
 who receive such copies after the refund, on the conditions stated there.
-Refunds do not remove maintenance eligibility within the applicable shared LTS
-windows or the obligation to resolve timely qualifying reports. Maintenance
+Refunds do not remove maintenance eligibility under the applicable purchased
+plan for covered stable releases during their major's active period or applicable
+LTS window, or the obligation to resolve timely qualifying reports. Maintenance
 does not restore refunded commercial distribution permissions.
 
 A formal chargeback opened with the payment provider immediately revokes the
@@ -409,8 +470,8 @@ purchase's original commercial entitlement, including replacement lines already
 commercially granted under it. For a reinstated perpetual purchase, a replacement
 line designated under section 7.4 in fulfilling surviving maintenance during
 revocation also gains commercial coverage for its designated major line from
-reinstatement onward, with each minor line's applicable shared LTS. This does
-not reset LTS dates or extend a recurring term.
+reinstatement onward, with that major's active period and applicable shared LTS
+window. This does not reset LTS dates or extend a recurring term.
 No other version coverage is added by reinstatement. An already-expired recurring
 term is not renewed by reinstatement.
 Mandatory adjustments remain subject to applicable law; ordinary cancellation
@@ -453,16 +514,21 @@ entitlements under other independently valid purchases remain unaffected.
 
 ## 11. Interpretation examples
 
-| Situation                                           | Intended result                                                                                                 |
-| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Proprietary modifications of `1.4.x` and `1.5.x`    | One perpetual grant for `1.x` covers both; an active recurring license is another option.                       |
-| Proprietary modifications of `1.x` and `2.x`        | One active recurring license or two perpetual grants, unless replacement coverage supplies one major.           |
-| Subscription expires while both lines remain in LTS | Commercial distribution stops; eligible maintenance continues.                                                  |
-| A replacement crosses a major boundary              | Perpetual customer keeps the original major and gains the designated major; minor-line LTS dates are not reset. |
-| Customer cannot deploy replacement runtime          | Fix and entitlement are provided; guidance is offered; customer owns migration.                                 |
-| Refund after lawful end-user delivery               | Affected commercial grant ends; innocent end users retain use of their copies.                                  |
-| Notice of a remediable breach                       | 90-day cure preserves otherwise-authorized activity, not the offending conduct.                                 |
-| Genuinely different SDK integrates Software         | No independent downstream development rights under the customer's grant; section 5 applies.                     |
+| Situation                                                                             | Intended result                                                                                             |
+| ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Proprietary modifications of `1.4.x` and `1.5.x`                                      | One perpetual grant for `1.x` covers both; an active recurring license is another option.                   |
+| Proprietary modifications of `1.x` and `2.x`                                          | One active recurring license or two perpetual grants, unless replacement coverage supplies one major.       |
+| A term ends while 1.4.x is current and major 1 remains active or in LTS               | Distribution stops; maintenance for covered releases and already owed reports continues.                    |
+| 1.5.x ships after expiry with a defect absent from 1.4.x, first reported after expiry | No new entitlement without an existing section 7.3 owed report or an express section 7.4 replacement grant. |
+| `2.0.0` supersedes `1.x` while `1.7.x` is its latest minor                            | `1.x` freezes at `1.7.x`; its full twelve-month LTS starts then and supplies compatible patches only.       |
+| One-time purchase of `1.x` when `2.x` becomes stable                                  | The purchase stays on `1.x` and its final minor; `2.x` requires its own coverage unless expressly granted.  |
+| Active recurring customer moves from `1.x` to stable `2.x`                            | The active term covers the move; ordinary expiry and distribution rules still apply.                        |
+| Timely qualifying report remains unresolved when the term ends                        | The fix remains owed; a discounted upgrade offer does not discharge it or renew the term.                   |
+| A replacement crosses a major boundary                                                | Perpetual customer keeps the original major and gains the designated major; major LTS dates are not reset.  |
+| Customer cannot deploy replacement runtime                                            | Fix and entitlement are provided; guidance is offered; customer owns migration.                             |
+| Refund after lawful end-user delivery                                                 | Affected commercial grant ends; innocent end users retain use of their copies.                              |
+| Notice of a remediable breach                                                         | 90-day cure preserves otherwise-authorized activity, not the offending conduct.                             |
+| Genuinely different SDK integrates Software                                           | No independent downstream development rights under the customer's grant; section 5 applies.                 |
 
 ## 12. Warranties, liability, and disputes
 
