@@ -47,6 +47,15 @@ type PatternParams<S extends string> = string extends S
     : SegmentParams<S>;
 
 /**
+ * Declare a route while retaining its authored configuration for checking.
+ * @typeParam Configuration The authored route declaration.
+ * @param configuration The authored route declaration.
+ * @returns The same configuration object.
+ */
+export function route<const Configuration extends Route.Declaration>(
+  configuration: Configuration,
+): Configuration;
+/**
  * Declare a route with readonly literal tag types for compiler inspection.
  * Server members are not included in the browser manifest.
  * @typeParam Tags The authored literal tags.
@@ -62,15 +71,33 @@ export function route<const Tags extends readonly string[]>(
  * @param configuration The authored route declaration.
  * @returns The same configuration object.
  */
-export function route<Pattern extends string = string>(
-  configuration: Route.Declaration<Pattern>,
-): Route.Declaration<Pattern>;
+export function route<
+  Pattern extends string = string,
+  Configuration extends Route.Declaration<Pattern> = Route.Declaration<Pattern>,
+>(configuration: Configuration): Configuration;
 export function route(configuration: object): object {
   return configuration;
 }
 
 /** Types associated with a route declaration. */
 export namespace Route {
+  /** Original request and selected match shared by each root-to-leaf server loader call. */
+  export interface LoadContext {
+    /** Original request shared with every matched loader. */
+    readonly request: Request;
+    /** Canonical mount path selected for this request. */
+    readonly canonicalMount: string;
+    /** Identifier of the matched page. */
+    readonly routeId: string;
+    /** Immutable parameters from the selected match. */
+    readonly params: Readonly<Record<string, string | readonly string[] | undefined>>;
+    /** Original query search string. */
+    readonly querySearch: string;
+  }
+
+  /** Request-time loader for one matched route. */
+  export type Load = (context: LoadContext) => unknown;
+
   /** Referenced client guard; the compiler validates path parameter names against the route pattern. */
   export type Guard<Pattern extends string = string> = (
     context: Omit<import("./navigation.ts").NavigationContext, "params"> & {
@@ -86,7 +113,7 @@ export namespace Route {
     /** Identifier reference to a separately client-eligible guard binding. */
     readonly guard?: Guard<Pattern>;
     /** Server-only request loader, preserved for compiler target diagnostics rather than browser execution. */
-    readonly load?: unknown;
+    readonly load?: Load;
     /** Literal response policy inspected by the compiler. */
     readonly headers?: Readonly<Record<string, string>>;
     /** Literal tag declarations inspected by the compiler; generation does not yet publish them. */
