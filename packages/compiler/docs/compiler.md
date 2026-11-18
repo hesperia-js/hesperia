@@ -114,3 +114,9 @@ arbitrary Promises valid component waits. See [asset imports](https://github.com
 and stored-Promise examples.
 
 Extracted route guards can also import finite TypeScript targets lazily. The compiler includes those modules and their dependencies in the emitted graph, including module initialization, side-effect imports, and dependencies reached through `yield` or `yield*`. They still execute at the native import timing, and shared dependencies initialize once. Browser capability checking applies to that emitted graph before publication.
+
+## Route tag projection
+
+`analyzeRouteModule` reports `tagProjection` for a statically inspected route declaration. It returns `none` when the route has no `tags` field, `literal` for an array of nonempty string literals, and `unproved` for a tag declaration it cannot establish as literal. Literal values retain their exact spelling and first-seen order; duplicate values are removed. The result and its tag array are readonly.
+
+This projection does not publish tags or run a static loader. Static generation, dynamic loader tags, and provider invalidation require separate integration.

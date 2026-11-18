@@ -333,6 +333,40 @@ test("packed creator defaults to Elysia and builds a selectable no-host applicat
 
     await run(driver, "install", "--ignore-scripts");
 
+    const help = await run(driver, "x", "create-hesperia", "--help");
+
+    expect(help).toContain("Usage: bun create hesperia <destination>");
+    expect(help).toContain("--host <elysia|none>");
+    expect(help).toContain("--no-install");
+    expect(help).toContain("--version");
+    expect(await run(driver, "x", "create-hesperia", "-h")).toBe(help);
+
+    const creatorManifest = JSON.parse(
+      await readFile(join(driver, "node_modules/create-hesperia/package.json"), "utf8"),
+    ) as { version: string };
+    const sourceManifest = JSON.parse(
+      await readFile(join(packageRoot, "packages/create-hesperia/package.json"), "utf8"),
+    ) as { version: string };
+
+    expect(creatorManifest.version).toBe(sourceManifest.version);
+    expect((await run(driver, "x", "create-hesperia", "--version")).trim()).toBe(
+      creatorManifest.version,
+    );
+
+    const mixedMetadata = await runExpectingFailure(
+      driver,
+      process.env,
+      "x",
+      "create-hesperia",
+      "unexpected",
+      "--version",
+    );
+
+    expect(mixedMetadata.exitCode).not.toBe(0);
+    expect(mixedMetadata.output).toContain("Unknown option: --version");
+    expect(await readdir(workspace)).not.toContain("unexpected");
+    expect(await readdir(driver)).not.toContain("unexpected");
+
     await run(driver, "x", "create-hesperia", application, "--no-install");
 
     const interactiveOutput = await runInteractiveCreator(driver, interactiveApplication, "\r");
