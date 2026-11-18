@@ -3,7 +3,15 @@ import { createGraph, defineContract, observeQueryProgress } from "aeolia";
 import { ApolloLink } from "@apollo/client/link";
 import { HttpLink } from "@apollo/client/link/http";
 import type { TypedDocumentNode } from "@apollo/client";
-import { parse } from "graphql";
+import {
+  buildSchema,
+  experimentalExecuteIncrementally,
+  GraphQLDeferDirective,
+  GraphQLSchema,
+  GraphQLStreamDirective,
+  isObjectType,
+  parse,
+} from "graphql";
 import { Observable } from "rxjs";
 import { createGraphQLClient } from "../../packages/graphql/src/index.ts";
 
@@ -195,6 +203,117 @@ test("incremental multipart frames reach query progress over HTTP", async () => 
       stop();
     }
   } finally {
+    graph.dispose();
+    client.stop();
+    server.stop(true);
+  }
+});
+
+test("a real deferred GraphQL resolver streams before query completion", async () => {
+  const baseSchema = buildSchema(`
+    type Query { board: Board! }
+    type Board { id: ID!, detail: String! }
+  `);
+  const schema = new GraphQLSchema({
+    ...baseSchema.toConfig(),
+    directives: [...baseSchema.getDirectives(), GraphQLDeferDirective, GraphQLStreamDirective],
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let queries = 0;
+  let details = 0;
+  const board = schema.getType("Board");
+  if (!isObjectType(board)) throw new Error("Expected the fixture Board type");
+  schema.getQueryType()!.getFields().board!.resolve = () => {
+    queries += 1;
+    return { id: "real" };
+  };
+  board.getFields().detail!.resolve = async () => {
+    details += 1;
+    await gate;
+    return "resolved";
+  };
+  const boundary = "graphql";
+  const encoder = new TextEncoder();
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const input = (await request.json()) as { query: string };
+      const result = await experimentalExecuteIncrementally({
+        schema,
+        document: parse(input.query),
+      });
+      if (!("initialResult" in result)) return Response.json(result);
+
+      const body = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          try {
+            controller.enqueue(
+              encoder.encode(
+                `--${boundary}\r\nContent-Type: application/json; charset=utf-8\r\n\r\n${JSON.stringify(result.initialResult)}\r\n--${boundary}\r\n`,
+              ),
+            );
+            for await (const next of result.subsequentResults) {
+              controller.enqueue(
+                encoder.encode(
+                  `Content-Type: application/json; charset=utf-8\r\n\r\n${JSON.stringify(next)}\r\n--${boundary}${next.hasNext ? "\r\n" : "--\r\n"}`,
+                ),
+              );
+            }
+            controller.close();
+          } catch (cause) {
+            controller.error(cause);
+          }
+        },
+      });
+      return new Response(body, {
+        headers: {
+          "content-type": `multipart/mixed; boundary="${boundary}"; incrementalSpec=v0.2`,
+        },
+      });
+    },
+  });
+  const client = createGraphQLClient({
+    link: new HttpLink({ uri: `http://127.0.0.1:${server.port}/graphql` }),
+    experimentalIncremental: { profile: "graphql17-v0.2" },
+  });
+  const query = client.query({ name: "resolver-board", document, key: () => "board" });
+  const graph = createGraph({
+    contract: defineContract({ namespace: "resolver-incremental", operations: { query } }),
+  });
+
+  try {
+    const store = graph.api.query({});
+    const observation = observeQueryProgress(store);
+    let notifyStreaming!: () => void;
+    const streaming = new Promise<void>((resolve) => {
+      notifyStreaming = resolve;
+    });
+    const stop = observation.subscribe(({ snapshot }) => {
+      if (snapshot.value?.dataState === "streaming") notifyStreaming();
+    });
+    const ready = store.ready;
+
+    try {
+      await Promise.race([
+        streaming,
+        ready.then(() => {
+          throw new Error("The query settled before the deferred resolver");
+        }),
+      ]);
+      expect(queries).toBe(1);
+      expect(details).toBe(1);
+      release();
+      expect((await ready).data).toEqual({ board: { id: "real", detail: "resolved" } });
+      expect(observation.capture().status).toBe("complete");
+    } finally {
+      stop();
+    }
+  } finally {
+    release();
     graph.dispose();
     client.stop();
     server.stop(true);
