@@ -40,7 +40,11 @@ type ContextEchoData = {
 type FullData = EchoData & ContextEchoData;
 
 type PartialData = {
-  readonly partial: { readonly ok: string; readonly broken: string | null };
+  readonly partial: {
+    readonly __typename?: "PartialResult";
+    readonly ok: string;
+    readonly broken: string | null;
+  };
 };
 
 type RootFailureData = { readonly rootFailure: string };
