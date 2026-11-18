@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile, realpath, stat } from "node:fs/promises";
+import { createServer } from "node:http";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,6 +38,7 @@ if (!isAbsolute(checkoutRoot)) throw new Error("Expected an absolute source chec
 /** @typedef {{ value: string }} FailedWriteVariables */
 /** @typedef {{ events: { sequence: number, value: string, broken: string | null, fatal: string } | null }} NativeEventData */
 /** @typedef {{ id: string }} NativeEventVariables */
+/** @typedef {{ board: { __typename?: "Board", id: string, detail: string } }} IncrementalData */
 /** @typedef {{ id: string, started: number, finally: number, emitted: number, protocolComplete: number, clientComplete: number, socketClose: number, active: boolean }} SubscriptionSnapshot */
 /** @typedef {import("@hesperia/graphql").GraphQLResult<NativeEventData>} NativeEventEnvelope */
 /** @typedef {import("hesperia/aeolia").Feed<NativeEventEnvelope>} NativeEventFeed */
@@ -584,6 +586,145 @@ async function checkNativeSubscriptionContract() {
   }
 }
 
+async function checkInstalledIncrementalQuery() {
+  const {
+    buildSchema,
+    experimentalExecuteIncrementally,
+    GraphQLDeferDirective,
+    GraphQLSchema,
+    GraphQLStreamDirective,
+    isObjectType,
+  } = graphqlLanguage;
+  const baseSchema = buildSchema(
+    "type Query { board: Board! } type Board { id: ID!, detail: String! }",
+  );
+  const schema = new GraphQLSchema({
+    ...baseSchema.toConfig(),
+    directives: [...baseSchema.getDirectives(), GraphQLDeferDirective, GraphQLStreamDirective],
+  });
+  const board = schema.getType("Board");
+  const boardField = schema.getQueryType()?.getFields().board;
+  if (!isObjectType(board) || !boardField) throw new Error("Missing incremental fixture fields");
+  let release = () => {};
+  const gate = new Promise((resolve) => {
+    release = () => resolve(undefined);
+  });
+  let queryCalls = 0;
+  let deferredCalls = 0;
+  boardField.resolve = () => {
+    queryCalls += 1;
+    return { id: "installed" };
+  };
+  board.getFields().detail.resolve = async () => {
+    deferredCalls += 1;
+    await gate;
+    return "resolved";
+  };
+  const server = createServer(async (request, response) => {
+    try {
+      let body = "";
+      request.setEncoding("utf8");
+      for await (const chunk of request) body += chunk;
+      const input = JSON.parse(body);
+      const result = await experimentalExecuteIncrementally({
+        schema,
+        document: parse(input.query),
+      });
+      if (!("initialResult" in result)) throw new Error("Expected a deferred GraphQL response");
+      response.writeHead(200, {
+        "content-type": 'multipart/mixed; boundary="graphql"; incrementalSpec=v0.2',
+      });
+      response.write(
+        `--graphql\r\nContent-Type: application/json; charset=utf-8\r\n\r\n${JSON.stringify(result.initialResult)}\r\n--graphql\r\n`,
+      );
+      for await (const next of result.subsequentResults) {
+        response.write(
+          `Content-Type: application/json; charset=utf-8\r\n\r\n${JSON.stringify(next)}\r\n--graphql${next.hasNext ? "\r\n" : "--\r\n"}`,
+        );
+      }
+      response.end();
+    } catch (error) {
+      response.destroy(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve(undefined));
+  });
+  const address = server.address();
+  if (!address || typeof address === "string")
+    throw new Error("Missing incremental server address");
+  const client = createGraphQLClient({
+    link: new HttpLink({ uri: `http://127.0.0.1:${address.port}/graphql` }),
+    experimentalIncremental: { profile: "graphql17-v0.2" },
+  });
+  const document =
+    /** @type {import("@apollo/client").TypedDocumentNode<IncrementalData, Record<string, never>>} */ (
+      parse('query Board { board { id ... @defer(label: "detail") { detail } } }')
+    );
+  const query = client.query({ name: "installed-incremental", document, key: () => "board" });
+  const contract = defineContract({ namespace: "installed-incremental", operations: { query } });
+  const graph = createGraph({ contract });
+  const imported = withAeolia(graph, contract);
+  const window = new Window({ url: "https://installed-incremental.test/" });
+  /** @type {ReturnType<typeof imported.query> | undefined} */
+  let view;
+  /** @type {{ value: () => boolean, status: () => string } | undefined} */
+  let progress;
+  let notifyStreaming = () => {};
+  const streaming = new Promise((resolve) => {
+    notifyStreaming = () => resolve(undefined);
+  });
+  const Consumer = defineComponent((owner) => {
+    const api = /** @type {typeof imported} */ (bindImported(owner, imported));
+    view = api.query({});
+    progress = view.project({
+      kind: "reduce",
+      initial: false,
+      step(previous, value) {
+        if (value.dataState === "streaming") notifyStreaming();
+        return previous || value.dataState === "streaming";
+      },
+    });
+    return text(owner, () => "installed incremental consumer");
+  });
+  const application = mount(
+    /** @type {Element} */ (/** @type {unknown} */ (window.document.body)),
+    Consumer,
+    {},
+  );
+  try {
+    if (!view || !progress) throw new Error("The installed component did not bind its query");
+    const ready = view.ready;
+    await Promise.race([
+      streaming,
+      ready.then(() => {
+        throw new Error("Installed query completed before streaming");
+      }),
+    ]);
+    const streamingBeforeCompletion = progress.value();
+    release();
+    const result = await ready;
+    return {
+      caller: "hesperia-bound",
+      streamingBeforeCompletion,
+      finalData: result.data,
+      finalStatus: progress.status(),
+      queryCalls,
+      deferredCalls,
+    };
+  } finally {
+    release();
+    application.dispose();
+    graph.dispose();
+    client.stop();
+    window.close();
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve(undefined))),
+    );
+  }
+}
+
 try {
   stopStateObservation = subscribe(stateStore.value, () => undefined);
 
@@ -658,6 +799,7 @@ try {
   assert.deepEqual(serverAfter.writes, ["installed-failed-write"]);
   assert.equal(serverAfter.resolverCalls.state, 1);
   const nativeSubscription = await checkNativeSubscriptionContract();
+  const incremental = await checkInstalledIncrementalQuery();
 
   report = {
     nodeVersion: process.versions.node,
@@ -672,6 +814,7 @@ try {
       aeolia: entrypoints["hesperia/aeolia"].root,
     },
     nativeSubscription,
+    incremental,
     partial: {
       ok: partialData.ok,
       broken: partialData.broken,
