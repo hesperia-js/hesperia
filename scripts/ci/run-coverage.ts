@@ -1160,7 +1160,11 @@ function readRunResultArtifacts(
         JSON.parse(readFileSync(join(directory, "worker-invocations.json"), "utf8")),
         runId,
         population!,
-        captureContext?.elysiaTestPaths.includes("tests/compiler/imported-api.test.ts") ?? false,
+        captureContext?.elysiaTestPaths.some(
+          (path) =>
+            path === "tests/compiler/imported-api.test.ts" ||
+            path === "tests/tooling/analyze-project.test.ts",
+        ) ?? false,
       )
     : undefined;
 
