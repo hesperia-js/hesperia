@@ -89,9 +89,7 @@ function printCleanup(cleanup: CreatorCleanup): void {
   if (cleanup.status !== "retained") return;
 
   const location =
-    cleanup.retainedPaths.length > 0
-      ? cleanup.retainedPaths.join(", ")
-      : "the generated project";
+    cleanup.retainedPaths.length > 0 ? cleanup.retainedPaths.join(", ") : "the generated project";
   const reason = cleanup.reason === undefined ? "" : ` ${cleanup.reason}`;
 
   console.error(`Creator output was retained at ${location}.${reason}`);

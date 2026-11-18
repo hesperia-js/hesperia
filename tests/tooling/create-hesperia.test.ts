@@ -4,10 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  executeCreator,
-  resolveCreator,
-} from "../../packages/create-hesperia/src/creator.ts";
+import { executeCreator, resolveCreator } from "../../packages/create-hesperia/src/creator.ts";
 
 const creator = resolve(import.meta.dir, "../../packages/create-hesperia/src/cli.ts");
 
