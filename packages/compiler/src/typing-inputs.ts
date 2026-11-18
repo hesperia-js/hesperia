@@ -2332,7 +2332,7 @@ function sealProjectTypingEvidenceUnchecked(
       "native-binding",
       "route-role-reference",
       "render-plan-preservation",
-    ]),
+    ] as const),
     checkingHasErrors,
     emissionHasErrors: [...compilation.modules.values()].some((result) =>
       result.diagnostics.some((item) => item.severity === "error"),
