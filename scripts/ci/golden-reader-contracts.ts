@@ -15,7 +15,9 @@ const REVIEWED_READERS: Readonly<Record<string, string>> = {
   "packages/compiler/src/checking.ts":
     "322d961690a2076d8555480091d460aafc2d3b2a7d0319bf18c068882f7e78ed",
   "packages/compiler/src/module-resolution.ts":
-    "1c7a7d70616640c37e7e70de5772c55f7bf0c1c204923cd07177ed589ffbf065",
+    "8036512daed7566ee44d90d47e76918ec55cab90e5d94ae89198a6cc529361c6",
+  "packages/compiler/src/native-module-resolution.ts":
+    "6ee23af90afe704baf9d749a08577aa2fc8099b7170755cfbd653fd68e57029b",
   "packages/compiler/src/scanner.ts":
     "699e3c81e01a7c51152e8b831e002105ad173bc2325b333cbc1969fed7e907ea",
   "packages/elysia/src/app-analysis.ts":

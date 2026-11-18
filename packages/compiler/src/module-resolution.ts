@@ -53,7 +53,7 @@ export interface CapturedPackageManifest {
 
 /** The package decision that led to one resolved module. */
 export interface ModuleResolutionProvenance {
-  /** Resolver condition set used for this request, including browser, import, mode, and default. */
+  /** Complete resolver condition set used for this request. */
   readonly conditions: readonly string[];
   /** Ordered package-map keys selected while descending through exports conditions/subpaths. */
   readonly conditionPath: readonly string[];
@@ -177,7 +177,7 @@ const HOST_BUILTINS = new Set([
 const MODULE_EXTENSIONS = [".ts", ".tsx", ".mts", ".js", ".mjs", ".cjs"] as const;
 
 /**
- * Resolve browser dependencies against one build-local capture set. Each observed path is immutable
+ * Resolve dependencies against one build-local capture set. Each observed path is immutable
  * after its first read; distinct dependency paths and manifests are discovered lazily.
  *
  * The active conditions are a set for package matching; package object order remains authoritative.
@@ -207,12 +207,14 @@ export class ModuleResolver {
     mode: BrowserBuildMode,
     overrides: BrowserResolutionOverrides = {},
     generatedImports: ReadonlyMap<string, string> = new Map(),
+    /** @internal Exact native policy conditions; omission retains browser resolution. */
+    conditions?: readonly string[],
   ) {
     this.#root = resolve(root);
     this.#mode = mode;
     this.#overrides = Object.freeze({ ...overrides });
     this.#generatedImports = new Map(generatedImports);
-    this.#conditions = new Set(["browser", "import", mode, "default"]);
+    this.#conditions = new Set(conditions ?? ["browser", "import", mode, "default"]);
 
     for (const [filename, source] of sources)
       this.captureSource(resolve(this.#root, filename), source);
@@ -337,7 +339,14 @@ export class ModuleResolver {
       imports.set(specifier, filename);
     }
 
-    const fork = new ModuleResolver(this.#root, new Map(), this.#mode, this.#overrides, imports);
+    const fork = new ModuleResolver(
+      this.#root,
+      new Map(),
+      this.#mode,
+      this.#overrides,
+      imports,
+      this.activeConditions,
+    );
 
     copyMap(this.#sources, fork.#sources);
 
@@ -1157,7 +1166,8 @@ function parsePackageSpecifier(
   };
 }
 
-function isHostImport(specifier: string): boolean {
+/** @internal Classify host-only spellings without granting native external admission. */
+export function isHostImport(specifier: string): boolean {
   return (
     specifier.startsWith("node:") || specifier.startsWith("bun:") || HOST_BUILTINS.has(specifier)
   );
