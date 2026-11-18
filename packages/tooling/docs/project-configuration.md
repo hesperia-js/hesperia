@@ -20,6 +20,36 @@ export default defineConfig({
 
 The defaults are `allowUnsafeHTML: false`, `allowUnsafeEmbed: false`, `mountURL: "/"`, and an empty `resolutionOverrides.browser` map. Unknown settings fail validation. Browser resolution overrides match exact import names and are checked as browser code after replacement. See [getting started](https://github.com/hesperia-js/hesperia/blob/main/docs/getting-started.md) for an override example and [environment values](https://github.com/hesperia-js/hesperia/blob/main/packages/hesperia/docs/env.md) for environment loading and exposure rules.
 
+## Production target
+
+To produce a target-bound browser/static build, declare the target in the project configuration:
+
+```json
+{
+  "target": { "version": 1, "runtime": "browser", "profile": "static" }
+}
+```
+
+The production build captures the scanned page routes, managed assets, and public files for the browser/static host. It requires at least one filesystem page. Preview uses the captured routes to return a 404 for an unmatched document request. Omitting `target` retains the existing browser build format. Development continues to use the browser development host.
+
+For a custom server, load a target-bound build with `readTargetedBuild` and pass the result to `createTargetedHost` from `@hesperia/hosting`. Use the returned browser resource's `host` to handle requests, and close the resource after its response bodies have been consumed or canceled. The older `readBuild` and `createHost` path accepts the legacy build format, not this target-bound record. The generated Elysia starter currently uses that older path, so omit `target` when using its server.
+
+Node/fetch, Bun/Elysia, Bun/Hono, and Workerd/module-worker declarations are recognized, but their target profiles are unavailable. Selecting one stops the build; the declaration does not enable server rendering.
+
+## Server data-binding supplier
+
+`serverDataBinding` records the module specifier for a server-only `dataBindingForRequest` supplier:
+
+```ts
+export default defineConfig({
+  serverDataBinding: "./src/server-data-binding.ts",
+});
+```
+
+The setting is an optional, nonempty module specifier. Omission or `undefined` selects no supplier. The configuration reader captures an own data property without invoking accessors and does not import the selected module. Empty or whitespace-only strings, embedded null characters, and non-string values are invalid.
+
+The current build does not resolve or run this supplier. A future server producer must resolve the private module, validate its named export, and invoke it for requests. Setting this option does not make server rendering or a production target available.
+
 ## Application mount and generated assets
 
 `mountURL` is the application's path prefix, such as `/dashboard`. It must be a pathname on the serving origin, without a query or fragment. The build saves its canonical value with the browser asset inventory. At the root mount, Hesperia serves its startup wrapper and generated assets under `/_hesperia/`; at `/dashboard`, that namespace is `/dashboard/_hesperia/`. Route navigation uses the same mount prefix. See [routing](https://github.com/hesperia-js/hesperia/blob/main/docs/routing.md) for the author-facing navigation behavior.
