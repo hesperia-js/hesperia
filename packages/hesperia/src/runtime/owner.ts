@@ -807,7 +807,11 @@ export class Owner {
 
     for (const child of this.children) child.commit();
 
-    for (const run of this.commits.splice(0)) run();
+    for (const run of this.commits.splice(0)) {
+      if (this.signal.aborted) return;
+
+      run();
+    }
   }
 
   /**
