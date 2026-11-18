@@ -115,3 +115,28 @@ jobs:
       - name: Run the GraphQL incremental owner with the preview SDK
         if: github.event.pull_request.number == 51
         run: bun test --timeout=45000 tests/data/graphql-incremental.integration.test.ts
+      - name: Run the installed GraphQL caller with the preview SDK
+        id: installed_graphql
+        if: github.event.pull_request.number == 51
+        env:
+          AEOLIA_PREVIEW_ARCHIVE: ${{ runner.temp }}/aeolia-data-preview/aeolia.tgz
+          HESPERIA_GRAPHQL_PACKAGE_EVIDENCE_DIR: ${{ runner.temp }}/graphql-installed-evidence
+        run: bun test --timeout=60000 tests/package/graphql-installed-runtime.test.ts
+      - name: Record installed caller evidence hashes
+        if: always() && (steps.installed_graphql.outcome == 'success' || steps.installed_graphql.outcome == 'failure')
+        env:
+          AEOLIA_PREVIEW_ARCHIVE: ${{ runner.temp }}/aeolia-data-preview/aeolia.tgz
+          HESPERIA_GRAPHQL_PACKAGE_EVIDENCE_DIR: ${{ runner.temp }}/graphql-installed-evidence
+        run: |
+          for file in "$HESPERIA_GRAPHQL_PACKAGE_EVIDENCE_DIR"/*.tgz "$HESPERIA_GRAPHQL_PACKAGE_EVIDENCE_DIR"/*.json "$AEOLIA_PREVIEW_ARCHIVE"; do
+            if [ -f "$file" ]; then sha256sum "$file"; fi
+          done
+      - name: Retain installed caller evidence
+        if: always() && (steps.installed_graphql.outcome == 'success' || steps.installed_graphql.outcome == 'failure')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "graphql-installed-preview-${{ matrix.os }}-${{ github.run_attempt }}"
+          path: |
+            ${{ runner.temp }}/graphql-installed-evidence/
+            ${{ runner.temp }}/aeolia-data-preview/aeolia.tgz
+          if-no-files-found: warn
