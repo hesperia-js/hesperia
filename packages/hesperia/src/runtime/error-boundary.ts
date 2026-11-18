@@ -1,4 +1,5 @@
 import type { Accessor } from "../client.ts";
+import { bindNativeChildSourceOwner } from "./components.ts";
 import { prepareTree, type Rendered } from "./dom.ts";
 import {
   disposeOwnerSyncPreservingFailure,
@@ -25,6 +26,15 @@ export function errorBoundary(
   parent.assertActive();
 
   const owner = new Owner(parent.context, parent, `${parent.identity}/${slot}`);
+
+  try {
+    bindNativeChildSourceOwner(owner, parent, content);
+  } catch (error) {
+    disposeOwnerSyncPreservingFailure(owner, error);
+
+    throw error;
+  }
+
   owner.executingBody = false;
   const document = owner.context.document;
   const fragment = document.createDocumentFragment();
@@ -98,7 +108,11 @@ export function errorBoundary(
       let view: ReturnType<typeof prepareTree>;
 
       try {
-        view = prepareTree(viewOwner, () => runComponentBody(() => fallback(viewOwner, readError)));
+        view = prepareTree(viewOwner, () => {
+          bindNativeChildSourceOwner(viewOwner, owner, fallback);
+
+          return runComponentBody(() => fallback(viewOwner, readError));
+        });
 
         viewOwner.executingBody = false;
       } catch (fallbackError) {
@@ -180,7 +194,11 @@ export function errorBoundary(
     let failure: { error: unknown } | undefined;
 
     try {
-      tree = prepareTree(contentOwner, () => runComponentBody(() => content(contentOwner)));
+      tree = prepareTree(contentOwner, () => {
+        bindNativeChildSourceOwner(contentOwner, owner, content);
+
+        return runComponentBody(() => content(contentOwner));
+      });
       contentOwner.executingBody = false;
     } catch (error) {
       failure = { error };
