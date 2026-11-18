@@ -1892,6 +1892,7 @@ export async function captureTypingInputEnvironment(
 
   try {
     if (!sessionOwned()) gaps.add("final-program-owner-changed");
+
     projectCompilerOptions = freezeCaptureValue(project.compilerOptions);
     programCompilerOptions = freezeCaptureValue(project.program.getCompilerOptions());
     rootFiles = Object.freeze([...project.rootFiles]);
@@ -1902,6 +1903,7 @@ export async function captureTypingInputEnvironment(
   try {
     if (sessionOwned()) {
       const filenames = await project.program.getSourceFileNames();
+
       if (!sessionOwned()) {
         gaps.add("final-program-owner-changed");
         gaps.add("final-program-inventory-abandoned");
@@ -1911,21 +1913,27 @@ export async function captureTypingInputEnvironment(
             gaps.add("final-program-owner-changed");
             break;
           }
+
           try {
             const source = await project.program.getSourceFile(filename);
+
             if (!sessionOwned()) {
               gaps.add("final-program-owner-changed");
               break;
             }
+
             const metadata = await project.program.getSourceFileMetadata(filename);
+
             if (!sessionOwned()) {
               gaps.add("final-program-owner-changed");
               break;
             }
+
             if (!source || !metadata) {
               gaps.add("final-program-source-missing");
               continue;
             }
+
             sourceFiles.push(
               Object.freeze({
                 filename,
@@ -1940,15 +1948,22 @@ export async function captureTypingInputEnvironment(
             );
           } catch {
             gaps.add(
-              sessionOwned() ? "final-program-source-unavailable" : "final-program-owner-changed",
+              sessionOwned()
+                ? "final-program-source-unavailable"
+                : "final-program-owner-changed",
             );
+
             if (!sessionOwned()) break;
           }
         }
       }
     } else gaps.add("final-program-owner-changed");
   } catch {
-    gaps.add(sessionOwned() ? "final-program-inventory-unavailable" : "final-program-owner-changed");
+    gaps.add(
+      sessionOwned()
+        ? "final-program-inventory-unavailable"
+        : "final-program-owner-changed",
+    );
   }
 
   const hostSnapshot = host.snapshot();
