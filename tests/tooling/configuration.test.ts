@@ -232,6 +232,100 @@ test("mountURL validation uses the same canonical path rules for JSON and TypeSc
   expect(invalidConfig.stderr).toContain("mountURL with percent escapes must already be canonical");
 });
 
+test("server supplier configuration preserves its module specifier without loading it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-config-supplier-"));
+
+  roots.push(root);
+
+  const jsonFile = join(root, "hesperia.config.json");
+  const specifier = "./server-data-binding.ts";
+
+  await writeFile(
+    join(root, "server-data-binding.ts"),
+    'throw new Error("supplier module evaluated");',
+  );
+
+  await writeFile(jsonFile, JSON.stringify({ serverDataBinding: specifier }));
+
+  expect((await readConfiguration(root)).serverDataBinding).toBe(specifier);
+
+  for (const invalid of [null, false, 1, {}, [], "", "   ", "./bad\0name.ts"]) {
+    await writeFile(jsonFile, JSON.stringify({ serverDataBinding: invalid }));
+
+    await expect(readConfiguration(root)).rejects.toThrow("serverDataBinding");
+  }
+
+  await rm(jsonFile);
+
+  for (const source of ["export default {};", "export default { serverDataBinding: undefined };"]) {
+    await writeFile(join(root, "hesperia.config.ts"), source);
+
+    const absent = await readTypeScriptConfiguration(root);
+
+    expect(absent.exitCode, absent.stderr).toBe(0);
+
+    expect(JSON.parse(absent.stdout)).not.toHaveProperty("serverDataBinding");
+  }
+
+  await writeFile(
+    join(root, "hesperia.config.ts"),
+    `const settings = {
+  serverDataBinding: ${JSON.stringify(specifier)},
+  get mountURL() {
+    settings.serverDataBinding = "./changed-after-capture.ts";
+    return "/dashboard";
+  },
+};
+let reflected = false;
+export default new Proxy(settings, {
+  getOwnPropertyDescriptor(object, key) {
+    if (key === "serverDataBinding") {
+      if (reflected) throw new Error("supplier reflected twice");
+      reflected = true;
+    }
+    return Reflect.getOwnPropertyDescriptor(object, key);
+  },
+  get(object, key, receiver) {
+    if (key === "serverDataBinding") throw new Error("supplier value read through proxy");
+    return Reflect.get(object, key, receiver);
+  },
+});
+`,
+  );
+
+  const configuration = await readTypeScriptConfiguration(root);
+
+  expect(configuration.exitCode, configuration.stderr).toBe(0);
+
+  expect(JSON.parse(configuration.stdout)).toMatchObject({
+    serverDataBinding: specifier,
+    mountURL: "/dashboard",
+  });
+});
+
+test("server supplier accessors reject without evaluating the authored getter", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-config-supplier-accessor-"));
+
+  roots.push(root);
+
+  for (const configuration of [
+    '{ get serverDataBinding() { throw new Error("supplier getter invoked"); } }',
+    'Object.defineProperty({}, "serverDataBinding", { get() { throw new Error("supplier getter invoked"); } })',
+  ]) {
+    await writeFile(join(root, "hesperia.config.ts"), `export default ${configuration};`);
+
+    const result = await readTypeScriptConfiguration(root);
+
+    expect(result.exitCode).not.toBe(0);
+
+    expect(result.stderr).toContain("serverDataBinding");
+
+    expect(result.stderr).toContain("must be an own data property");
+
+    expect(result.stderr).not.toContain("supplier getter invoked");
+  }
+});
+
 async function readTypeScriptConfiguration(root: string): Promise<{
   readonly exitCode: number | null;
   readonly stdout: string;
