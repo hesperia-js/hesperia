@@ -307,6 +307,7 @@ async function cancelInstalledCreatorJson(
   destination: string,
   env: Record<string, string | undefined>,
   installerStarted: Promise<void>,
+  preload?: string,
 ): Promise<{
   readonly exitCode: number;
   readonly output: string;
@@ -326,7 +327,10 @@ async function cancelInstalledCreatorJson(
   const outputClosed = new Promise<void>((resolve) => {
     finishOutput = resolve;
   });
-  const child = Bun.spawn([process.execPath, entry, destination, "--json", "--host", "none"], {
+  const command = [process.execPath];
+  if (preload) command.push("--preload", preload);
+  command.push(entry, destination, "--json", "--host", "none");
+  const child = Bun.spawn(command, {
     cwd,
     env,
     terminal: {
@@ -398,9 +402,100 @@ async function cancelInstalledCreatorJson(
   } finally {
     if (timeout) clearTimeout(timeout);
     if (!childFinished) {
-      child.kill();
-      await childExit;
+      if (process.platform === "win32") {
+        await terminateIntegratedServerProcess(child);
+      } else {
+        child.kill();
+        await childExit;
+      }
     }
+    if (child.terminal && !child.terminal.closed) child.terminal.close();
+  }
+}
+
+async function compareWrappedCreatorCancellation(
+  cwd: string,
+  wrapper: string,
+  entry: string,
+  destination: string,
+  preload: string,
+  env: Record<string, string | undefined>,
+  installerStarted: Promise<void>,
+): Promise<string> {
+  const decoder = new TextDecoder();
+  let output = "";
+  let registryReady = false;
+  let interruptBytes: number | undefined;
+  let terminalExitObserved = false;
+  let childFinished = false;
+  let finishOutput!: () => void;
+  const outputClosed = new Promise<void>((resolve) => {
+    finishOutput = resolve;
+  });
+  const child = Bun.spawn([process.execPath, wrapper, entry, destination, preload], {
+    cwd,
+    env,
+    terminal: {
+      cols: 100,
+      rows: 30,
+      data(_terminal, data) {
+        output = (output + decoder.decode(data, { stream: true })).slice(-8192);
+      },
+      exit() {
+        terminalExitObserved = true;
+        output = (output + decoder.decode()).slice(-8192);
+        finishOutput();
+      },
+    },
+  });
+  const childExit = child.exited.then((code) => {
+    childFinished = true;
+    return code;
+  });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error("Wrapped Creator cancellation timed out")), 30_000);
+  });
+
+  try {
+    await Promise.race([
+      installerStarted,
+      childExit.then((code) => {
+        throw new Error(
+          `Creator wrapper exited before the installer reached the registry: ${code}`,
+        );
+      }),
+      timedOut,
+    ]);
+    registryReady = true;
+    if (!child.terminal) throw new Error("Creator wrapper terminal was not acquired");
+    interruptBytes = child.terminal.write("\u0003");
+    const exitCode = await Promise.race([
+      Promise.all([childExit, outputClosed]).then(([code]) => code),
+      timedOut,
+    ]);
+    const observation = normalizeTerminalOutput(output);
+
+    expect(exitCode, observation).toBe(0);
+    expect(interruptBytes, observation).toBe(1);
+    expect(terminalExitObserved, observation).toBe(true);
+    return observation;
+  } catch (error) {
+    console.error(
+      `Wrapped Creator cancellation observation: ${JSON.stringify({
+        registryReady,
+        interruptBytes,
+        childFinished,
+        childSignalCode: child.signalCode,
+        terminalExitObserved,
+        terminalHandleClosed: child.terminal?.closed,
+        outputTail: normalizeTerminalOutput(output).slice(-4096),
+      })}`,
+    );
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    if (!childFinished) await terminateIntegratedServerProcess(child);
     if (child.terminal && !child.terminal.closed) child.terminal.close();
   }
 }
@@ -543,18 +638,21 @@ test("packed creator defaults to Elysia and builds a selectable no-host applicat
 
     let registryRequests = 0;
     let blockRegistry = false;
+    let activeRegistryPath = "/";
     let notifyInstallerStarted!: () => void;
-    const installerStarted = new Promise<void>((resolve) => {
+    let installerStarted = new Promise<void>((resolve) => {
       notifyInstallerStarted = resolve;
     });
     const blockedRequests: ((response: Response) => void)[] = [];
     const registry = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
-      fetch() {
+      fetch(request) {
         registryRequests++;
         if (blockRegistry) {
-          notifyInstallerStarted();
+          if (new URL(request.url).pathname.startsWith(activeRegistryPath)) {
+            notifyInstallerStarted();
+          }
           return new Promise<Response>((resolve) => blockedRequests.push(resolve));
         }
         return new Response("Not found", { status: 404 });
@@ -665,17 +763,113 @@ AbortSignal.prototype.addEventListener = function (type, ...args) {
       const cancelledApplication = join(workspace, "Cancelled JSON Frontend");
       blockRegistry = true;
       workspaceRemovable = false;
-      const cancelled = await cancelInstalledCreatorJson(
-        driver,
-        join(driver, "node_modules/create-hesperia/dist/cli.js"),
-        cancelledApplication,
-        {
-          ...process.env,
-          BUN_CONFIG_REGISTRY: registry.url.href,
-          BUN_INSTALL_CACHE_DIR: join(workspace, "json-cancel-cache"),
-        },
-        installerStarted,
-      );
+      const creatorEntry = join(driver, "node_modules/create-hesperia/dist/cli.js");
+      const comparisonFailures: unknown[] = [];
+      let signalPreload: string | undefined;
+
+      if (process.platform === "win32") {
+        activeRegistryPath = "/wrapped/";
+        signalPreload = join(workspace, "creator-signal-observation.mjs");
+        const wrapper = join(workspace, "creator-terminal-wrapper.mjs");
+        await writeFile(
+          signalPreload,
+          [
+            'import { writeSync } from "node:fs";',
+            'process.on("SIGINT", () => writeSync(2, "__CREATOR_CLI_SIGINT__\\n"));',
+          ].join("\n"),
+        );
+        await writeFile(
+          wrapper,
+          [
+            'import { writeSync } from "node:fs";',
+            "const [entry, destination, preload] = process.argv.slice(2);",
+            'process.on("SIGINT", () => writeSync(2, "__CREATOR_WRAPPER_SIGINT__\\n"));',
+            'const child = Bun.spawn([process.execPath, "--preload", preload, entry, destination, "--json", "--host", "none"], { stdin: "inherit", stdout: "pipe", stderr: "pipe" });',
+            "const stderrTask = (async () => {",
+            "  const decoder = new TextDecoder();",
+            '  let output = "";',
+            "  for await (const chunk of child.stderr) {",
+            "    const text = decoder.decode(chunk, { stream: true });",
+            "    output += text;",
+            "    writeSync(2, text);",
+            "  }",
+            "  return output + decoder.decode();",
+            "})();",
+            "const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), stderrTask]);",
+            'writeSync(1, "__CREATOR_WRAPPED_RESULT__" + JSON.stringify({ exitCode, signalCode: child.signalCode, stdout, stderr }) + "\\n");',
+          ].join("\n"),
+        );
+
+        try {
+          const wrapped = await compareWrappedCreatorCancellation(
+            driver,
+            wrapper,
+            creatorEntry,
+            join(workspace, "Wrapped Cancelled JSON Frontend"),
+            signalPreload,
+            {
+              ...process.env,
+              BUN_CONFIG_REGISTRY: new URL("wrapped/", registry.url).href,
+              BUN_INSTALL_CACHE_DIR: join(workspace, "json-wrapped-cancel-cache"),
+            },
+            installerStarted,
+          );
+          console.error("Wrapped Creator cancellation completed: " + wrapped.slice(-4096));
+          expect(wrapped).toContain("__CREATOR_WRAPPER_SIGINT__");
+          expect(wrapped).toContain("__CREATOR_CLI_SIGINT__");
+          const receiptStart = wrapped.lastIndexOf("__CREATOR_WRAPPED_RESULT__");
+          expect(receiptStart).toBeGreaterThanOrEqual(0);
+          const receipt = JSON.parse(
+            wrapped.slice(receiptStart + "__CREATOR_WRAPPED_RESULT__".length).trim(),
+          ) as { exitCode: number; signalCode: string | null; stdout: string; stderr: string };
+          const wrappedResult = parseCreatorJson(receipt.stdout);
+          expect(receipt.exitCode).toBe(130);
+          expect(receipt.signalCode).toBeNull();
+          expect(receipt.stderr).toContain("Creation cancelled.");
+          expect(wrappedResult.status).toBe("cancelled");
+          expect(wrappedResult.retirement).toBe("complete");
+        } catch (error) {
+          comparisonFailures.push(error);
+        }
+
+        installerStarted = new Promise<void>((resolve) => {
+          notifyInstallerStarted = resolve;
+        });
+        activeRegistryPath = "/direct/";
+      }
+
+      let cancelled: Awaited<ReturnType<typeof cancelInstalledCreatorJson>> | undefined;
+      try {
+        cancelled = await cancelInstalledCreatorJson(
+          driver,
+          creatorEntry,
+          cancelledApplication,
+          {
+            ...process.env,
+            BUN_CONFIG_REGISTRY:
+              process.platform === "win32"
+                ? new URL("direct/", registry.url).href
+                : registry.url.href,
+            BUN_INSTALL_CACHE_DIR: join(workspace, "json-cancel-cache"),
+          },
+          installerStarted,
+          signalPreload,
+        );
+        if (signalPreload) {
+          console.error("Direct Creator cancellation completed: " + cancelled.output.slice(-4096));
+          expect(cancelled.output).toContain("__CREATOR_CLI_SIGINT__");
+        }
+      } catch (error) {
+        comparisonFailures.push(error);
+      }
+
+      if (comparisonFailures.length) {
+        throw new AggregateError(
+          comparisonFailures,
+          "Creator terminal cancellation comparison failed.",
+        );
+      }
+      if (!cancelled) throw new Error("Direct Creator cancellation produced no result.");
       const jsonStart = cancelled.output.lastIndexOf('{"schemaVersion":');
       expect(jsonStart).toBeGreaterThanOrEqual(0);
       const cancelledResult = JSON.parse(cancelled.output.slice(jsonStart).trim()) as Record<
