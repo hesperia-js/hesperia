@@ -382,12 +382,9 @@ function createQueryProgressProjection<T, P, V>(
     stopListening();
   });
 
-  const entry: QueryProgressCohortEntry<T, P> = Object.freeze({
+  const entry = Object.freeze<QueryProgressCohortEntry<T, P>>({
     signal: owner.signal,
-    onEvent: (
-      event: QueryProgressEvent<P>,
-      context: Parameters<QueryProgressCohortEntry<T, P>["onEvent"]>[1],
-    ): void => {
+    onEvent: (event, context): void => {
       if (released || closed) {
         if (context.stop !== lastStoppedListener) {
           lastStoppedListener = context.stop;
