@@ -23,7 +23,7 @@ const REVIEWED_READERS: Readonly<Record<string, string>> = {
   "packages/elysia/src/effect-analysis.ts":
     "adf18283259f32f663d162bf6d3bcb02daf4994398c78db7b8fab22d09f193d7",
   "packages/hosting/src/read-build.ts":
-    "c8d06d2c745534ca16d2dd85b3b02547164bfa5aaa52140131b623f4ea3d83a6",
+    "14d49f1739c803241d4bb6d438763841d4c9920733efe724bf457c0096ed1d98",
   "packages/tooling/src/configuration.ts":
     "fc8d0a967a20784941dd9ff50235ce0112087dc66803497100ad7110b6b889da",
   "packages/tooling/src/css-bundling.ts":
