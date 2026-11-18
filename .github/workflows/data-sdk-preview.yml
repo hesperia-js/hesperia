@@ -1,0 +1,169 @@
+name: Data SDK preview
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+jobs:
+  preview:
+    if: github.event.pull_request.number == 40 || github.event.pull_request.number == 51
+    name: "Data SDK preview (${{ matrix.os }}, runner-only override)"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+        working-directory: hesperia
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: hesperia
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: hesperia-js/aeolia
+          ref: 9bf36bb99937b3e18eec050ad5aa6559ac27f3fb
+          path: aeolia
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.2
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.4
+      - name: Install the committed Hesperia lock
+        run: |
+          echo "Hesperia checkout: $(git rev-parse HEAD)"
+          sha256sum package.json bun.lock
+          bun install --frozen-lockfile
+      - name: Build and pack the pinned public SDK source
+        working-directory: aeolia
+        run: |
+          test "$(git rev-parse HEAD)" = "9bf36bb99937b3e18eec050ad5aa6559ac27f3fb"
+          echo "Aeolia tree: $(git rev-parse HEAD^{tree})"
+          bun install --frozen-lockfile
+          bun run build
+          mkdir -p "$RUNNER_TEMP/aeolia-data-preview"
+          bun pm pack --filename "$RUNNER_TEMP/aeolia-data-preview/aeolia.tgz"
+          sha256sum "$RUNNER_TEMP/aeolia-data-preview/aeolia.tgz"
+      - name: Install the runner-only SDK overlay
+        env:
+          AEOLIA_PREVIEW_ARCHIVE: ${{ runner.temp }}/aeolia-data-preview/aeolia.tgz
+        run: |
+          bun run - <<'JS'
+          import { resolve } from "node:path";
+          const sdk = await Bun.file("../aeolia/package.json").json();
+          if (sdk.version !== "1.0.0-alpha.1-build101320260219") throw new Error("Unexpected SDK version");
+          for (const file of ["package.json", "golden/package.json", "packages/elysia/package.json", "packages/graphql/package.json", "packages/grpc/package.json", "packages/hesperia/package.json"]) {
+            const manifest = await Bun.file(file).json();
+            let changed = false;
+            for (const field of ["dependencies", "devDependencies", "peerDependencies"]) {
+              if (manifest[field]?.aeolia !== undefined) {
+                manifest[field].aeolia = sdk.version;
+                changed = true;
+              }
+            }
+            if (file === "package.json") manifest.overrides.aeolia = "file:" + resolve(process.env.AEOLIA_PREVIEW_ARCHIVE).replaceAll("\\", "/");
+            if (!changed) throw new Error("Missing expected Aeolia dependency in " + file);
+            await Bun.write(file, JSON.stringify(manifest, null, 2) + String.fromCharCode(10));
+          }
+          JS
+          bun install --ignore-scripts
+          echo "Runner-only archive: $AEOLIA_PREVIEW_ARCHIVE"
+          echo "Runner-only preview manifests and lock:"
+          git status --short
+          sha256sum package.json bun.lock "$AEOLIA_PREVIEW_ARCHIVE"
+      - name: Verify installed SDK bytes and workspace resolutions
+        env:
+          AEOLIA_PREVIEW_ARCHIVE: ${{ runner.temp }}/aeolia-data-preview/aeolia.tgz
+        run: |
+          archive_hash="$(cd "$RUNNER_TEMP/aeolia-data-preview" && tar -xOf ./aeolia.tgz package/dist/index.js | sha256sum | cut -d' ' -f1)"
+          installed_hash="$(sha256sum node_modules/aeolia/dist/index.js | cut -d' ' -f1)"
+          test "$archive_hash" = "$installed_hash"
+          echo "Installed SDK dist/index.js SHA-256: $installed_hash"
+          node --input-type=module <<'JS'
+          import { createRequire } from "node:module";
+          import { readFileSync, realpathSync } from "node:fs";
+          import { join, resolve, sep } from "node:path";
+          import { pathToFileURL } from "node:url";
+          const root = realpathSync("node_modules/aeolia");
+          const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+          if (manifest.version !== "1.0.0-alpha.1-build101320260219") throw new Error("Wrong SDK version");
+          for (const dir of [".", "golden", "packages/elysia", "packages/graphql", "packages/grpc", "packages/hesperia"]) {
+            const require = createRequire(resolve(dir, "package.json"));
+            const entry = realpathSync(require.resolve("aeolia"));
+            if (!entry.startsWith(root + sep)) throw new Error(dir + " resolved a different SDK: " + entry);
+            console.log(dir + " -> " + entry);
+          }
+          const sdk = await import(pathToFileURL(join(root, "dist/index.js")).href);
+          for (const name of ["observeStore", "observeQueryProgress", "callQueryWithProgress"]) {
+            if (typeof sdk[name] !== "function") throw new Error("Missing SDK export " + name);
+          }
+          console.log("SDK version and runtime exports verified:", manifest.version);
+          JS
+      - name: Build Hesperia with the preview SDK
+        run: bun run build
+      - name: Typecheck Hesperia with the preview SDK
+        run: bun run typecheck
+      - name: Run Data and lifecycle tests with the preview SDK
+        run: bun test --timeout=45000 tests/data/contract-adapter.integration.test.ts tests/runtime/lifecycle.test.ts
+      - name: Run the finite GraphQL owner with the preview SDK
+        if: github.event.pull_request.number == 51
+        run: bun test --timeout=45000 tests/data/graphql.integration.test.ts
+      - name: Run the GraphQL incremental owner with the preview SDK
+        if: github.event.pull_request.number == 51
+        run: bun test --timeout=45000 tests/data/graphql-incremental.integration.test.ts
+      - name: Run the installed GraphQL caller with the preview SDK
+        id: installed_graphql
+        if: github.event.pull_request.number == 51
+        env:
+          AEOLIA_PREVIEW_ARCHIVE: ${{ runner.temp }}/aeolia-data-preview/aeolia.tgz
+          HESPERIA_GRAPHQL_PACKAGE_EVIDENCE_DIR: ${{ runner.temp }}/graphql-installed-evidence
+        run: bun test --timeout=60000 tests/package/graphql-installed-runtime.test.ts
+      - name: Record installed caller evidence hashes
+        if: always() && (steps.installed_graphql.outcome == 'success' || steps.installed_graphql.outcome == 'failure')
+        env:
+          AEOLIA_PREVIEW_ARCHIVE: ${{ runner.temp }}/aeolia-data-preview/aeolia.tgz
+          HESPERIA_GRAPHQL_PACKAGE_EVIDENCE_DIR: ${{ runner.temp }}/graphql-installed-evidence
+        run: |
+          for file in "$HESPERIA_GRAPHQL_PACKAGE_EVIDENCE_DIR"/*.tgz "$HESPERIA_GRAPHQL_PACKAGE_EVIDENCE_DIR"/*.json "$AEOLIA_PREVIEW_ARCHIVE"; do
+            if [ -f "$file" ]; then sha256sum "$file"; fi
+          done
+      - name: Retain installed caller evidence
+        if: always() && (steps.installed_graphql.outcome == 'success' || steps.installed_graphql.outcome == 'failure')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "graphql-installed-preview-${{ matrix.os }}-${{ github.run_attempt }}"
+          path: |
+            ${{ runner.temp }}/graphql-installed-evidence/
+            ${{ runner.temp }}/aeolia-data-preview/aeolia.tgz
+          if-no-files-found: warn
+      - name: Install browser engines on Linux
+        if: github.event.pull_request.number == 51 && runner.os == 'Linux'
+        timeout-minutes: 25
+        run: node node_modules/playwright/cli.js install --with-deps chromium firefox webkit
+      - name: Install browser engines on Windows
+        if: github.event.pull_request.number == 51 && runner.os == 'Windows'
+        run: node node_modules/playwright/cli.js install chromium firefox webkit
+      - name: Install the selected Chrome Headless Shell
+        if: github.event.pull_request.number == 51
+        uses: ./hesperia/.github/actions/setup-chrome
+      - name: Run the compiled GraphQL browser owner
+        id: graphql_browser
+        if: github.event.pull_request.number == 51
+        env:
+          HESPERIA_REQUIRE_CHROME_EXECUTABLE_PATH: "1"
+        run: node node_modules/@playwright/test/cli.js test tests/browser/graphql.spec.ts
+      - name: Retain failed GraphQL browser traces
+        if: always() && steps.graphql_browser.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "graphql-browser-preview-traces-${{ matrix.os }}-${{ github.run_attempt }}"
+          path: hesperia/test-results/**/trace.zip
+          if-no-files-found: ignore
+          retention-days: 7

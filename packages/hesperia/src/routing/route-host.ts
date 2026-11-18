@@ -14,7 +14,12 @@ import {
 import { child, component, prepareTree, type Rendered, type RuntimeRoot } from "../runtime/dom.ts";
 import { asyncBoundary } from "../runtime/async.ts";
 import { errorBoundary } from "../runtime/error-boundary.ts";
-import { Owner, RenderFault, reportFault } from "../runtime/owner.ts";
+import {
+  disposeOwnerSyncPreservingFailure,
+  Owner,
+  RenderFault,
+  reportFault,
+} from "../runtime/owner.ts";
 import type {
   PreparedRoute,
   PreparedRouteInstallOptions,
@@ -368,12 +373,12 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
   const disposeStaged = (candidate: Candidate, reason: unknown): void => {
     const root = candidate.staged[0];
 
-    if (root) root.dispose(reason);
+    if (root) root.disposeSync(reason);
   };
 
   const disposeInstalled = (candidate: Candidate, reason: unknown, firstLayer = 0): void => {
     if (candidate.parked && candidate.parkedRoot) {
-      candidate.parkedRoot.dispose(reason);
+      candidate.parkedRoot.disposeSync(reason);
 
       return;
     }
@@ -382,7 +387,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
 
     if (!root) return;
 
-    root.dispose(reason);
+    root.disposeSync(reason);
   };
 
   const disposeCandidate = (candidate: Candidate, reason: unknown): void => {
@@ -623,7 +628,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
             // whether the candidate can continue with the boundary's fallback.
             reportFault(pageOwner, error);
 
-            pageOwner.dispose(error);
+            pageOwner.disposeSync(error);
 
             page = undefined;
           }
@@ -909,7 +914,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
               if (!outgoing)
                 throw new RenderFault("route-invalid", "The active route has no root owner");
 
-              outgoing.dispose(new RenderFault("route-replaced", "The route was replaced"));
+              outgoing.disposeSync(new RenderFault("route-replaced", "The route was replaced"));
 
               previous.disposed = true;
 
@@ -1014,7 +1019,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
 
             if (first >= 0) disposeInstalled(candidate, reason, first);
             else if (candidate.page && !retained.has(candidate.page.owner))
-              candidate.page.owner.dispose(reason);
+              candidate.page.owner.disposeSync(reason);
 
             candidate.disposed = true;
 
@@ -1036,7 +1041,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
       };
       return prepared;
     } catch (error) {
-      staged[0]!.dispose(error);
+      disposeOwnerSyncPreservingFailure(staged[0]!, error);
 
       throw error;
     }
@@ -1056,7 +1061,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
 
       active = undefined;
 
-      hostOwner.dispose(reason);
+      hostOwner.disposeSync(reason);
     },
   };
 }

@@ -1,18 +1,31 @@
 import { afterEach, expect, test } from "bun:test";
+import { Window } from "happy-dom";
 import {
   createGraph,
   createMutation,
+  createQuery,
   createStore,
   createStream,
   defineContract,
+  observeQueryProgress,
   subscribe,
+  type QueryStore,
 } from "aeolia";
 import { testBackend } from "aeolia/testing";
 import { bindImported, markImportedApi } from "../../packages/hesperia/src/data/api.ts";
 import { reset, withAeolia } from "../../packages/hesperia/src/aeolia/index.ts";
 import { createContractApi } from "../../packages/hesperia/src/data/contract.ts";
 import { createClient } from "../../packages/hesperia/src/client.ts";
+import {
+  bootstrapDataBindingRoot,
+  createDataApplication,
+} from "../../packages/hesperia/src/data/environment.ts";
+import { registerNativeQueryProfile } from "../../packages/hesperia/src/data/native-observation.ts";
+import { createRuntimeRoot } from "../../packages/hesperia/src/runtime/dom.ts";
+import type { ValidationQueryView } from "../../packages/hesperia/src/data/types.ts";
 import { Owner, type RuntimeContext } from "../../packages/hesperia/src/runtime/owner.ts";
+import { createNativeOperationPolicy } from "../../packages/hesperia/src/validation/native-operation.ts";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 
 const owners: Owner[] = [];
 
@@ -37,6 +50,409 @@ function makeOwner(): Owner {
 
   return owner;
 }
+
+function validatedQuery(schema: StandardSchemaV1<unknown, string>) {
+  const backend = testBackend();
+  const respond = backend.respond<string, string>("adapter.validation-custody");
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const query = createQuery({
+    name: "adapter.validation-custody",
+    key: (input: string) => `validation-custody/${input}`,
+    fetch: (input: string, options) => {
+      const result = respond(input, options);
+
+      markStarted();
+
+      return result;
+    },
+  });
+  const contract = defineContract({
+    namespace: "adapter-validation-custody",
+    operations: { query },
+  });
+  const graph = createGraph({ contract });
+  const owner = makeOwner();
+  const policy = createNativeOperationPolicy((input) => ({
+    input,
+    schemas: { input: schema },
+    replace: (value) => value,
+  }));
+  const marker = markImportedApi(graph, contract, (bound) => bound, new Map([[query, policy]]));
+  const api = bindImported(owner, marker) as typeof marker;
+
+  return { api, backend, graph, owner, started };
+}
+
+test("synchronous input validation acquires the transformed query immediately", async () => {
+  let calls = 0;
+  const schema: StandardSchemaV1<unknown, string> = {
+    "~standard": {
+      version: 1,
+      vendor: "test",
+      validate: (input) => {
+        calls++;
+        return { value: String(input).toUpperCase() };
+      },
+    },
+  };
+  const { api, backend, graph, owner } = validatedQuery(schema);
+
+  try {
+    const query = api.query("abc");
+
+    expect(calls).toBe(1);
+    expect(query.key).toBeDefined();
+    expect(backend.calls).toHaveLength(1);
+    expect(backend.calls[0]?.input).toBe("ABC");
+    backend.resolve(backend.calls[0]!, "done");
+    await expect(query.ready).resolves.toBe("done");
+  } finally {
+    await owner.dispose();
+    graph.dispose();
+  }
+});
+
+test("asynchronous input validation acquires only after the transformed value is ready", async () => {
+  let finish!: (value: StandardSchemaV1.Result<string>) => void;
+  const schema: StandardSchemaV1<unknown, string> = {
+    "~standard": {
+      version: 1,
+      vendor: "test",
+      validate: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    },
+  };
+  const { api, backend, graph, owner, started } = validatedQuery(schema);
+
+  try {
+    const query = api.query("abc");
+    const ready = query.ready;
+
+    expect(query.key).toBeUndefined();
+    expect(backend.calls).toHaveLength(0);
+    finish({ value: "ABC" });
+
+    await started;
+    expect(backend.calls).toHaveLength(1);
+    expect(backend.calls[0]?.input).toBe("ABC");
+    backend.resolve(backend.calls[0]!, "done");
+    await expect(ready).resolves.toBe("done");
+  } finally {
+    await owner.dispose();
+    graph.dispose();
+  }
+});
+
+test("query cancellation joins the original asynchronous input validation", async () => {
+  let finish!: (value: StandardSchemaV1.Result<string>) => void;
+  const schema: StandardSchemaV1<unknown, string> = {
+    "~standard": {
+      version: 1,
+      vendor: "test",
+      validate: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    },
+  };
+  const { api, backend, graph, owner } = validatedQuery(schema);
+  const reason = new Error("owner cancelled");
+  const query = api.query("abc");
+  const ready = query.ready;
+  let retired = false;
+  const retirement = owner.dispose(reason).then(() => {
+    retired = true;
+  });
+
+  await expect(ready).rejects.toBe(reason);
+  await Promise.resolve();
+  expect(retired).toBe(false);
+  expect(backend.calls).toHaveLength(0);
+
+  finish({ value: "ABC" });
+  await retirement;
+  expect(backend.calls).toHaveLength(0);
+  graph.dispose();
+});
+
+test("an asynchronous validator rejection preserves its cause without dispatch", async () => {
+  const cause = new Error("validator rejected");
+  const schema: StandardSchemaV1<unknown, string> = {
+    "~standard": {
+      version: 1,
+      vendor: "test",
+      validate: () => Promise.reject(cause),
+    },
+  };
+  const { api, backend, graph, owner } = validatedQuery(schema);
+
+  try {
+    await expect(api.query("abc").ready).rejects.toBe(cause);
+    expect(backend.calls).toHaveLength(0);
+  } finally {
+    await owner.dispose();
+    graph.dispose();
+  }
+});
+
+for (const property of ["then", "constructor"] as const) {
+  test(`validation ${property} failure reports incomplete owner retirement`, async () => {
+    let finish!: (value: StandardSchemaV1.Result<string>) => void;
+    const original = new Promise<StandardSchemaV1.Result<string>>((resolve) => {
+      finish = resolve;
+    });
+    const cause = new Error("validation then access failed");
+
+    Object.defineProperty(original, property, {
+      configurable: true,
+      get: () => {
+        throw cause;
+      },
+    });
+
+    const schema: StandardSchemaV1<unknown, string> = {
+      "~standard": { version: 1, vendor: "test", validate: () => original },
+    };
+    const { api, backend, graph, owner } = validatedQuery(schema);
+    const query = api.query("abc");
+
+    await expect(query.ready).rejects.toBe(cause);
+    const retirement = await owner.dispose().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(retirement).toBeInstanceOf(AggregateError);
+
+    const failure = (retirement as AggregateError).errors[0] as {
+      readonly cause: unknown;
+      readonly incomplete: boolean;
+      readonly original: unknown;
+    };
+
+    expect(failure).toMatchObject({ cause, incomplete: true, original });
+    expect(backend.calls).toHaveLength(0);
+    owners.splice(owners.indexOf(owner), 1);
+    Reflect.deleteProperty(original, property);
+    finish({ value: "ABC" });
+    graph.dispose();
+  });
+}
+
+interface QueryProgressEnrollmentInput {
+  readonly id: string;
+  readonly value: string;
+}
+
+async function assertPreAcquisitionQueryProgressEnrollment(
+  route: "generic-policy" | "native-profile",
+): Promise<void> {
+  const window = new Window({ url: "https://query-progress-cohort.test/" });
+  const runtime = createRuntimeRoot(window.document.body as unknown as Element);
+  const inputValidation =
+    Promise.withResolvers<StandardSchemaV1.Result<QueryProgressEnrollmentInput>>();
+  const inputStarted = Promise.withResolvers<void>();
+  const authoredInput = { id: route, value: "authored" };
+  const validatedInput = { id: route, value: "validated" };
+  const input: StandardSchemaV1<QueryProgressEnrollmentInput, QueryProgressEnrollmentInput> = {
+    "~standard": {
+      version: 1,
+      vendor: "query-progress-cohort-test",
+      validate(value) {
+        expect(value).toBe(authoredInput);
+        inputStarted.resolve();
+
+        return inputValidation.promise;
+      },
+    },
+  };
+  let fetchCalls = 0;
+  let fetchedInput: QueryProgressEnrollmentInput | undefined;
+  const definition = createQuery<QueryProgressEnrollmentInput, string, string, number>({
+    name: `adapter.query-progress-cohort.${route}`,
+    key: ({ id, value }) => `query-progress-cohort/${id}/${value}`,
+    fetch: (queryInput, { reportProgress }) => {
+      fetchCalls++;
+      fetchedInput = queryInput;
+      reportProgress(1);
+      reportProgress(2);
+
+      return Promise.resolve("completed");
+    },
+  });
+  const query =
+    route === "native-profile" ? registerNativeQueryProfile(definition, { input }) : definition;
+  const contract = defineContract({
+    namespace: `adapter-query-progress-cohort-${route}`,
+    operations: { query },
+  });
+  const graph = createGraph({ contract });
+
+  try {
+    bootstrapDataBindingRoot(runtime.owner, {
+      application: createDataApplication(),
+      security: () => ({ kind: "none" }),
+    });
+
+    let view: ValidationQueryView<string, number>;
+
+    if (route === "generic-policy") {
+      const policy = createNativeOperationPolicy((rawEnvelope) => ({
+        input: rawEnvelope,
+        schemas: { input },
+        replace: (validatedEnvelope) => validatedEnvelope,
+      }));
+
+      const imported = markImportedApi(
+        graph,
+        contract,
+        (bound) => bound,
+        new Map([[definition, policy]]),
+      );
+      const api = bindImported(runtime.owner, imported) as typeof imported;
+
+      view = api.query(authoredInput);
+    } else {
+      const imported = withAeolia(graph, contract);
+      const api = bindImported(runtime.owner, imported) as typeof imported;
+
+      view = api.query(authoredInput);
+    }
+
+    const ready = view.ready;
+    const accumulated = view.project({ kind: "accumulate", max: 4 });
+    const captured: { readonly reportRevision: number; readonly value: number | undefined }[] = [];
+    let reducerSource: QueryStore<string, number> | undefined;
+    let failedReducerSource: QueryStore<string, number> | undefined;
+    const reduced = view.project({
+      kind: "reduce",
+      initial: [] as readonly number[],
+      step: (previous, value) => {
+        const source = view.source;
+
+        if (!source)
+          throw new Error(
+            "The query source must be available during synchronous progress reduction",
+          );
+
+        reducerSource = source;
+
+        const snapshot = observeQueryProgress(source).capture();
+
+        captured.push({ reportRevision: snapshot.reportRevision, value: snapshot.value });
+
+        return [...previous, value];
+      },
+    });
+    const reducerFailure = new Error("The failing progress reducer stays local");
+    const failedReducer = view.project({
+      kind: "reduce",
+      initial: [] as readonly number[],
+      step: () => {
+        const source = view.source;
+
+        if (!source)
+          throw new Error(
+            "The query source must be available during synchronous progress reduction",
+          );
+
+        failedReducerSource = source;
+
+        throw reducerFailure;
+      },
+    });
+    const isolated = view.project({ kind: "accumulate", max: 1 });
+
+    runtime.owner.commit();
+    await inputStarted.promise;
+
+    expect(fetchCalls).toBe(0);
+    expect(view.source).toBeUndefined();
+
+    inputValidation.resolve({ value: validatedInput });
+
+    await expect(ready).resolves.toBe("completed");
+
+    expect(fetchCalls).toBe(1);
+    expect(fetchedInput).toBe(validatedInput);
+    expect(accumulated.value()).toStrictEqual([1, 2]);
+    expect(reduced.value()).toStrictEqual([1, 2]);
+    expect(reduced.status()).toBe("complete");
+    expect(captured).toStrictEqual([
+      { reportRevision: 1, value: 1 },
+      { reportRevision: 2, value: 2 },
+    ]);
+    expect(failedReducer.status()).toBe("failed");
+    expect(failedReducer.error()).toBe(reducerFailure);
+    expect(reducerSource).toBe(view.source);
+    expect(failedReducerSource).toBe(view.source);
+    expect(isolated.value()).toStrictEqual([1]);
+    expect(isolated.status()).toBe("failed");
+  } finally {
+    inputValidation.resolve({ value: authoredInput });
+    await runtime.owner.dispose();
+    graph.dispose();
+    window.close();
+  }
+}
+
+test("generic async query preparation enrolls existing progress projections before raw fetch", async () => {
+  await assertPreAcquisitionQueryProgressEnrollment("generic-policy");
+});
+
+test("native-profile query preparation enrolls existing projections before bound fetch", async () => {
+  await assertPreAcquisitionQueryProgressEnrollment("native-profile");
+});
+
+test("query progress preserves reentrant reports through completion", async () => {
+  let report!: (value: number) => void;
+  let finish!: (value: string) => void;
+  const query = createQuery<string, string, string, number>({
+    name: "adapter.progress-reentrant",
+    key: (input) => `adapter-progress/${input}`,
+    fetch: (_input, options) => {
+      report = options.reportProgress;
+      return new Promise<string>((resolve) => {
+        finish = resolve;
+      });
+    },
+  });
+  const contract = defineContract({ namespace: "adapter-progress", operations: { query } });
+  const graph = createGraph({ contract });
+  const owner = makeOwner();
+
+  try {
+    const view = createContractApi(owner, graph, contract).query("one");
+    const progress = view.project({
+      kind: "reduce",
+      initial: [] as number[],
+      step: (values, value) => {
+        if (value === 1) {
+          report(2);
+          finish("done");
+        }
+
+        return [...values, value];
+      },
+    });
+    const ready = view.ready;
+
+    expect(typeof report).toBe("function");
+    report(1);
+
+    await expect(ready).resolves.toBe("done");
+    expect(progress.value()).toStrictEqual([1, 2]);
+    expect(progress.status()).toBe("complete");
+  } finally {
+    finish?.("cleanup");
+    await owner.dispose();
+    graph.dispose();
+  }
+});
 
 test("contract members become owner views and mutations stay dormant in a body", async () => {
   const backend = testBackend();
@@ -609,6 +1025,283 @@ test("reset forwards the graph promise for marker, bound, and projected APIs", a
   } finally {
     owner.dispose();
 
+    graph.dispose();
+  }
+});
+
+test("query progress projections seed late and reset for the next actual execution", async () => {
+  const runs: Array<{
+    report: (value: number) => void;
+    work: { promise: Promise<string>; resolve: (value: string) => void };
+  }> = [];
+  const query = createQuery<string, string, string, number>({
+    name: "adapter.progress-executions",
+    key: (input) => input,
+    fetch: (_input, { reportProgress }) => {
+      const work = Promise.withResolvers<string>();
+      runs.push({ report: reportProgress, work });
+
+      return work.promise;
+    },
+  });
+  const contract = defineContract({
+    namespace: "adapter-progress-executions",
+    operations: { query },
+  });
+  const graph = createGraph({ contract });
+  const owner = makeOwner();
+
+  try {
+    const view = createContractApi(owner, graph, contract).query("same");
+    const ready = view.ready;
+    const history = view.project({ kind: "accumulate", max: 8 });
+    const latest = view.project();
+    const observation = observeQueryProgress(view.source);
+    const firstExecution = observation.capture().execution;
+
+    expect(firstExecution).toBeDefined();
+    expect(runs).toHaveLength(1);
+    expect(view.value()).toBeUndefined();
+    runs[0]!.report(1);
+    runs[0]!.report(2);
+
+    const late = view.project({ kind: "accumulate", max: 8 });
+    const lateSum = view.project({
+      kind: "reduce",
+      initial: 10,
+      step: (sum, value) => sum + value,
+    });
+
+    expect(history.value()).toStrictEqual([1, 2]);
+    expect(late.value()).toStrictEqual([2]);
+    expect(lateSum.value()).toBe(12);
+    expect(latest.value()).toBe(2);
+    expect(view.value()).toBeUndefined();
+
+    runs[0]!.work.resolve("first");
+    await expect(ready).resolves.toBe("first");
+    expect(view.value()).toBe("first");
+    expect(history.status()).toBe("complete");
+
+    const refreshed = view.revalidate();
+    const secondExecution = observation.capture().execution;
+
+    expect(runs).toHaveLength(2);
+    expect(secondExecution).toBeDefined();
+    expect(secondExecution).not.toBe(firstExecution);
+    expect(history.value()).toStrictEqual([]);
+    expect(late.value()).toStrictEqual([]);
+    expect(lateSum.value()).toBe(10);
+    expect(latest.value()).toBeUndefined();
+    expect(history.status()).toBe("pending");
+    expect(view.value()).toBe("first");
+
+    runs[0]!.report(99);
+    expect(history.value()).toStrictEqual([]);
+    runs[1]!.report(3);
+    expect(history.value()).toStrictEqual([3]);
+    expect(late.value()).toStrictEqual([3]);
+    expect(lateSum.value()).toBe(13);
+    expect(latest.value()).toBe(3);
+    expect(view.value()).toBe("first");
+
+    runs[1]!.work.resolve("second");
+    await refreshed;
+    expect(view.value()).toBe("second");
+    expect(history.status()).toBe("complete");
+    expect(observation.capture().execution).toBe(secondExecution);
+  } finally {
+    for (const run of runs) run.work.resolve("cleanup");
+    await owner.dispose();
+    graph.dispose();
+  }
+});
+
+test("a failed projection keeps its own failure through the same query's failed terminal", async () => {
+  const work = Promise.withResolvers<string>();
+  const terminalFailure = new Error("query failed");
+  const reducerFailure = new Error("projection failed");
+  let report!: (value: number) => void;
+  let ordinaryFetchCalls = 0;
+  const query = createQuery<string, string, string, number>({
+    name: "adapter.progress-terminal-failure",
+    key: (input) => input,
+    fetch: (_input, options) => {
+      report = options.reportProgress;
+      return work.promise;
+    },
+  });
+  const ordinary = createQuery({
+    name: "adapter.progress-ordinary",
+    key: (input: string) => `ordinary/${input}`,
+    fetch: async (input: string) => {
+      ordinaryFetchCalls++;
+      return `ordinary ${input}`;
+    },
+  });
+  const contract = defineContract({
+    namespace: "adapter-progress-terminal",
+    operations: { query, ordinary },
+  });
+  const graph = createGraph({ contract });
+  const owner = makeOwner();
+
+  try {
+    const api = createContractApi(owner, graph, contract);
+    const view = api.query("one");
+    const finite = api.ordinary("one");
+    const ready = view.ready;
+    void ready.catch(() => undefined);
+    const observation = observeQueryProgress(view.source);
+    const execution = observation.capture().execution;
+    const history = view.project({ kind: "accumulate", max: 8 });
+    const projected = view.project({
+      kind: "reduce",
+      initial: [] as readonly number[],
+      step: (values, value) => {
+        if (value === 2) {
+          work.reject(terminalFailure);
+          throw reducerFailure;
+        }
+
+        return [...values, value];
+      },
+    });
+
+    expect(finite.key).not.toBe(view.key);
+    expect(ordinaryFetchCalls).toBe(1);
+    await expect(finite.ready).resolves.toBe("ordinary one");
+    report(1);
+    report(2);
+    await expect(ready).rejects.toBe(terminalFailure);
+
+    expect(observation.capture().execution).toBe(execution);
+    expect(observation.capture().status).toBe("failed");
+    expect(projected.value()).toStrictEqual([1]);
+    expect(projected.status()).toBe("failed");
+    expect(projected.error()).toBe(reducerFailure);
+    expect(history.value()).toStrictEqual([1, 2]);
+    expect(history.status()).toBe("failed");
+    expect(history.error()).toBe(terminalFailure);
+    expect(view.error()).toBe(terminalFailure);
+    expect(view.value()).toBeUndefined();
+    expect(finite.value()).toBe("ordinary one");
+    expect(finite.error()).toBeUndefined();
+  } finally {
+    work.resolve("cleanup");
+    await owner.dispose();
+    graph.dispose();
+  }
+});
+
+test("an interrupted reducer cannot publish over the manual query value", async () => {
+  const work = Promise.withResolvers<string>();
+  let report!: (value: number) => void;
+  const query = createQuery<string, string, string, number>({
+    name: "adapter.progress-interrupted-reducer",
+    key: (input) => input,
+    fetch: (_input, options) => {
+      report = options.reportProgress;
+      return work.promise;
+    },
+  });
+  const contract = defineContract({
+    namespace: "adapter-progress-interrupted",
+    operations: { query },
+  });
+  const graph = createGraph({ contract });
+  const owner = makeOwner();
+
+  try {
+    const view = createContractApi(owner, graph, contract).query("one");
+    const observation = observeQueryProgress(view.source);
+    const execution = observation.capture().execution;
+    const projected = view.project({
+      kind: "reduce",
+      initial: 0,
+      step: (total, value) => {
+        if (value === 2) view.set("manual");
+        return total + value;
+      },
+    });
+
+    report(1);
+    expect(projected.value()).toBe(1);
+    report(2);
+    expect(observation.capture().execution).toBe(execution);
+    expect(observation.capture().status).toBe("interrupted");
+    expect(projected.value()).toBe(1);
+    expect(projected.status()).toBe("interrupted");
+    expect(view.value()).toBe("manual");
+
+    report(3);
+    work.resolve("late");
+    await work.promise;
+    expect(projected.value()).toBe(1);
+    expect(projected.status()).toBe("interrupted");
+    expect(view.value()).toBe("manual");
+  } finally {
+    work.resolve("cleanup");
+    await owner.dispose();
+    graph.dispose();
+  }
+});
+
+test("owner disposal inside a reducer revokes only that query projection", async () => {
+  const work = Promise.withResolvers<string>();
+  let report!: (value: number) => void;
+  let reducerCalls = 0;
+  let fetchCalls = 0;
+  const query = createQuery<string, string, string, number>({
+    name: "adapter.progress-revoked-reducer",
+    key: (input) => input,
+    fetch: (_input, options) => {
+      fetchCalls++;
+      report = options.reportProgress;
+      return work.promise;
+    },
+  });
+  const contract = defineContract({ namespace: "adapter-progress-revoked", operations: { query } });
+  const graph = createGraph({ contract });
+  const owner = makeOwner();
+  const otherOwner = makeOwner();
+
+  try {
+    const view = createContractApi(owner, graph, contract).query("one");
+    const other = createContractApi(otherOwner, graph, contract).query("one");
+    const otherReady = other.ready;
+    const otherProgress = other.project({ kind: "accumulate", max: 4 });
+    const projected = view.project({
+      kind: "reduce",
+      initial: 0,
+      step: (total, value) => {
+        reducerCalls++;
+        owner.dispose();
+        return total + value;
+      },
+    });
+
+    expect(fetchCalls).toBe(1);
+    expect(observeQueryProgress(other.source).capture().execution).toBe(
+      observeQueryProgress(view.source).capture().execution,
+    );
+    report(1);
+    expect(reducerCalls).toBe(1);
+    expect(() => projected.value()).toThrow();
+    expect(() => view.value()).toThrow();
+    expect(otherProgress.value()).toStrictEqual([1]);
+
+    report(2);
+    expect(reducerCalls).toBe(1);
+    expect(otherProgress.value()).toStrictEqual([1, 2]);
+    work.resolve("completed");
+    await expect(otherReady).resolves.toBe("completed");
+    expect(other.value()).toBe("completed");
+    expect(otherProgress.status()).toBe("complete");
+  } finally {
+    work.resolve("cleanup");
+    await owner.dispose();
+    await otherOwner.dispose();
     graph.dispose();
   }
 });

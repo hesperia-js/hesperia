@@ -14,6 +14,7 @@ import {
 import type { Rendered } from "./dom.ts";
 import {
   Owner,
+  disposeOwnerSyncPreservingFailure,
   registerOwnerResourceLifecycle,
   RenderFault,
   reportFault,
@@ -61,7 +62,7 @@ function append(parent: Node, value: Rendered, owner: Owner): void {
 interface QuerySource {
   readonly graph: Graph;
   readonly identity: object;
-  store: QueryStore<unknown>;
+  store: QueryStore<unknown, unknown>;
   freshVersion: number | undefined;
   freshFailure: unknown;
   freshFailed: boolean;
@@ -112,7 +113,7 @@ function holdQueryGate(source: QuerySource, owner: Owner): () => void {
   };
 }
 
-function querySourceFor<T>(graph: Graph, store: QueryStore<T>): QuerySource {
+function querySourceFor<T>(graph: Graph, store: QueryStore<T, unknown>): QuerySource {
   const identity = store.value as unknown as object;
   let graphSources = querySourcesByGraph.get(graph);
 
@@ -128,7 +129,7 @@ function querySourceFor<T>(graph: Graph, store: QueryStore<T>): QuerySource {
     source = {
       graph,
       identity,
-      store: store as QueryStore<unknown>,
+      store: store as QueryStore<unknown, unknown>,
       freshVersion: undefined,
       freshFailure: undefined,
       freshFailed: false,
@@ -136,7 +137,7 @@ function querySourceFor<T>(graph: Graph, store: QueryStore<T>): QuerySource {
 
     graphSources.set(identity, source);
   } else {
-    source.store = store as QueryStore<unknown>;
+    source.store = store as QueryStore<unknown, unknown>;
   }
 
   return source;
@@ -339,7 +340,11 @@ export function asyncBoundary(
     return false;
   };
 
-  const markFreshQueryForOwner = <T>(consumer: Owner, graph: Graph, query: QueryStore<T>): void => {
+  const markFreshQueryForOwner = <T>(
+    consumer: Owner,
+    graph: Graph,
+    query: QueryStore<T, unknown>,
+  ): void => {
     const source = querySourceFor(graph, query);
 
     if (
@@ -354,7 +359,7 @@ export function asyncBoundary(
   const consumeQuery = <T>(
     consumer: Owner,
     graph: Graph,
-    query: QueryStore<T>,
+    query: QueryStore<T, unknown>,
     kind: QueryReadKind,
   ): void => {
     consumer.assertActive();
@@ -804,7 +809,7 @@ export function asyncBoundary(
     const replaceStaleLoading = (): void => {
       if (loadingOwner === nextLoadingOwner) loadingOwner = undefined;
 
-      if (nextLoadingOwner.state !== "destroyed") nextLoadingOwner.dispose();
+      if (nextLoadingOwner.state !== "destroyed") nextLoadingOwner.disposeSync();
 
       if (
         expectedGeneration === generation ||
@@ -883,7 +888,7 @@ export function asyncBoundary(
       if (loadingOwner === nextLoadingOwner) loadingOwner = undefined;
 
       if (nextLoadingOwner.state !== "destroyed")
-        nextLoadingOwner.dispose(current ? error : undefined);
+        nextLoadingOwner.disposeSync(current ? error : undefined);
 
       if (current && expectedGeneration === generation) throw error;
 
@@ -910,7 +915,7 @@ export function asyncBoundary(
     const oldLoadingOwner = loadingOwner;
     loadingOwner = undefined;
 
-    oldLoadingOwner?.dispose();
+    oldLoadingOwner?.disposeSync();
 
     if (
       expectedGeneration !== generation ||
@@ -1052,7 +1057,7 @@ export function asyncBoundary(
             try {
               reportFault(waitOwner, error);
             } finally {
-              waitOwner.dispose(error);
+              waitOwner.disposeSync(error);
             }
           }
 
@@ -1157,7 +1162,7 @@ export function asyncBoundary(
     contentOwner = undefined;
     contentNodes = document.createDocumentFragment();
 
-    oldContentOwner?.dispose(new RenderFault("query-reset", "Query content was invalidated"));
+    oldContentOwner?.disposeSync(new RenderFault("query-reset", "Query content was invalidated"));
 
     if (resetGeneration !== generation) return;
 
@@ -1226,7 +1231,7 @@ export function asyncBoundary(
 
       settleReady();
     } catch (error) {
-      if (nextOwner.state !== "destroyed") nextOwner.dispose(error);
+      if (nextOwner.state !== "destroyed") nextOwner.disposeSync(error);
 
       if (expectedGeneration !== generation) return;
 
@@ -1311,7 +1316,7 @@ export function asyncBoundary(
 
     return fragment;
   } catch (error) {
-    owner.dispose(error);
+    disposeOwnerSyncPreservingFailure(owner, error);
 
     throw error;
   }
@@ -1477,7 +1482,7 @@ export function awaitComponent<P>(
 
     return registerFrameworkAwaitable(result, parent, "render");
   } catch (error) {
-    child.dispose(error);
+    disposeOwnerSyncPreservingFailure(child, error);
 
     throw error;
   }
