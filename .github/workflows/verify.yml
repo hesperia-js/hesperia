@@ -473,7 +473,18 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false
+      - name: "Initialize the package job dependency cache"
+        shell: bash
+        run: |
+          cache="$RUNNER_TEMP/hesperia-graphql-package-cache"
+          if [ -e "$cache" ]; then
+            echo "Package job dependency cache already exists: $cache" >&2
+            exit 1
+          fi
+          mkdir -p "$cache"
       - uses: ./.github/actions/setup
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/hesperia-graphql-package-cache
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24.22.0
@@ -523,6 +534,7 @@ jobs:
           bun test --timeout=60000 tests/package
         env:
           HESPERIA_RELEASE_CANDIDATE_DIR: ${{ format('{0}/.hesperia/release-candidate', github.workspace) }}
+          HESPERIA_GRAPHQL_SEED_CACHE_DIR: ${{ runner.temp }}/hesperia-graphql-package-cache
   golden-plan:
     name: "Select implemented golden suites"
     runs-on: ubuntu-24.04
