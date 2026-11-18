@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { snapshotProductionTarget, type ProductionTargetV1 } from "@hesperia/hosting";
 import { canonicalizeMountURL } from "@hesperia/hosting/internal";
 import type {
   BrowserResolutionOverrides,
@@ -20,6 +21,8 @@ export interface ProjectConfigurationInput<
   readonly allowUnsafeEmbed?: boolean;
   /** Path-only default mount used by standalone serving; defaults to `/`. */
   readonly mountURL?: string;
+  /** Explicit deployment target; omission retains the current browser build. */
+  readonly target?: ProductionTargetV1;
   /** Server-only module specifier for dataBindingForRequest; absent by default. */
   readonly serverDataBinding?: string;
   /** Exact browser import replacements. */
@@ -45,6 +48,8 @@ export interface ProjectConfiguration {
   readonly allowUnsafeEmbed?: boolean;
   /** Canonical path-only default mount used by standalone serving. */
   readonly mountURL: string;
+  /** Frozen deployment declaration, when explicitly authored. */
+  readonly target?: ProductionTargetV1;
   /** Captured server supplier module specifier, without loading the module. */
   readonly serverDataBinding?: string;
   /** Exact browser import names mapped to packages or project-config-relative modules. */
@@ -98,6 +103,26 @@ export async function readConfiguration(root: string): Promise<ProjectConfigurat
   if (!isNonArrayObject(value))
     throw new TypeError("Hesperia project configuration must contain an object");
 
+  const targetDescriptor = Reflect.getOwnPropertyDescriptor(value, "target");
+  let target: ProductionTargetV1 | undefined;
+
+  if (targetDescriptor) {
+    const filename = jsonPresent ? jsonFile : tsFile;
+
+    if (!("value" in targetDescriptor))
+      throw new TypeError(
+        `Invalid production target in ${filename}: target must be an own data property`,
+      );
+
+    try {
+      target = snapshotProductionTarget(targetDescriptor.value);
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : String(cause);
+
+      throw new TypeError(`Invalid production target in ${filename}: ${reason}`, { cause });
+    }
+  }
+
   const supplierDescriptor = Reflect.getOwnPropertyDescriptor(value, "serverDataBinding");
   let serverDataBinding: string | undefined;
 
@@ -120,7 +145,7 @@ export async function readConfiguration(root: string): Promise<ProjectConfigurat
   const entries: [string, unknown][] = [];
 
   for (const name of Reflect.ownKeys(value)) {
-    if (typeof name === "string" && name !== "serverDataBinding") {
+    if (typeof name === "string" && name !== "serverDataBinding" && name !== "target") {
       const descriptor = Reflect.getOwnPropertyDescriptor(value, name);
 
       if (descriptor?.enumerable) entries.push([name, Reflect.get(value, name)]);
@@ -173,6 +198,7 @@ export async function readConfiguration(root: string): Promise<ProjectConfigurat
     allowUnsafeHTML: (value as { allowUnsafeHTML?: boolean }).allowUnsafeHTML ?? false,
     allowUnsafeEmbed: (value as { allowUnsafeEmbed?: boolean }).allowUnsafeEmbed ?? false,
     mountURL,
+    ...(target ? { target } : {}),
     ...(serverDataBinding === undefined ? {} : { serverDataBinding }),
     resolutionOverrides: { browser: Object.freeze({ ...overrides }) },
     ...(plugins ? { plugins: Object.freeze([...plugins]) } : {}),
