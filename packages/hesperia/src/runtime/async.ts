@@ -6,6 +6,7 @@ import {
   registerFrameworkAwaitable,
 } from "../data/protocol.ts";
 import {
+  bindNativeChildSourceOwner,
   instantiateComponent,
   prepareComponent,
   type CallerProps,
@@ -159,6 +160,7 @@ export function asyncBoundary(
 
   const inheritedBoundary = parent.asyncBoundary;
   const owner = new Owner(parent.context, parent, parent.identity + "/" + slot);
+  bindNativeChildSourceOwner(owner, parent, loading);
   owner.executingBody = false;
   const document = parent.context.document;
   const fragment = document.createDocumentFragment();
@@ -842,6 +844,7 @@ export function asyncBoundary(
     };
 
     try {
+      bindNativeChildSourceOwner(nextLoadingOwner, owner, loading);
       const view = runRenderContext(nextLoadingOwner, () =>
         runComponentBody(() => loading(nextLoadingOwner)),
       );
@@ -1202,6 +1205,7 @@ export function asyncBoundary(
     failed = false;
 
     try {
+      bindNativeChildSourceOwner(nextOwner, owner, content);
       const result = runRenderContext(nextOwner, () => runComponentBody(() => content(nextOwner)));
       nextOwner.executingBody = false;
 

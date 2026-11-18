@@ -77,8 +77,17 @@ export interface PropSchema {
   readonly optional: boolean;
 }
 
+/** Checked compiler metadata; authority requires its original admitted call and construction. */
+export interface CheckedResumeSourceUse {
+  readonly id: string;
+  readonly component?: string;
+  readonly kind: "state" | "derived" | "query" | "feed" | "graph";
+}
+
 /** Compiler-produced contract used before incoming values are published. */
 export interface ComponentOptions {
+  /** Exact compiler module array retained by the original registered declaration. */
+  readonly sourceUses?: readonly CheckedResumeSourceUse[];
   /** Mark a body requiring an enclosing async waiting boundary before it starts. */
   readonly async?: boolean;
   /** Diagnostic component name. */
@@ -90,11 +99,143 @@ export interface ComponentOptions {
 }
 
 interface Definition {
+  readonly declaration: Component<unknown>;
   readonly factory: ComponentFactory<unknown>;
   readonly options: ComponentOptions;
+  readonly sourceUses?: readonly CheckedResumeSourceUse[];
 }
 
 const definitions = new WeakMap<Function, Definition>();
+const actualComponentDefinitions = new WeakMap<
+  Owner,
+  {
+    readonly entry: Definition;
+    readonly view:
+      | { readonly definition: Function; readonly sourceUses: readonly CheckedResumeSourceUse[] }
+      | undefined;
+  }
+>();
+
+type ActualNativeSourceView = {
+  readonly definition: Function;
+  readonly sourceUses: readonly CheckedResumeSourceUse[];
+};
+const nativeSourceDelegations = new WeakMap<
+  Owner,
+  {
+    readonly sourceOwner: Owner;
+    readonly entry: Definition;
+    readonly view: ActualNativeSourceView;
+    readonly issuer: object;
+    readonly callbacks: Set<Function>;
+  }
+>();
+
+function bindActualComponentDefinition(owner: Owner, entry: Definition): void {
+  owner.assertActive();
+  const existing = actualComponentDefinitions.get(owner);
+
+  if (existing) {
+    if (existing.entry !== entry)
+      throw new RenderFault(
+        "resume-source",
+        "A component Owner already belongs to another registered declaration",
+      );
+
+    return;
+  }
+
+  actualComponentDefinitions.set(owner, {
+    entry,
+    view:
+      entry.sourceUses === undefined
+        ? undefined
+        : Object.freeze({ definition: entry.declaration, sourceUses: entry.sourceUses }),
+  });
+}
+
+function originalNativeSource(owner: Owner):
+  | {
+      readonly sourceOwner: Owner;
+      readonly entry: Definition;
+      readonly view: ActualNativeSourceView;
+    }
+  | undefined {
+  owner.assertActive();
+  const own = actualComponentDefinitions.get(owner);
+  if (own?.view) return { sourceOwner: owner, entry: own.entry, view: own.view };
+  const delegated = nativeSourceDelegations.get(owner);
+  if (!delegated) return undefined;
+  delegated.sourceOwner.assertActive();
+  const actual = actualComponentDefinitions.get(delegated.sourceOwner);
+  if (
+    delegated.sourceOwner.context !== owner.context ||
+    actual?.entry !== delegated.entry ||
+    actual.view !== delegated.view
+  )
+    throw new RenderFault(
+      "resume-structure",
+      "A native source delegation lost its original actual declaration",
+    );
+  return delegated;
+}
+
+/** @internal Read the creating Owner's actual registered declaration and original module array. */
+export function readActualComponentSourceUses(owner: Owner): ActualNativeSourceView | undefined {
+  owner.assertActive();
+  return originalNativeSource(owner)?.view;
+}
+
+function installNativeSourceDelegation(
+  owner: Owner,
+  source: {
+    readonly sourceOwner: Owner;
+    readonly entry: Definition;
+    readonly view: ActualNativeSourceView;
+  },
+  issuer: object,
+  callback: Function,
+): void {
+  owner.assertActive();
+  const prior = nativeSourceDelegations.get(owner);
+  if (prior) {
+    if (
+      prior.sourceOwner !== source.sourceOwner ||
+      prior.entry !== source.entry ||
+      prior.view !== source.view ||
+      prior.issuer !== issuer
+    )
+      throw new RenderFault(
+        "resume-structure",
+        "A native Owner cannot acquire another original source delegation",
+      );
+    prior.callbacks.add(callback);
+    return;
+  }
+  if (owner.context !== source.sourceOwner.context)
+    throw new RenderFault("resume-structure", "A native callback belongs to another source runtime");
+  nativeSourceDelegations.set(owner, { ...source, issuer, callbacks: new Set([callback]) });
+  owner.onRelease(() => nativeSourceDelegations.delete(owner));
+}
+
+/** @internal Native constructors delegate only their actual parent's registered original source. */
+export function bindNativeChildSourceOwner(owner: Owner, parent: Owner, callback: Function): void {
+  owner.assertActive();
+  parent.assertActive();
+  if (
+    owner.parent !== parent ||
+    owner.context !== parent.context ||
+    !parent.children.includes(owner) ||
+    typeof callback !== "function"
+  )
+    throw new RenderFault(
+      "resume-structure",
+      "A native callback has no actual constructor parent and original function",
+    );
+  const source = originalNativeSource(parent);
+  if (source) installNativeSourceDelegation(owner, source, parent, callback);
+}
+
 const dynamicValue = Symbol("hesperia.dynamic");
 const componentValueAccessors = new WeakSet<Function>();
 
@@ -132,7 +273,12 @@ export function defineComponent<P>(
     throw new RenderFault("component-direct-call", "Components must be reached through JSX");
   }) as Component<P>;
 
-  definitions.set(definition, { factory: factory as ComponentFactory<unknown>, options });
+  definitions.set(definition, {
+    declaration: definition as Component<unknown>,
+    factory: factory as ComponentFactory<unknown>,
+    options,
+    ...(options.sourceUses === undefined ? {} : { sourceUses: options.sourceUses }),
+  });
 
   return definition;
 }
@@ -224,6 +370,7 @@ export function instantiateComponent(
   awaited = false,
 ): ComponentInstance {
   const entry = definitions.get(prepared.definition)!;
+  bindActualComponentDefinition(owner, entry);
   const values = new Map(prepared.entries);
 
   const checkAsync = () => {
