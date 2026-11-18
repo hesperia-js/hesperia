@@ -635,7 +635,7 @@ test("readTargetedBuild rejects a server capture admitted by readServerBuild", a
     if (targeted.control.kind !== "server" || !("serverFiles" in targeted.inventory))
       throw new Error("Expected the targeted server wrapper");
 
-    expect(targeted.control.hosting).toBe(targeted.inventory.hosting);
+    expect(Object.is(targeted.control.hosting, targeted.inventory.hosting)).toBe(true);
     expect(await targeted.inventory.serverFiles.get("entry.mjs")!.text()).toBe(written.startup);
 
     const serverRecord = {
