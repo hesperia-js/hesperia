@@ -154,7 +154,7 @@ test("coverage runner separates Creator child fragments from ordinary parent tem
     name.startsWith(`${summary.runId}-bun-tests-creator-cli-`),
   );
 
-  expect(creatorFragments).toHaveLength(8);
+  expect(creatorFragments).toHaveLength(13);
 
   const creatorImplementationPath = resolve(repoPath, "packages/create-hesperia/src/creator.ts");
 
