@@ -7,10 +7,9 @@ import { Observable } from "rxjs";
 import { createGraphQLClient } from "../../packages/graphql/src/index.ts";
 
 type Board = { board: { id: string; detail: string } };
-const document = parse(`query Board { board { id ... @defer { detail } } }`) as TypedDocumentNode<
-  Board,
-  Record<string, never>
->;
+const document = parse(
+  `query Board { board { id ... @defer(label: "detail") { detail } } }`,
+) as TypedDocumentNode<Board, Record<string, never>>;
 
 test("incremental query reports a partial result before its real terminal result", async () => {
   const gate: { release?: () => void } = {};
@@ -29,7 +28,7 @@ test("incremental query reports a partial result before its real terminal result
         };
         observer.next({
           data: { board: { id: "one" } },
-          pending: [{ id: "detail", path: ["board"] }],
+          pending: [{ id: "detail", path: ["board"], label: "detail" }],
           hasNext: true,
         } as unknown as ApolloLink.Result);
       }),
@@ -60,7 +59,12 @@ test("incremental query reports a partial result before its real terminal result
     });
 
     try {
-      await streaming;
+      await Promise.race([
+        streaming,
+        ready.then(() => {
+          throw new Error("The query settled before reporting streaming progress");
+        }),
+      ]);
       expect(settled).toBe(false);
       expect(observation.capture().value?.dataState).toBe("streaming");
       if (!gate.release) throw new Error("The native Link did not start");
@@ -86,7 +90,7 @@ test("an incomplete incremental response does not become a successful query resu
         new Observable<ApolloLink.Result>((observer) => {
           observer.next({
             data: { board: { id: "one" } },
-            pending: [{ id: "detail", path: ["board"] }],
+            pending: [{ id: "detail", path: ["board"], label: "detail" }],
             hasNext: true,
           } as unknown as ApolloLink.Result);
           observer.complete();
