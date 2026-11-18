@@ -1304,8 +1304,17 @@ test("incremental queries preserve transport and Link failures", async () => {
 
 test("aborting an incremental HTTP execution interrupts its observed progress", async () => {
   const fixture = await startFixture();
+  let nativeSignal: AbortSignal | undefined;
+  const signalObserver = new ApolloLink((operation, forward) => {
+    if (!forward) throw new Error("The incremental signal observer has no forwarded link");
+    nativeSignal = operation.getContext().fetchOptions?.signal;
+    return forward(operation);
+  });
   const client = createGraphQLClient({
-    link: new HttpLink({ uri: fixture.graphqlUrl.replace(/\/graphql$/, "/graphql-incremental") }),
+    link: ApolloLink.from([
+      signalObserver,
+      new HttpLink({ uri: fixture.graphqlUrl.replace(/\/graphql$/, "/graphql-incremental") }),
+    ]),
     experimentalIncremental: { profile: "graphql17-v0.2" },
   });
   clients.push(client);
@@ -1330,10 +1339,14 @@ test("aborting an incremental HTTP execution interrupts its observed progress", 
   const started = await waitForGate(fixture, "incremental-streamed-details", "started");
   expect(partial?.dataState).toBe("streaming");
   expect(started).toMatchObject({ started: 1, completed: 0, pending: true });
+  if (!nativeSignal) throw new Error("The native HTTP request did not receive its abort signal");
+  expect(nativeSignal.aborted).toBe(false);
 
   const reason = new DOMException("caller interrupted incremental query", "AbortError");
   caller.abort(reason);
-  expect(await failure).toBe(reason);
+  expect(caller.signal.reason).toBe(reason);
+  expect(nativeSignal.aborted).toBe(true);
+  expect(await failure).toBe(nativeSignal.reason);
   const aborted = await waitForGate(fixture, "incremental-streamed-details", "aborted");
   expect(aborted.aborted).toBe(1);
   expect(progress.status()).toBe("interrupted");
