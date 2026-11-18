@@ -16,6 +16,15 @@ export type {
   BrowserResolutionOverrides,
   ProjectResolutionOverrides,
 } from "./module-resolution.ts";
+export { NativeModuleResolver } from "./native-module-resolution.ts";
+export type {
+  NativeExternalModule,
+  NativeExternalModuleEdge,
+  NativeModuleResolution,
+  NativeModuleResolutionRecord,
+  NativeModuleResolutionSnapshot,
+  NativeResolutionPolicy,
+} from "./native-module-resolution.ts";
 export { compileProjectModules, emitCheckingSession } from "./project-compilation.ts";
 export type { ProjectCompilation } from "./project-compilation.ts";
 export { runtimeKeyRegistry } from "./runtime-keys.ts";
