@@ -790,6 +790,59 @@ test.each(declarationCases)(
   },
 );
 
+test("readTargetedBuild retains coherent server pages and rejects crossed references", async () => {
+  const output = await filesystem.mkdtemp(join(tmpdir(), "hesperia-targeted-server-pages-"));
+
+  try {
+    const written = await targetedFixture(output, declarations[1], "empty", "old", true);
+    const record = JSON.parse(written.source);
+    const first = record.hosting.serverPages[0];
+    const resume = "export const resumed = true;\n";
+
+    record.hosting.assets.push({
+      path: "/assets/resume.mjs",
+      sha256: digest(resume),
+      contentType: "text/javascript",
+    });
+    record.hosting.serverPages.push({
+      ...first,
+      routeId: "details",
+      serverEntry: { ...first.serverEntry },
+      projection: { ...first.projection, activation: "hydrate" },
+      resumeAsset: "/assets/resume.mjs",
+    });
+
+    await filesystem.writeFile(join(written.assetsRoot, "resume.mjs"), resume);
+    await filesystem.writeFile(written.recordPath, JSON.stringify(record, null, 2) + "\n");
+
+    const captured = await readTargetedBuild(output);
+
+    if (captured.control.kind !== "server" || !("serverFiles" in captured.inventory))
+      throw new Error("Expected the targeted server wrapper");
+
+    expect(captured.control.hosting.serverPages).toEqual(record.hosting.serverPages);
+    expect(await captured.inventory.files.get("/assets/resume.mjs")!.text()).toBe(resume);
+    expect(await captured.inventory.serverFiles.get("entry.mjs")!.text()).toBe(written.startup);
+    expect(Object.hasOwn(globalThis, "q2ReaderEntryEvaluated")).toBe(false);
+
+    const crossedEntry = structuredClone(record);
+    crossedEntry.hosting.serverPages[1].serverEntry.exportName = "otherEntry";
+    const missingResume = structuredClone(record);
+    missingResume.hosting.serverPages[1].resumeAsset = "/assets/missing-resume.mjs";
+
+    for (const [invalid, message] of [
+      [crossedEntry, "server pages must share one build identity and dispatcher entry"],
+      [missingResume, "resumeAsset is missing from the managed inventory"],
+    ] as const) {
+      await filesystem.writeFile(written.recordPath, JSON.stringify(invalid, null, 2) + "\n");
+
+      await expect(readTargetedBuild(output)).rejects.toThrow(message);
+    }
+  } finally {
+    await filesystem.rm(output, { recursive: true, force: true });
+  }
+});
+
 test("readTargetedBuild rejects a server capture admitted by readServerBuild", async () => {
   const output = await filesystem.mkdtemp(join(tmpdir(), "hesperia-targeted-read-server-v2-"));
 
