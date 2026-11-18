@@ -2,9 +2,11 @@ import { Fault, signal } from "aeolia";
 import type {
   AccumulatePolicy,
   ProjectionPolicy,
+  QueryProgressCohortEntry,
   QueryProgressEvent,
   QueryProgressObservation,
   QueryProgressSnapshot,
+  QueryStore,
   ReducePolicy,
 } from "aeolia";
 import type { Owner } from "../runtime/owner.ts";
@@ -76,6 +78,31 @@ interface ProgressState<T> {
   readonly status: QueryProgressStatus;
 }
 
+interface QueryProgressProjectionRuntime<T, P> {
+  readonly view: QueryProgressView<unknown>;
+  readonly entry: QueryProgressCohortEntry<T, P>;
+  process(event: QueryProgressEvent<P>, source: QueryProgressObservation<P>): void;
+  installStop(stop: () => void): void;
+}
+
+/** Prepare a projection before its acquired query starts reporting. @internal */
+export function prepareQueryProgressView<T, P>(
+  owner: Owner,
+  policy: PreparedQueryProgressPolicy<P, any>,
+  guard: () => void,
+  beforeEvent: (store: QueryStore<T, P>, observation: QueryProgressObservation<P>) => void,
+): { readonly view: QueryProgressView<unknown>; readonly entry: QueryProgressCohortEntry<T, P> } {
+  const runtime = createQueryProgressProjection(owner, policy, guard, beforeEvent);
+
+  return Object.freeze({ view: runtime.view, entry: runtime.entry });
+}
+
+/** Adapt Aeolia's ordered query-progress observation to a Hesperia projection. @internal */
+export function createQueryProgressView<P>(
+  owner: Owner,
+  source: QueryProgressObservation<P>,
+): QueryProgressView<P | undefined>;
+
 /** Adapt latest progress with an explicit policy slot and read guard. @internal */
 export function createQueryProgressView<P>(
   owner: Owner,
@@ -106,6 +133,20 @@ export function createQueryProgressView<P, V = unknown>(
   policy?: PreparedQueryProgressPolicy<P, V>,
   guard: () => void = () => owner.assertReadable(),
 ): QueryProgressView<unknown> {
+  const runtime = createQueryProgressProjection<unknown, P, V>(owner, policy, guard, () => {});
+  const unsubscribe = source.subscribe((event) => runtime.process(event, source));
+
+  runtime.installStop(unsubscribe);
+
+  return runtime.view;
+}
+
+function createQueryProgressProjection<T, P, V>(
+  owner: Owner,
+  policy: PreparedQueryProgressPolicy<P, V>,
+  guard: () => void,
+  beforeEvent: (store: QueryStore<T, P>, observation: QueryProgressObservation<P>) => void,
+): QueryProgressProjectionRuntime<T, P> {
   owner.assertActive();
 
   const initialValue = (): unknown =>
@@ -123,7 +164,45 @@ export function createQueryProgressView<P, V = unknown>(
     error: undefined,
   };
   let released = false;
-  let stop: (() => void) | undefined;
+  let closed = false;
+  let currentObservation: QueryProgressObservation<P> | undefined;
+  let listenerStop: (() => void) | undefined;
+  let lastStoppedListener: (() => void) | undefined;
+
+  const stopListening = (): void => {
+    const stop = listenerStop;
+    listenerStop = undefined;
+
+    if (!stop) return;
+
+    lastStoppedListener = stop;
+    stop();
+  };
+
+  const installListener = (source: QueryProgressObservation<P>, stop: () => void): void => {
+    if (currentObservation === source && listenerStop === stop) return;
+
+    const previous = listenerStop;
+    currentObservation = source;
+    listenerStop = stop;
+
+    if (previous) {
+      lastStoppedListener = previous;
+      previous();
+    }
+  };
+
+  const failEntry = (error: unknown): never => {
+    closed = true;
+
+    try {
+      stopListening();
+    } catch (cleanup) {
+      throw new AggregateError([error, cleanup], "Query progress cohort cleanup failed");
+    }
+
+    throw error;
+  };
 
   const resetProjection = (snapshot: QueryProgressSnapshot<P>, reportRevision: number): void => {
     execution = snapshot.execution;
@@ -149,10 +228,13 @@ export function createQueryProgressView<P, V = unknown>(
     currentProjection: ProjectionState,
     snapshot: QueryProgressSnapshot<P>,
     before: QueryProgressSnapshot<P>,
+    source: QueryProgressObservation<P>,
   ): QueryProgressSnapshot<P> | undefined => {
     if (
       released ||
+      closed ||
       projection !== currentProjection ||
+      currentObservation !== source ||
       execution !== snapshot.execution ||
       currentProjection.reportRevision !== snapshot.reportRevision
     )
@@ -176,7 +258,10 @@ export function createQueryProgressView<P, V = unknown>(
     return latest;
   };
 
-  const fold = (snapshot: QueryProgressSnapshot<P>): QueryProgressSnapshot<P> | undefined => {
+  const fold = (
+    snapshot: QueryProgressSnapshot<P>,
+    source: QueryProgressObservation<P>,
+  ): QueryProgressSnapshot<P> | undefined => {
     const currentProjection = projection;
 
     if (!snapshot.hasValue || currentProjection.failed) return snapshot;
@@ -187,7 +272,9 @@ export function createQueryProgressView<P, V = unknown>(
     let before: QueryProgressSnapshot<P> | undefined;
 
     if (policy?.kind === "reduce") {
-      if (released) return undefined;
+      if (released || closed) return undefined;
+
+      guard();
 
       try {
         before = source.capture();
@@ -202,27 +289,38 @@ export function createQueryProgressView<P, V = unknown>(
         return undefined;
     }
 
-    try {
-      if (policy === undefined) nextValue = snapshot.value;
-      else if (policy.kind === "reduce")
+    if (policy?.kind === "reduce") {
+      try {
         nextValue = policy.step(currentProjection.value as V, snapshot.value as P);
-      else {
-        const current = currentProjection.value as readonly P[];
-
-        if (current.length >= policy.max) {
-          if ((policy.onOverflow ?? "fail") === "fail")
-            throw new Error("Aeolia projection accumulation exceeded max");
-
-          nextValue = [...current.slice(1), snapshot.value as P];
-        } else nextValue = [...current, snapshot.value as P];
+      } catch (error) {
+        failure = error;
+        failed = true;
       }
-    } catch (error) {
-      failure = error;
-      failed = true;
+
+      if (released || closed) return undefined;
+
+      guard();
+    } else {
+      try {
+        if (policy === undefined) nextValue = snapshot.value;
+        else {
+          const current = currentProjection.value as readonly P[];
+
+          if (current.length >= policy.max) {
+            if ((policy.onOverflow ?? "fail") === "fail")
+              throw new Error("Aeolia projection accumulation exceeded max");
+
+            nextValue = [...current.slice(1), snapshot.value as P];
+          } else nextValue = [...current, snapshot.value as P];
+        }
+      } catch (error) {
+        failure = error;
+        failed = true;
+      }
     }
 
     if (policy?.kind === "reduce") {
-      const latest = captureAfterReducer(currentProjection, snapshot, before!);
+      const latest = captureAfterReducer(currentProjection, snapshot, before!, source);
 
       if (latest === undefined) return undefined;
 
@@ -242,14 +340,17 @@ export function createQueryProgressView<P, V = unknown>(
     return snapshot;
   };
 
-  const onProgress = (event: QueryProgressEvent<P>): void => {
-    if (released) return;
+  const process = (event: QueryProgressEvent<P>, source: QueryProgressObservation<P>): void => {
+    if (released || closed) return;
+
+    currentObservation = source;
+    guard();
 
     const { snapshot } = event;
 
     if (event.kind === "current") {
       resetProjection(snapshot, snapshot.reportRevision);
-      const latest = snapshot.hasValue ? fold(snapshot) : snapshot;
+      const latest = snapshot.hasValue ? fold(snapshot, source) : snapshot;
 
       if (latest !== undefined) publish(latest);
 
@@ -271,21 +372,53 @@ export function createQueryProgressView<P, V = unknown>(
     if (snapshot.reportRevision <= projection.reportRevision) return;
 
     projection.reportRevision = snapshot.reportRevision;
-    const latest = fold(snapshot);
+    const latest = fold(snapshot, source);
 
     if (latest !== undefined) publish(latest);
   };
 
   owner.onRelease(() => {
     released = true;
-    stop?.();
-    stop = undefined;
+    stopListening();
   });
 
-  const unsubscribe = source.subscribe(onProgress);
+  const entry: QueryProgressCohortEntry<T, P> = Object.freeze({
+    signal: owner.signal,
+    onEvent: (event, context): void => {
+      if (released || closed) {
+        if (context.stop !== lastStoppedListener) {
+          lastStoppedListener = context.stop;
+          context.stop();
+        }
 
-  if (released) unsubscribe();
-  else stop = unsubscribe;
+        return;
+      }
+
+      try {
+        installListener(context.observation, context.stop);
+        beforeEvent(context.store, context.observation);
+      } catch (error) {
+        failEntry(error);
+      }
+
+      try {
+        process(event, context.observation);
+      } catch (error) {
+        failEntry(error);
+      }
+    },
+  });
+
+  const installStop = (stop: () => void): void => {
+    if (released || closed) {
+      lastStoppedListener = stop;
+      stop();
+
+      return;
+    }
+
+    listenerStop = stop;
+  };
 
   const read = <T>(select: (value: ProgressState<unknown>) => T): T => {
     guard();
@@ -293,12 +426,14 @@ export function createQueryProgressView<P, V = unknown>(
     return select(state.get());
   };
 
-  return Object.freeze({
+  const view = Object.freeze({
     value: () => read((current) => current.value),
     pending: () => read((current) => current.pending),
     error: () => read((current) => current.error),
     status: () => read((current) => current.status),
   });
+
+  return { view, entry, process, installStop };
 }
 
 /** Validate once and capture policy fields before an execution or acquisition. @internal */

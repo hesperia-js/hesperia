@@ -171,9 +171,9 @@ export type ValidationQueryView<T, P = never> = Omit<
   QueryView<T, P>,
   "key" | "source" | "status" | "ready"
 > & {
-  /** The native key after input preparation and acquisition succeed. */
+  /** The real query key once the native caller exists; absent before then or after preparation fails. */
   readonly key: QueryStore<T, P>["key"] | undefined;
-  /** The native store, absent until acquisition succeeds. */
+  /** The real native caller's store once issued; absent before then or after preparation fails. */
   readonly source: QueryStore<T, P> | undefined;
   /** Input validation is Hesperia-owned; acquired states retain native statuses. */
   readonly status: Accessor<StoreStatus | "validating">;

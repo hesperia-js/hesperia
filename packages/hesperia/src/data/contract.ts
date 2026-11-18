@@ -1,4 +1,4 @@
-import { signal, subscribe } from "aeolia";
+import { callQueryWithProgress, signal, subscribe } from "aeolia";
 import type {
   Contract,
   ContractApi,
@@ -183,7 +183,7 @@ function buildTree(
             owner,
             graph,
             (track) => prepareProfileQueryInput(args[0], registration.profile, track),
-            (prepared) =>
+            (prepared, _receipt, progressCohort, acquisitionCurrent) =>
               acquireProfileQuery(
                 owner,
                 graph,
@@ -192,6 +192,8 @@ function buildTree(
                 prepared.input,
                 options,
                 environment,
+                progressCohort,
+                acquisitionCurrent,
               ),
             options?.abortSignal,
             assertAuthority,
@@ -205,12 +207,19 @@ function buildTree(
             owner,
             graph,
             (track) => policy.prepare(args[0], track),
-            (input) => {
-              const preparedArgs: [input?: unknown, options?: StoreOptions<unknown>] = [
+            (input, _receipt, progressCohort, acquisitionCurrent) => {
+              const preparedArgs: [input: unknown, options: StoreOptions<unknown> | undefined] = [
                 input,
                 args[1],
               ];
-              const store = queryMember(...preparedArgs);
+              const store = progressCohort.length
+                ? callQueryWithProgress(
+                    queryMember,
+                    preparedArgs,
+                    progressCohort,
+                    acquisitionCurrent,
+                  )
+                : queryMember(...preparedArgs);
 
               return {
                 store,

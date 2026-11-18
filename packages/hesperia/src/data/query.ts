@@ -1,5 +1,13 @@
 import { observeQueryProgress, signal, subscribe } from "aeolia";
-import type { AccumulatePolicy, Graph, QueryStore, ReducePolicy, StoreStatus } from "aeolia";
+import type {
+  AccumulatePolicy,
+  Graph,
+  QueryProgressCohortEntry,
+  QueryProgressObservation,
+  QueryStore,
+  ReducePolicy,
+  StoreStatus,
+} from "aeolia";
 import {
   currentRenderOwner,
   isExecutingCleanup,
@@ -13,6 +21,7 @@ import { consumeFrameworkQueryFresh, registerFrameworkAwaitable } from "./protoc
 import type { Accessor, ObservationIssue, QueryView, ValidationQueryView } from "./types.ts";
 import {
   createQueryProgressView,
+  prepareQueryProgressView,
   prepareQueryProgressPolicy,
   type PreparedQueryProgressPolicy,
   type QueryProgressProject,
@@ -201,7 +210,12 @@ export function createPreparedQueryView<Input, T, P = never>(
   owner: Owner,
   graph: Graph,
   prepare: (track: ValidationWorkTracker) => Input | PromiseLike<Input>,
-  acquire: (input: Input, preparationReceipt: object) => PreparedQuerySource<T, P>,
+  acquire: (
+    input: Input,
+    preparationReceipt: object,
+    progressEntries: readonly QueryProgressCohortEntry<T, P>[],
+    assertCurrent: () => void,
+  ) => PreparedQuerySource<T, P>,
   callerSignal?: AbortSignal,
   assertAuthority: () => void = () => {},
 ): ValidationQueryView<T, P> {
@@ -215,6 +229,19 @@ export function createPreparedQueryView<Input, T, P = never>(
   let finished = false;
   let readyRequested = false;
   let stopReset: (() => void) | undefined;
+  let cohortStore: QueryStore<T, P> | undefined;
+  let cohortObservation: QueryProgressObservation<P> | undefined;
+  let returnedSource: PreparedQuerySource<T, P> | undefined;
+
+  const createPendingProjection = (policy: PreparedQueryProgressPolicy<P, any>) => ({
+    policy,
+    current: signal<QueryProgressView<unknown> | undefined>(undefined),
+    localFailure: signal<{ readonly error: unknown } | undefined>(undefined),
+    preparedView: undefined as QueryProgressView<unknown> | undefined,
+    joined: false,
+    released: false,
+  });
+  const progressProjections: ReturnType<typeof createPendingProjection>[] = [];
 
   const preparationReceipt = Object.freeze(Object.create(null)) as object;
   let resolvePreparation!: () => void;
@@ -293,6 +320,36 @@ export function createPreparedQueryView<Input, T, P = never>(
       throw new RenderFault("query-reset-expired", "Query input validation was superseded");
   };
 
+  const assertProgressStoreCurrent = (store: QueryStore<T, P>): void => {
+    if (finished && acquired === undefined) throw failure;
+    if (cohortStore !== undefined && cohortStore !== store)
+      throw new TypeError("Query progress cohort changed its source Store");
+
+    if (acquired !== undefined) {
+      owner.assertReadable();
+      assertAuthority();
+      if (acquired.store !== store)
+        throw new TypeError("Query progress cohort did not retain its acquired Store");
+      acquired.assertCurrent?.();
+      return;
+    }
+
+    assertCurrent();
+    if (returnedSource !== undefined && returnedSource.store !== store)
+      throw new TypeError("Query progress cohort did not retain its acquired Store");
+    returnedSource?.assertCurrent?.();
+  };
+
+  const assertProgressReadCurrent = (): void => {
+    const store = cohortStore ?? acquired?.store ?? returnedSource?.store;
+    if (store === undefined) {
+      assertCurrent();
+      return;
+    }
+    assertProgressStoreCurrent(store);
+    (cohortObservation ?? observeQueryProgress(store)).capture();
+  };
+
   const accept = (input: Input): void => {
     if (finished) return;
 
@@ -307,7 +364,36 @@ export function createPreparedQueryView<Input, T, P = never>(
 
     try {
       assertCurrent();
-      source = acquire(input, preparationReceipt);
+      const progressEntries: QueryProgressCohortEntry<T, P>[] = [];
+      for (const projection of progressProjections.slice()) {
+        if (projection.released) continue;
+        assertCurrent();
+        const prepared = prepareQueryProgressView<T, P>(
+          owner,
+          projection.policy,
+          assertProgressReadCurrent,
+          (store, observation) => {
+            if (finished && acquired === undefined) throw failure;
+            if (cohortStore !== undefined && cohortStore !== store)
+              throw new TypeError("Query progress cohort changed its source Store");
+            if (returnedSource !== undefined && returnedSource.store !== store)
+              throw new TypeError("Query progress cohort did not retain its acquired Store");
+            cohortStore = store;
+            cohortObservation = observation;
+            assertProgressStoreCurrent(store);
+            projection.current.set(projection.preparedView);
+            assertProgressStoreCurrent(store);
+          },
+        );
+        projection.preparedView = prepared.view;
+        projection.joined = true;
+        progressEntries.push(prepared.entry);
+        assertCurrent();
+      }
+      source = acquire(input, preparationReceipt, Object.freeze(progressEntries), assertCurrent);
+      returnedSource = source;
+      if (cohortStore !== undefined && source.store !== cohortStore)
+        throw new TypeError("Query progress cohort did not retain its acquired Store");
 
       if (finished) {
         release();
@@ -379,27 +465,35 @@ export function createPreparedQueryView<Input, T, P = never>(
     const selected = prepareQueryProgressPolicy<P, any>(policy);
     const initial =
       selected === undefined ? undefined : selected.kind === "reduce" ? selected.initial : [];
-    const create = (source: PreparedQuerySource<T, P>): QueryProgressView<unknown> =>
-      createQueryProgressForStore(owner, graph, source.store, selected, source.assertCurrent);
+    const store = cohortStore ?? acquired?.store ?? returnedSource?.store;
+    if (store !== undefined && !(finished && acquired === undefined)) {
+      assertProgressStoreCurrent(store);
+      return createQueryProgressForStore(owner, graph, store, selected, () =>
+        assertProgressStoreCurrent(store),
+      );
+    }
 
-    if (acquired) return create(acquired);
-
-    const current = signal<QueryProgressView<unknown> | undefined>(undefined);
-    const localFailure = signal<{ readonly error: unknown } | undefined>(undefined);
-    let released = false;
-
+    const projection = createPendingProjection(selected);
+    progressProjections.push(projection);
     owner.onRelease(() => {
-      released = true;
+      projection.released = true;
     });
 
     void acquisition.then(
       (source) => {
-        if (released) return;
-
+        if (projection.released || projection.joined) return;
         try {
-          current.set(create(source));
+          const current = createQueryProgressForStore(
+            owner,
+            graph,
+            source.store,
+            selected,
+            source.assertCurrent,
+          );
+          source.assertCurrent?.();
+          projection.current.set(current);
         } catch (error) {
-          localFailure.set({ error });
+          projection.localFailure.set({ error });
         }
       },
       () => undefined,
@@ -407,26 +501,27 @@ export function createPreparedQueryView<Input, T, P = never>(
 
     return Object.freeze({
       value: () => {
-        readPhase();
-        const progress = current.get();
-        return progress === undefined ? initial : progress.value();
+        const currentPhase = readPhase();
+        const current = projection.current.get();
+        if (currentPhase === "failed" || projection.localFailure.get() !== undefined)
+          return initial;
+        return current === undefined ? initial : current.value();
       },
       pending: () => {
         const currentPhase = readPhase();
-        if (currentPhase === "validating") return true;
-        if (currentPhase === "failed" || localFailure.get() !== undefined) return false;
-        return current.get()?.pending() ?? true;
+        if (currentPhase === "failed" || projection.localFailure.get() !== undefined) return false;
+        return projection.current.get()?.pending() ?? true;
       },
       error: () => {
         if (readPhase() === "failed") return failure;
-        const local = localFailure.get();
-        return local === undefined ? current.get()?.error() : local.error;
+        const local = projection.localFailure.get();
+        return local === undefined ? projection.current.get()?.error() : local.error;
       },
       status: () => {
         const currentPhase = readPhase();
-        if (currentPhase === "failed" || localFailure.get() !== undefined) return "failed";
-        if (currentPhase === "validating") return "pending";
-        return current.get()?.status() ?? "pending";
+        if (currentPhase === "failed" || projection.localFailure.get() !== undefined)
+          return "failed";
+        return projection.current.get()?.status() ?? "pending";
       },
     });
   }) as QueryProgressProject<P>;
@@ -502,7 +597,9 @@ export function createPreparedQueryView<Input, T, P = never>(
       assertAuthority();
       acquired?.assertCurrent?.();
 
-      return acquired?.store.key;
+      const store = acquired?.store ?? (finished ? undefined : cohortStore);
+      if (store !== undefined && acquired === undefined) assertProgressStoreCurrent(store);
+      return store?.key;
     },
 
     get source() {
@@ -510,7 +607,9 @@ export function createPreparedQueryView<Input, T, P = never>(
       assertAuthority();
       acquired?.assertCurrent?.();
 
-      return acquired?.store;
+      const store = acquired?.store ?? (finished ? undefined : cohortStore);
+      if (store !== undefined && acquired === undefined) assertProgressStoreCurrent(store);
+      return store;
     },
 
     get ready() {
