@@ -13,7 +13,12 @@ import {
   writeBuild,
 } from "../../packages/tooling/src/project.ts";
 import { devProject, previewProject } from "../../packages/tooling/src/server.ts";
-import { createHost, readBuild } from "../../packages/hosting/src/index.ts";
+import {
+  createHost,
+  createTargetedHost,
+  readBuild,
+  readTargetedBuild,
+} from "../../packages/hosting/src/index.ts";
 import { startProcessDiagnostics } from "./fixtures/drivers/process-diagnostics.mjs";
 import { captureRejection } from "./capture-rejection.ts";
 import { linkFrameworkPackages, unlinkFrameworkPackages } from "./fixture-dependencies.ts";
@@ -41,6 +46,111 @@ afterEach(async () => {
 });
 
 describe("project commands", () => {
+  test.each([false, true])(
+    "writes and serves a browser/static capture (public files: %s)",
+    async (withPublic) => {
+      const root = await temporaryProject();
+
+      await mkdir(join(root, "src/routes/items/[id]"), { recursive: true });
+      if (withPublic) await mkdir(join(root, "public"));
+      await writeFile(
+        join(root, "hesperia.config.json"),
+        JSON.stringify({
+          mountURL: "/dashboard",
+          target: { version: 1, runtime: "browser", profile: "static" },
+        }),
+      );
+      await writeFile(
+        join(root, "app.tsx"),
+        "export default function App() { return <html><head></head><body></body></html>; }",
+      );
+      await writeFile(
+        join(root, "src/routes/+page.tsx"),
+        "export default function Page() { return <main>Home</main>; }",
+      );
+      await writeFile(
+        join(root, "src/routes/items/[id]/+page.tsx"),
+        "export default function Page() { return <main>Item</main>; }",
+      );
+      if (withPublic) await writeFile(join(root, "public/robots.txt"), "fixture public bytes");
+
+      const built = await prepareBuild(root);
+      const output = await writeBuild(root, built);
+      const recordPath = join(output, "hesperia-build.json");
+      const published = await readFile(recordPath);
+      const captured = await readTargetedBuild(output);
+
+      expect(captured.control).toMatchObject({
+        version: 3,
+        kind: "browser",
+        productionTarget: { descriptorIdentity: "hesperia.target/browser-static/1" },
+        hosting: { version: withPublic ? 2 : 1 },
+      });
+
+      const resource = await createTargetedHost(captured);
+
+      if (resource.kind !== "browser") throw new Error("Expected a browser host");
+
+      try {
+        const page = resource.host.handle(
+          new Request("http://localhost/dashboard/items/42", { headers: { accept: "text/html" } }),
+        );
+        await page?.text();
+
+        const missing = resource.host.handle(
+          new Request("http://localhost/dashboard/missing", { headers: { accept: "text/html" } }),
+        );
+        await missing?.text();
+
+        const publicFile = withPublic
+          ? resource.host.handle(new Request("http://localhost/dashboard/robots.txt"))
+          : undefined;
+        const publicText = await publicFile?.text();
+
+        expect(page?.status).toBe(200);
+        expect(missing?.status).toBe(404);
+        if (withPublic) expect(publicText).toBe("fixture public bytes");
+      } finally {
+        await resource.close();
+      }
+
+      const preview = await previewProject(root, 0);
+
+      try {
+        const response = await fetch(new URL("/dashboard/items/42", preview.url), {
+          headers: { accept: "text/html" },
+        });
+
+        expect(response.status).toBe(200);
+        await response.text();
+      } finally {
+        await preview.close();
+      }
+
+      const damaged = { ...built, files: new Map(built.files) };
+      damaged.files.set(
+        "/assets/static-routing.json",
+        new Blob(["changed"], { type: "application/json" }),
+      );
+
+      await expect(writeBuild(root, damaged)).rejects.toThrow();
+      expect(await readFile(recordPath)).toEqual(published);
+      expect((await readTargetedBuild(output)).control).toEqual(captured.control);
+
+      if (withPublic) {
+        await writeFile(
+          join(root, "hesperia.config.json"),
+          JSON.stringify({ target: { version: 1, runtime: "bun", profile: "hono" } }),
+        );
+
+        expect(await captureRejection(prepareBuild(root))).toMatchObject({
+          message: expect.stringContaining("production-target-unavailable"),
+        });
+        expect(await readFile(recordPath)).toEqual(published);
+      }
+    },
+  );
+
   test("checks imported modules outside src in the same source snapshot", async () => {
     const root = await temporaryProject();
 
