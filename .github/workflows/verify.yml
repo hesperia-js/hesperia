@@ -580,13 +580,15 @@ jobs:
       - uses: ./.github/actions/setup
       - name: "Build packages"
         run: "bun run build"
-      - name: "Install all browser engines"
+      - name: "Install the selected browser engine and system dependencies"
         if: "runner.os == 'Linux'"
         timeout-minutes: 15
-        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
-      - name: "Install all browser engines"
+        run: 'node node_modules/playwright/cli.js install --with-deps "$GOLDEN_PROJECT"'
+        shell: bash
+      - name: "Install the selected browser engine"
         if: "runner.os == 'Windows'"
-        run: "node node_modules/playwright/cli.js install chromium firefox webkit"
+        run: 'node node_modules/playwright/cli.js install "$GOLDEN_PROJECT"'
+        shell: bash
       - uses: ./.github/actions/setup-chrome
       - name: "Run every selected suite in the matrix browser"
         run: |
