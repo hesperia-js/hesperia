@@ -573,6 +573,72 @@ test("a targeted browser capture serves its recorded route and drains on close",
   }
 });
 
+test("a targeted browser host snapshots and serves an explicit preview mount", async () => {
+  const root = await filesystem.mkdtemp(join(tmpdir(), "hesperia-targeted-preview-"));
+
+  try {
+    const written = await targetedFixture(root, declarations[0], "binary");
+    await writeTargetedRouting(written, browserRouting(["/raw/caf%C3%A9%20%23%25.bin"]));
+
+    const captured = await readTargetedBuild(root);
+    const selection = { mountURL: "/preview/café/" };
+    const pending = createTargetedHost(captured, selection);
+
+    selection.mountURL = "/changed";
+
+    const resource = await pending;
+
+    if (resource.kind !== "browser") throw new Error("Expected the browser host");
+
+    expect(resource.host.mount.pathname).toBe("/preview/caf%C3%A9");
+
+    const page = resource.host.handle(
+      new Request("http://localhost/preview/caf%C3%A9", { headers: { accept: "text/html" } }),
+    );
+
+    expect(page?.status).toBe(200);
+    await page!.text();
+
+    const publicFile = resource.host.handle(
+      new Request("http://localhost/preview/caf%C3%A9/raw/caf%C3%A9%20%23%25.bin"),
+    );
+
+    expect(publicFile?.status).toBe(200);
+    expect(new Uint8Array(await publicFile!.arrayBuffer())).toEqual(written.binary);
+    expect(resource.host.handle(new Request("http://localhost/dashboard"))).toBeUndefined();
+    expect(resource.host.handle(new Request("http://localhost/changed"))).toBeUndefined();
+    await resource.close();
+  } finally {
+    await filesystem.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a targeted browser host rejects invalid mount selections without invoking accessors", async () => {
+  const root = await filesystem.mkdtemp(join(tmpdir(), "hesperia-targeted-selection-"));
+
+  try {
+    const written = await targetedFixture(root);
+    await writeTargetedRouting(written, browserRouting());
+
+    const captured = await readTargetedBuild(root);
+    let accessed = false;
+    const accessor = {
+      get mountURL() {
+        accessed = true;
+
+        return "/preview";
+      },
+    };
+    const unexpected = { mountURL: "/preview", other: true };
+
+    await expect(createTargetedHost(captured, accessor)).rejects.toBeInstanceOf(TypeError);
+    expect(accessed).toBe(false);
+    await expect(createTargetedHost(captured, unexpected)).rejects.toBeInstanceOf(TypeError);
+  } finally {
+    await filesystem.rm(root, { recursive: true, force: true });
+  }
+});
+
 test.each([
   { policy: { ...browserRouting(), mountURL: "/other" }, error: "mount does not match" },
   { policy: { ...browserRouting(), mountURL: "/dashboard/" }, error: "must already be canonical" },
