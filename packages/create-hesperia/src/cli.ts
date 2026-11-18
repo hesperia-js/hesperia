@@ -131,8 +131,6 @@ async function main(): Promise<void> {
       run: async ({ args }) => {
         if (args.destination === undefined) throw new Error(usage);
 
-        if (args._.length > 0) throw new Error(`Expected one destination.\n${usage}`);
-
         const hostIntegration =
           (args.host as HostIntegration | undefined) ??
           (await chooseHostIntegration(controller.signal));
