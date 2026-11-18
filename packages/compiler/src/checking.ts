@@ -15,6 +15,13 @@ import { analyzeBrowserCapabilities } from "./capability-analysis.ts";
 import { ModuleResolver, type ProjectResolutionOverrides } from "./module-resolution.ts";
 import { CheckingInputSnapshot, type CapturedCheckingInput } from "./checking-inputs.ts";
 import { normalizeFilename as normalize } from "./utils.ts";
+import {
+  TypingHostObservationRecorder,
+  captureTypingInputEnvironment,
+  hasRequestedTypingEvidenceCapture,
+  registerCheckingSessionTypingState,
+  type TypingInputEnvironment,
+} from "./typing-inputs.ts";
 export type { CapturedCheckingInput } from "./checking-inputs.ts";
 
 /** A virtual module in one immutable TypeScript checking snapshot. */
@@ -156,7 +163,15 @@ async function createCheckingSession(
   modules: readonly VirtualModule[],
   options: ProjectCheckingOptions,
 ): Promise<CheckingSession> {
+  const captureTypingEvidence = hasRequestedTypingEvidenceCapture(options);
+
+  if (captureTypingEvidence) {
+    modules = snapshotVirtualModules(modules);
+    options = snapshotProjectCheckingOptions(options);
+  }
+
   const root = resolve(options.root ?? process.cwd());
+  const typingHost = captureTypingEvidence ? new TypingHostObservationRecorder() : undefined;
   const files = new Map<string, string>();
   const resolution =
     options.resolution ??
@@ -337,19 +352,49 @@ async function createCheckingSession(
     cwd: root,
     fs: {
       readFile(filename) {
-        return checkingInputs.readFile(filename);
+        const source = checkingInputs.readFile(filename);
+        typingHost?.record({
+          operation: "readFile",
+          path: filename,
+          result: source === undefined ? undefined : source === null ? null : source,
+        });
+        return source;
       },
 
       fileExists(filename) {
-        return checkingInputs.fileExists(filename);
+        const exists = checkingInputs.fileExists(filename);
+        typingHost?.record({ operation: "fileExists", path: filename, result: exists });
+        return exists;
       },
 
-      ...(virtualDirectories.size > 0
+      ...(typingHost
         ? {
-            directoryExists: (filename: string) =>
-              virtualDirectories.has(normalize(filename)) || undefined,
+            directoryExists(filename: string) {
+              const exists = virtualDirectories.has(normalize(filename)) || undefined;
+              typingHost.record({ operation: "directoryExists", path: filename, result: exists });
+              return exists;
+            },
+
+            getAccessibleEntries(filename: string) {
+              typingHost.record({
+                operation: "getAccessibleEntries",
+                path: filename,
+                result: undefined,
+              });
+              return undefined;
+            },
+
+            realpath(filename: string) {
+              typingHost.record({ operation: "realpath", path: filename, result: undefined });
+              return undefined;
+            },
           }
-        : {}),
+        : virtualDirectories.size > 0
+          ? {
+              directoryExists: (filename: string) =>
+                virtualDirectories.has(normalize(filename)) || undefined,
+            }
+          : {}),
     },
   });
   const overridePaths = options.resolutionOverrides
@@ -450,8 +495,10 @@ async function createCheckingSession(
 
   let snapshot: Awaited<ReturnType<API["updateSnapshot"]>> | undefined;
   let disposal: Promise<void> | undefined;
+  let disposed = false;
 
   const dispose = (): Promise<void> => {
+    disposed = true;
     disposal ??= (async () => {
       try {
         await snapshot?.dispose();
@@ -469,6 +516,7 @@ async function createCheckingSession(
       (await snapshot.getDefaultProjectForFile(modulePaths[0] ?? configPath));
 
     if (!project) {
+      typingHost?.close();
       const diagnostic: CompilerDiagnostic = {
         code: "HES-TS-PROJECT",
         severity: "error",
@@ -508,6 +556,7 @@ async function createCheckingSession(
         project,
         modulePaths[index]!,
         view.mapOffset,
+        captureTypingEvidence,
       );
       const operationCalls = await analyzeOperationCalls(modulePaths[index]!, view.mapOffset);
 
@@ -594,7 +643,7 @@ async function createCheckingSession(
       checkingInputs: checkingInputs.captured,
       snapshotId: snapshot.id,
     };
-    return {
+    const session: CheckingSession = {
       analyses,
       project,
       views,
@@ -604,7 +653,50 @@ async function createCheckingSession(
         return { ...result, checkingInputs: checkingInputs.captured };
       },
     };
+
+    if (typingHost) {
+      let typingEnvironment: TypingInputEnvironment | undefined;
+      try {
+        typingEnvironment = await captureTypingInputEnvironment(
+          project,
+          snapshot.id,
+          root,
+          options,
+          result.checkingInputs,
+          typingHost,
+          options.resolution ? ["external-resolution-object-unowned"] : [],
+        );
+      } catch {
+        typingHost.close();
+      }
+      typingHost.close();
+      if (typingEnvironment)
+        registerCheckingSessionTypingState(session, {
+          project,
+          environment: typingEnvironment,
+          snapshotId: snapshot.id,
+          modules,
+          views: modules.flatMap((module, index) => {
+            const view = views.get(normalize(modulePaths[index]!));
+            return view
+              ? [
+                  {
+                    filename: module.filename,
+                    nativeFilename: modulePaths[index]!,
+                    source: view.source,
+                  },
+                ]
+              : [];
+          }),
+          analyses,
+          baseline: result,
+          host: typingHost,
+          isDisposed: () => disposed,
+        });
+    }
+    return session;
   } catch (error) {
+    typingHost?.close();
     try {
       await dispose();
     } catch (cleanupError) {
@@ -619,6 +711,30 @@ async function createCheckingSession(
 
 function virtualPath(filename: string, root: string): string {
   return isAbsolute(filename) ? resolve(filename) : resolve(root, filename);
+}
+
+function snapshotVirtualModules(modules: readonly VirtualModule[]): readonly VirtualModule[] {
+  return Object.freeze(modules.map(({ filename, source }) => Object.freeze({ filename, source })));
+}
+
+function snapshotProjectCheckingOptions(options: ProjectCheckingOptions): ProjectCheckingOptions {
+  return Object.freeze({
+    ...options,
+    ...(options.additionalFiles
+      ? { additionalFiles: snapshotVirtualModules(options.additionalFiles) }
+      : {}),
+    ...(options.checkingRoots
+      ? { checkingRoots: snapshotVirtualModules(options.checkingRoots) }
+      : {}),
+    ...(options.resolutionOverrides
+      ? {
+          resolutionOverrides: Object.freeze({
+            browser: Object.freeze({ ...options.resolutionOverrides.browser }),
+          }),
+        }
+      : {}),
+    ...(options.styledEntryIds ? { styledEntryIds: new Set(options.styledEntryIds) } : {}),
+  });
 }
 
 function checkingImportReplacements(

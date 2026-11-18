@@ -6,7 +6,49 @@ import { tmpdir } from "node:os";
 import { CheckingInputSnapshot } from "../../packages/compiler/src/checking-inputs.ts";
 import { checkProjectModules, openCheckingProject } from "../../packages/compiler/src/checking.ts";
 import { ModuleResolver } from "../../packages/compiler/src/module-resolution.ts";
+import { emitCheckingSession } from "../../packages/compiler/src/project-compilation.ts";
+import {
+  issuedProjectTypingEvidence,
+  requestTypingEvidenceCapture,
+} from "../../packages/compiler/src/typing-inputs.ts";
 import { normalizeFilename } from "../../packages/compiler/src/utils.ts";
+
+test("typing evidence stays tied to the actual emitted module population", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-typing-evidence-"));
+  const filename = join(root, "entry.ts");
+  let session: Awaited<ReturnType<typeof openCheckingProject>> | undefined;
+
+  try {
+    session = await openCheckingProject(
+      [{ filename, source: "export const value: string = 'ok';" }],
+      requestTypingEvidenceCapture({ root }),
+    );
+    const compilation = emitCheckingSession(session);
+    const evidence = issuedProjectTypingEvidence(compilation);
+    const emitted = compilation.modules.get(filename);
+
+    expect(compilation.checking.diagnostics.filter((item) => item.severity === "error")).toEqual(
+      [],
+    );
+    expect(emitted).toBeDefined();
+    expect(evidence).toMatchObject({
+      state: "sealed",
+      captureState: "incomplete-capture",
+      projectPolicy: { kind: "unproved" },
+      modulePopulationJoin: true,
+    });
+    expect(evidence?.modules.map((item) => item.filename)).toEqual([filename]);
+
+    const modules = compilation.modules as Map<string, NonNullable<typeof emitted>>;
+    modules.delete(filename);
+    expect(issuedProjectTypingEvidence(compilation)).toBeUndefined();
+    modules.set(filename, emitted!);
+    expect(issuedProjectTypingEvidence(compilation)).toBe(evidence);
+  } finally {
+    await session?.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("captures a declaration on first existence check and keeps its bytes immutable", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-checking-inputs-"));
