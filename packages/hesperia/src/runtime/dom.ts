@@ -169,7 +169,6 @@ interface OwnedObjectURL {
   readonly release: () => void;
 }
 
-/** Values accepted by the synchronous browser renderer. */
 /** Native server output consumed by the host's HTML serializer. */
 export type ServerNode =
   | {
@@ -183,6 +182,7 @@ export type ServerNode =
   | { readonly type: "text"; readonly key?: string; readonly value: string }
   | { readonly type: "child"; readonly key?: string; readonly children: readonly Rendered[] };
 
+/** Values produced by browser and server rendering. */
 export type Rendered =
   | Node
   | ServerNode

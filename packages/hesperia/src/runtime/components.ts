@@ -1,4 +1,4 @@
-import { signal, type WritableSignal } from "aeolia";
+import { captureReactiveConstruction, signal, type WritableSignal } from "aeolia";
 import type { Accessor } from "../client.ts";
 import {
   attachComponentBinding,
@@ -14,6 +14,7 @@ import {
   RenderFault,
   runComponentBody,
   runRenderContext,
+  type RuntimeContext,
 } from "./owner.ts";
 
 declare const componentPropsType: unique symbol;
@@ -86,6 +87,8 @@ export interface CheckedResumeSourceUse {
 
 /** Compiler-produced contract used before incoming values are published. */
 export interface ComponentOptions {
+  /** Module-qualified identity emitted for a resumable component. */
+  readonly id?: string;
   /** Exact compiler module array retained by the original registered declaration. */
   readonly sourceUses?: readonly CheckedResumeSourceUse[];
   /** Mark a body requiring an enclosing async waiting boundary before it starts. */
@@ -346,7 +349,77 @@ interface PropSlot {
   readonly schema: PropSchema;
   readonly bodyValue: unknown;
   readonly source?: WritableSignal<unknown>;
+  readonly construction?: ReturnType<typeof captureReactiveConstruction<unknown>>;
   current: unknown;
+  present: boolean;
+}
+
+const mappedProps = new WeakMap<object, MappedPropsOrigin>();
+const ownerMappings = new WeakMap<Owner, Set<ComponentMapping>>();
+const nextMappingIds = new WeakMap<RuntimeContext, number>();
+
+/** @internal Actual native mapped State issued by the original component mapper. */
+export interface MappedInputTransferSource {
+  readonly owner: Owner;
+  readonly ownerId: string;
+  readonly mappingId: string;
+  readonly componentId: string | undefined;
+  readonly slotName: string;
+  readonly source: WritableSignal<unknown>;
+  readonly construction: ReturnType<typeof captureReactiveConstruction<unknown>>;
+}
+const mappedInputTransferSources = new WeakMap<object, MappedInputTransferSource>();
+
+/** @internal Resolve only a native source registered by the actual mapped slot constructor. */
+export function readMappedInputTransferSource(
+  readable: unknown,
+): MappedInputTransferSource | undefined {
+  if ((typeof readable !== "object" || readable === null) && typeof readable !== "function") return;
+
+  const receipt = mappedInputTransferSources.get(readable);
+
+  if (receipt?.source !== readable) return;
+
+  receipt.owner.assertActive();
+
+  return receipt;
+}
+
+export interface MappedSlotTransfer {
+  readonly name: string;
+  readonly schema: PropSchema;
+  readonly value: unknown;
+}
+
+export interface MappedPropsTransfer {
+  readonly type: "container" | "slot";
+  readonly slots: readonly MappedSlotTransfer[];
+}
+
+interface ComponentMapping {
+  readonly id: string;
+  readonly owner: Owner;
+  readonly componentId: string | undefined;
+  readonly props: Record<string, unknown>;
+  readonly slots: ReadonlyMap<string, PropSlot>;
+}
+
+/** @internal Provenance is registered by the mapper, never inferred from a captured value. */
+export interface MappedPropsOrigin {
+  readonly mapping: ComponentMapping;
+  readonly projection: "container" | "slot";
+  readonly slotName?: string;
+}
+/** @internal One complete response-qualified input mapping. */
+export interface RouteMappedInputsRecordV1 {
+  readonly id: string;
+  readonly responseIdentity: string;
+  readonly componentId: string;
+  readonly ownerId: string;
+  readonly transfer: {
+    readonly type: "container";
+    readonly slots: readonly (MappedSlotTransfer & { readonly present: boolean })[];
+  };
 }
 
 /** One executed component instance and its plain body-props mapping. */
@@ -361,6 +434,208 @@ export interface ComponentInstance {
   readonly props: Record<string, unknown>;
   /** Recorded slots backing the public props container. */
   readonly slots: ReadonlyMap<string, PropSlot>;
+}
+
+function mapComponentInputs(
+  owner: Owner,
+  schemas: ReadonlyMap<string, PropSchema>,
+  values: ReadonlyMap<string, unknown>,
+  componentId?: string,
+): { readonly props: Record<string, unknown>; readonly slots: ReadonlyMap<string, PropSlot> } {
+  const props: Record<string, unknown> = {};
+  const slots = new Map<string, PropSlot>();
+
+  for (const [name, schema] of schemas) {
+    if (name === "key") continue;
+
+    const value = values.get(name);
+    let bodyValue: unknown;
+    let source: WritableSignal<unknown> | undefined;
+    const slot: PropSlot = {
+      schema,
+      current: value,
+      bodyValue: undefined,
+      present: values.has(name),
+    };
+
+    if (schema.kind === "plain") {
+      bodyValue = value;
+    } else if (schema.kind === "binding") {
+      bodyValue =
+        value === undefined ? undefined : attachComponentBinding(value as Binding<unknown>, owner);
+    } else if (schema.kind === "callback") {
+      bodyValue =
+        value === undefined
+          ? undefined
+          : function (this: unknown, ...args: unknown[]) {
+              owner.assertReadable();
+
+              return Reflect.apply(slot.current as Function, this, args);
+            };
+    } else {
+      source = signal(value);
+      const readable = source;
+
+      const read = () => {
+        owner.assertReadable();
+
+        return readable.get();
+      };
+
+      componentValueAccessors.add(read);
+
+      bodyValue = read;
+    }
+
+    Object.assign(slot, {
+      bodyValue,
+      ...(source ? { source, construction: captureReactiveConstruction(source) } : {}),
+    });
+
+    Object.defineProperty(props, name, {
+      value: bodyValue,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+
+    slots.set(name, slot);
+  }
+
+  const next = (nextMappingIds.get(owner.context) ?? 0) + 1;
+  const mapping: ComponentMapping = { id: `mapping:${next}`, owner, componentId, props, slots };
+
+  for (const [slotName, slot] of slots)
+    if (slot.source && slot.construction)
+      mappedInputTransferSources.set(
+        slot.source,
+        Object.freeze({
+          owner,
+          ownerId: owner.identity,
+          mappingId: mapping.id,
+          componentId,
+          slotName,
+          source: slot.source,
+          construction: slot.construction,
+        }),
+      );
+
+  const mappings = ownerMappings.get(owner) ?? new Set<ComponentMapping>();
+
+  nextMappingIds.set(owner.context, next);
+  mappings.add(mapping);
+  ownerMappings.set(owner, mappings);
+  mappedProps.set(props, { mapping, projection: "container" });
+
+  for (const [name, slot] of slots)
+    if (typeof slot.bodyValue === "function" && slot.schema.kind !== "plain")
+      mappedProps.set(slot.bodyValue, { mapping, projection: "slot", slotName: name });
+
+  owner.onRelease(() => {
+    mappings.delete(mapping);
+
+    if (!mappings.size) ownerMappings.delete(owner);
+  });
+
+  return { props, slots };
+}
+
+/** @internal Snapshot the actual Owner mapping without reconstructing its source slots. */
+export function snapshotComponentInputs(
+  owner: Owner,
+  responseIdentity: string,
+): RouteMappedInputsRecordV1 {
+  owner.assertActive();
+
+  const mappings = ownerMappings.get(owner);
+
+  if (mappings?.size !== 1)
+    throw new RenderFault(
+      "resume-props",
+      "A represented component requires one actual input mapping",
+    );
+
+  const mapping = mappings.values().next().value!;
+
+  if (!mapping.componentId)
+    throw new RenderFault(
+      "resume-props",
+      "A route input mapping requires a compiled component identity",
+    );
+
+  if (Reflect.ownKeys(mapping.props).length !== mapping.slots.size)
+    throw new RenderFault(
+      "resume-props",
+      "A damaged input container cannot be captured for route adoption",
+    );
+
+  for (const [name, slot] of mapping.slots) {
+    const property = Object.getOwnPropertyDescriptor(mapping.props, name);
+
+    if (!property || !("value" in property) || property.value !== slot.bodyValue)
+      throw new RenderFault(
+        "resume-props",
+        "A damaged input slot cannot be captured for route adoption",
+      );
+  }
+
+  return {
+    id: mapping.id,
+    responseIdentity,
+    componentId: mapping.componentId,
+    ownerId: owner.identity,
+    transfer: {
+      type: "container",
+      slots: [...mapping.slots].map(([name, slot]) => ({
+        name,
+        schema: slot.schema,
+        value: slot.current,
+        present: slot.present,
+      })),
+    },
+  };
+}
+
+function snapshotSlot(name: string, slot: PropSlot): MappedSlotTransfer {
+  if (slot.schema.kind === "callback" && slot.current !== undefined)
+    throw new RenderFault(
+      "resume-callable-prop",
+      "A required callback prop needs a compiler-qualified behavior reference",
+    );
+
+  return { name, schema: slot.schema, value: slot.current };
+}
+
+/** @internal Read only compiler-recorded mapped props, preserving each declared slot kind. */
+export function snapshotMappedProps(value: unknown): {
+  readonly value: unknown;
+  readonly mapped: boolean;
+} {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function")
+    return { value, mapped: false };
+
+  const origin = mappedProps.get(value);
+
+  if (!origin) return { value, mapped: false };
+
+  if (origin.projection === "slot") {
+    const slot = origin.mapping.slots.get(origin.slotName!);
+
+    if (!slot || slot.schema.kind !== "value") return { value, mapped: false };
+  }
+
+  const entries =
+    origin.projection === "container"
+      ? [...origin.mapping.slots]
+      : [[origin.slotName!, origin.mapping.slots.get(origin.slotName!)!] as const];
+
+  return {
+    value: {
+      type: origin.projection,
+      slots: entries.map(([name, slot]) => snapshotSlot(name, slot)),
+    },
+    mapped: true,
+  };
 }
 
 /** Execute one fresh body from an already-validated input snapshot. */
@@ -395,57 +670,7 @@ export function instantiateComponent(
 
   if (entry.options.async || entry.factory.constructor.name === "AsyncFunction") checkAsync();
 
-  const props: Record<string, unknown> = {};
-  const slots = new Map<string, PropSlot>();
-
-  for (const [name, schema] of prepared.schema) {
-    if (name === "key") continue;
-
-    const value = values.get(name);
-    let bodyValue: unknown;
-    let source: WritableSignal<unknown> | undefined;
-    const slot: PropSlot = { schema, current: value, bodyValue: undefined };
-
-    if (schema.kind === "plain") {
-      bodyValue = value;
-    } else if (schema.kind === "binding") {
-      bodyValue =
-        value === undefined ? undefined : attachComponentBinding(value as Binding<unknown>, owner);
-    } else if (schema.kind === "callback") {
-      bodyValue =
-        value === undefined
-          ? undefined
-          : function (this: unknown, ...args: unknown[]) {
-              owner.assertReadable();
-
-              return Reflect.apply(slot.current as Function, this, args);
-            };
-    } else {
-      source = signal(value);
-      const readable = source;
-
-      const read = () => {
-        owner.assertReadable();
-
-        return readable.get();
-      };
-
-      componentValueAccessors.add(read);
-
-      bodyValue = read;
-    }
-
-    Object.assign(slot, { bodyValue, ...(source ? { source } : {}) });
-
-    Object.defineProperty(props, name, {
-      value: bodyValue,
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
-
-    slots.set(name, slot);
-  }
+  const { props, slots } = mapComponentInputs(owner, prepared.schema, values, entry.options.id);
 
   try {
     let output = runRenderContext(owner, () => runComponentBody(() => entry.factory(owner, props)));
@@ -560,6 +785,7 @@ export function publishComponent(instance: ComponentInstance, prepared: Prepared
     }
 
     slot.current = value;
+    slot.present = next.has(name);
 
     slot.source?.set(value);
   }
