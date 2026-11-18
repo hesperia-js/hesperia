@@ -5,6 +5,7 @@ on:
       - main
       - "release/*"
       - "feature/**"
+      - "work/**"
     types:
       - opened
       - synchronize
