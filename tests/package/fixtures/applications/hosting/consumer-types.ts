@@ -1,5 +1,7 @@
 import {
   createHost,
+  createTargetedHost,
+  readTargetedBuild,
   type CapturedBrowserBuild,
   type CapturedBuild,
   type CapturedPublicBuild,
@@ -31,7 +33,10 @@ const selection: HostSelection = { mountURL: "/dashboard" };
 const configuration: ProjectConfiguration = {
   allowUnsafeHTML: false,
   mountURL: "/",
+  target: { version: 1, runtime: "browser", profile: "static" },
   resolutionOverrides: { browser: {} },
 };
 
-void [createHost(captured, selection), configuration];
+const targeted = await readTargetedBuild(".hesperia/build");
+
+void [createHost(captured, selection), createTargetedHost(targeted, selection), configuration];

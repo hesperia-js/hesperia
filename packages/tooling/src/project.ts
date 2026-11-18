@@ -33,11 +33,21 @@ import {
 } from "@hesperia/compiler/tooling";
 import {
   createHost,
+  createTargetedHost,
   type HostingPublicFileRecord,
   type HostingRecordV1,
   type HostingRecordV2,
+  type InProcessTargetedCapturedBuild,
 } from "@hesperia/hosting";
-import { canonicalizeMountURL } from "@hesperia/hosting/internal";
+import {
+  BROWSER_STATIC_ROUTING_ASSET,
+  canonicalizeMountURL,
+  encodeBrowserStaticRouting,
+  resolveProductionTarget,
+  snapshotTargetedControl,
+  type ResolvedProductionTarget,
+} from "@hesperia/hosting/internal";
+import { compareRoutes } from "hesperia/routing";
 import { capturePublicFiles } from "./public-files.ts";
 import { readConfiguration, type ProjectConfiguration } from "./configuration.ts";
 import { buildRouteGuards, routeFilesFromManifest } from "./route-build.ts";
@@ -532,6 +542,24 @@ async function prepareBuildLocalAttempt(
   if (!development) await cleanUnpublishedCaptures(root);
 
   const configuration = await readConfiguration(root);
+  let productionTarget:
+    | Exclude<ResolvedProductionTarget, { readonly kind: "unavailable" }>
+    | undefined;
+
+  if (configuration.target) {
+    const target = resolveProductionTarget(configuration.target);
+
+    if (target.kind === "unavailable")
+      throw new ProjectError(
+        `production-target-unavailable: ${target.binding.descriptorIdentity}: ${target.missingImplementation}`,
+      );
+
+    if (target.moduleABI !== "browser-static-directory-v1")
+      throw new ProjectError("The selected native production target has no Tooling producer");
+
+    if (!development) productionTarget = target;
+  }
+
   const authored = await readProject(root);
   const projectRuntimeModule = `hesperia:compiler-runtime:project:${new Bun.CryptoHasher("sha256")
     .update(root)
@@ -1176,6 +1204,26 @@ async function prepareBuildLocalAttempt(
     );
   }
 
+  if (productionTarget) {
+    if (files.has(BROWSER_STATIC_ROUTING_ASSET))
+      throw new ProjectError("The static routing asset collides with a compiled managed asset");
+
+    const routing = encodeBrowserStaticRouting({
+      version: 1,
+      kind: "browser-static-routing",
+      mountURL: configuration.mountURL,
+      pages: [...manifest.routes].sort(compareRoutes).map((node) => ({
+        id: node.id,
+        pattern: node.pattern,
+        segments: node.segments.map((segment) => ({ kind: segment.kind, value: segment.value })),
+      })),
+      publicFiles: publicCapture.records.map((record) => record.urlPath).sort(),
+      outcomes: { page: 200, missingPage: 404, missingManaged: 404 },
+    });
+
+    files.set(BROWSER_STATIC_ROUTING_ASSET, new Blob([routing], { type: "application/json" }));
+  }
+
   const assets = Object.freeze(
     await Promise.all(
       [...files]
@@ -1187,9 +1235,11 @@ async function prepareBuildLocalAttempt(
             .update(new Uint8Array(await blob.arrayBuffer()))
             .digest("hex"),
           contentType:
-            (configured?.bundledCss
-              ? nativeCssResponseType(configured.bundledCss.files, path)
-              : undefined) ?? assetContentType(path, blob.type),
+            productionTarget && path === BROWSER_STATIC_ROUTING_ASSET
+              ? "application/json"
+              : ((configured?.bundledCss
+                  ? nativeCssResponseType(configured.bundledCss.files, path)
+                  : undefined) ?? assetContentType(path, blob.type)),
         })),
     ),
   );
@@ -1263,6 +1313,7 @@ async function prepareBuildLocalAttempt(
           allowUnsafeHTML: configuration.allowUnsafeHTML,
           allowUnsafeEmbed: configuration.allowUnsafeEmbed ?? false,
           mountURL: configuration.mountURL,
+          ...(configuration.target ? { target: configuration.target } : {}),
           resolutionOverrides: configuration.resolutionOverrides,
           plugins: configuration.plugins.map((plugin) => plugin.name),
         }
@@ -1280,9 +1331,26 @@ async function prepareBuildLocalAttempt(
     routeTable: outputPath(routeTableEntry.path),
   };
 
+  const control = productionTarget
+    ? snapshotTargetedControl(
+        JSON.parse(
+          JSON.stringify({
+            ...record,
+            resolution: {
+              ...record.resolution,
+              overrides: { browser: record.resolution.overrides },
+            },
+            version: 3,
+            kind: "browser",
+            productionTarget: productionTarget.binding,
+          }),
+        ),
+      )
+    : undefined;
+
   files.set(
     "/hesperia-build.json",
-    new Blob([JSON.stringify(record, null, 2) + "\n"], { type: "application/json" }),
+    new Blob([JSON.stringify(control ?? record, null, 2) + "\n"], { type: "application/json" }),
   );
 
   const styleRevision =
@@ -1651,7 +1719,27 @@ export async function writeBuild(root: string, build: BrowserBuild): Promise<str
 
   const assets = new Map([...snapshot.files].filter(([path]) => path.startsWith("/assets/")));
 
-  if (snapshot.version === 2) {
+  let publishedMetadata: Record<string, unknown> = metadata;
+
+  if (metadata.version === 3) {
+    const control = snapshotTargetedControl(metadata);
+
+    if (control.kind !== "browser" || control.productionTarget.declaration.runtime !== "browser")
+      throw new ProjectError("Browser build requires its browser/static target control");
+
+    const inventory =
+      snapshot.version === 2
+        ? { hosting: snapshot.hosting, files: assets, publicFiles: snapshot.publicFiles }
+        : { hosting: snapshot.hosting, files: assets };
+    const resource = await createTargetedHost({
+      control,
+      inventory,
+    } as InProcessTargetedCapturedBuild);
+
+    await resource.close();
+
+    publishedMetadata = control as unknown as Record<string, unknown>;
+  } else if (snapshot.version === 2) {
     await createHost({
       hosting: snapshot.hosting,
       files: assets,
@@ -1727,7 +1815,7 @@ export async function writeBuild(root: string, build: BrowserBuild): Promise<str
       assetDirectory: _assetDirectory,
       publicDirectory: _publicDirectory,
       ...buildRecord
-    } = metadata;
+    } = publishedMetadata;
     const publishedRecord = new Blob(
       [
         JSON.stringify(

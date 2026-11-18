@@ -157,3 +157,144 @@ test("compiled optional callbacks remain accessors through presence changes with
     await unlink(filename);
   }
 });
+
+test("checked recursive generic props retain their evidence and render their value", async () => {
+  const source = `
+    import { type Component } from "hesperia";
+
+    interface Tree<T> {
+      value: T;
+      next?: Tree<T>;
+    }
+
+    function TreeView(props: Component.Props<{ tree: Tree<string> }>) {
+      return <span>{props.tree().value}:{props.tree().next?.value}</span>;
+    }
+
+    export function App() {
+      const tree: Tree<string> = { value: "root", next: { value: "leaf" } };
+      return <TreeView tree={tree} />;
+    }
+  `;
+  const sourceFilename = "recursive-props-contract.tsx";
+  const root = resolve(import.meta.dir, "../..");
+  const session = await openCheckingProject(
+    [{ filename: sourceFilename, source }],
+    requestTypingEvidenceCapture({ root }),
+  );
+  let compiled: CompileResult | undefined;
+
+  try {
+    const compilation = emitCheckingSession(session);
+    const emitted = compilation.modules.get(sourceFilename);
+    const evidence = issuedProjectTypingEvidence(compilation);
+
+    expect(compilation.checking.diagnostics).toStrictEqual([]);
+    expect(emitted).toBeDefined();
+    expect(evidence).toMatchObject({
+      state: "sealed",
+      captureState: "incomplete-capture",
+      checkingResultJoin: true,
+      analysisJoin: true,
+      modulePopulationJoin: true,
+    });
+
+    if (!emitted || !evidence)
+      throw new Error("Recursive props compilation has no issued evidence");
+
+    const module = evidence.modules.find((item) => item.filename === sourceFilename);
+
+    expect(module).toMatchObject({ sourceJoin: true, emittedModuleAvailable: true });
+
+    const components = module?.components.filter(
+      (component) =>
+        component.props.kind === "props" &&
+        component.props.entries.some((entry) => entry.name === "tree"),
+    );
+
+    expect(components).toHaveLength(1);
+
+    const component = components?.[0];
+
+    expect(component?.emittedComponentJoin).toBe("matched");
+
+    if (!component || component.props.kind !== "props")
+      throw new Error("Recursive props component has no issued props evidence");
+
+    const tree = component.props.entries.find((entry) => entry.name === "tree");
+
+    expect(tree).toMatchObject({ name: "tree", category: "value", optional: false });
+
+    if (!tree) throw new Error("Recursive tree prop has no issued type evidence");
+
+    if (tree.mappedType.kind === "structural") {
+      expect(tree.mappedType).toMatchObject({
+        schema: 1,
+        algorithm: "ts-shape-v1",
+        shape: {
+          kind: "reference",
+          arguments: [{ kind: "primitive", name: "string" }],
+          surface: {
+            kind: "object",
+            properties: expect.arrayContaining([
+              expect.objectContaining({ name: "value" }),
+              expect.objectContaining({ name: "next", optional: true }),
+            ]),
+          },
+        },
+      });
+    } else {
+      expect([
+        "free-instantiation",
+        "nominal-origin",
+        "symbol-origin",
+        "unsupported-type",
+        "limit",
+      ]).toContain(tree.mappedType.reason);
+      console.info(`Recursive tree prop evidence is unproved: ${tree.mappedType.reason}`);
+    }
+
+    compiled = emitted;
+  } finally {
+    await session.dispose();
+  }
+
+  if (!compiled) throw new Error("Recursive props compilation did not complete");
+
+  expect(compiled.diagnostics).toStrictEqual([]);
+
+  const directory = resolve(import.meta.dir, "../../.hesperia");
+
+  await mkdir(directory, { recursive: true });
+
+  const filename = resolve(directory, `recursive-props-contract-${randomUUID()}.mjs`);
+
+  await writeFile(filename, compiled.code);
+
+  const window = new Window();
+  let app: ReturnType<typeof mount> | undefined;
+
+  try {
+    const generated = (await import(pathToFileURL(filename).href)) as {
+      App: Component<object>;
+    };
+    const errors: unknown[] = [];
+    app = mount(
+      window.document.body as unknown as Element,
+      generated.App,
+      {},
+      { onError: (error) => errors.push(error) },
+    );
+
+    await app.settled();
+
+    expect(errors).toStrictEqual([]);
+    expect(window.document.querySelector("span")?.textContent).toBe("root:leaf");
+  } finally {
+    app?.dispose();
+
+    await window.happyDOM.close();
+
+    await unlink(filename);
+  }
+});

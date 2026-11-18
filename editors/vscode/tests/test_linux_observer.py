@@ -1104,6 +1104,153 @@ os._exit(0)
         finally:
             self.assertEqual(libc.prctl(36, previous_subreaper.value, 0, 0, 0), 0)
 
+    def test_incomplete_attachment_waits_for_original_traced_exit(self) -> None:
+        strace = shutil.which("strace")
+        self.assertIsNotNone(strace)
+
+        source = r'''import ctypes, os, sys
+pid = os.fork()
+if pid:
+    os.waitpid(pid, 0)
+    raise SystemExit(0)
+libc = ctypes.CDLL(None)
+worker_fd = int(sys.argv[1])
+START = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)
+def worker(_):
+    buffer = ctypes.create_string_buffer(1)
+    libc.read(worker_fd, buffer, 1)
+    return None
+callback = START(worker)
+thread = ctypes.c_ulong()
+if libc.pthread_create(ctypes.byref(thread), None, callback, None):
+    os._exit(1)
+print(os.getpid(), flush=True)
+sys.stdin.buffer.read(1)
+libc.pthread_exit(None)
+'''
+        for exit_stage in ("attachment", "retry", "retry-missing", "second-unverified"):
+            with self.subTest(exit_stage=exit_stage), tempfile.TemporaryDirectory() as temporary:
+                directory = pathlib.Path(temporary)
+                script = directory / "fixture.py"
+                script.write_text(source, encoding="utf-8")
+                prefix = "native-process-trace"
+                worker_read, worker_write = os.pipe()
+                process = None
+                cleanup_fd = None
+                pending: dict[int, observer.PendingTraceGeneration] = {}
+                admitted: dict[int, observer.Generation] = {}
+
+                try:
+                    process = subprocess.Popen(
+                        [strace, "-ff", "-ttt", "-v", "-s", "8192", "-e", "trace=%process",
+                         "-o", str(directory / prefix), "--", sys.executable, "-u", str(script), str(worker_read)],
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                        pass_fds=(worker_read,),
+                    )
+                    os.close(worker_read)
+                    worker_read = -1
+                    self.assertTrue(select.select([process.stdout], [], [], 5)[0])
+                    pid = int(process.stdout.readline())
+                    cleanup_fd = os.pidfd_open(pid, 0)
+                    exe_path = pathlib.Path("/proc") / str(pid) / "exe"
+                    original_readlink = os.readlink
+                    original_identity = observer.read_proc_kernel_identity
+                    released = False
+                    executable_reads = 0
+
+                    def missing_executable(path: object, *args: object, **kwargs: object) -> str:
+                        nonlocal executable_reads
+                        if pathlib.Path(path) == exe_path:
+                            executable_reads += 1
+                            if exit_stage != "second-unverified" or executable_reads > 1:
+                                raise FileNotFoundError(errno.ENOENT, "fixture incomplete executable", str(path))
+                        return original_readlink(path, *args, **kwargs)
+
+                    def identity(target: int, stage: str, **kwargs: object) -> dict[str, int | str]:
+                        nonlocal released
+                        if exit_stage == "second-unverified" and stage == "incomplete second /proc sample pidfd recheck":
+                            raise FileNotFoundError(errno.ENOENT, "fixture missing identity")
+                        target_stage = (
+                            "incomplete argv pidfd attachment" if exit_stage == "attachment"
+                            else "pending traced process before full /proc sample"
+                        )
+                        if target == pid and stage == target_stage and not released:
+                            if exit_stage == "retry-missing":
+                                released = True
+                                raise FileNotFoundError(errno.ENOENT, "fixture missing identity")
+                            process.stdin.write(b"x")
+                            process.stdin.flush()
+                            deadline = time.monotonic() + 5
+                            while True:
+                                current = original_identity(pid, "fixture zombie", allow_zombie=True)
+                                if current["state"] == "Z":
+                                    break
+                                self.assertLess(time.monotonic(), deadline)
+                                time.sleep(0.001)
+                            self.assertFalse(observer.pidfd_ready(cleanup_fd))
+                            released = True
+                        return original_identity(target, stage, **kwargs)
+
+                    with mock.patch.object(os, "readlink", side_effect=missing_executable), mock.patch.object(
+                        observer, "read_proc_kernel_identity", side_effect=identity
+                    ):
+                        if exit_stage == "second-unverified":
+                            with self.assertRaisesRegex(observer.CaptureError, "Could not recheck incomplete"):
+                                observer.open_generation(pid, pending)
+                            self.assertEqual(pending, {})
+                            self.assertFalse(observer.pidfd_ready(cleanup_fd))
+                            process.stdin.write(b"x")
+                            process.stdin.flush()
+                            os.write(worker_write, b"x")
+                            process.wait(timeout=5)
+                            continue
+                        self.assertIsNone(observer.open_generation(pid, pending))
+                        if exit_stage != "attachment":
+                            original_ticks = pending[pid].start_ticks
+                            pending[pid].start_ticks += 1
+                            with mock.patch.object(observer, "read_proc_kernel_identity", side_effect=original_identity):
+                                with self.assertRaisesRegex(observer.CaptureError, "PID generation changed"):
+                                    observer.retry_pending_trace_generation(pid, pending, admitted, None)
+                            pending[pid].start_ticks = original_ticks
+                            self.assertFalse(observer.retry_pending_trace_generation(pid, pending, admitted, None))
+
+                    self.assertTrue(released)
+                    attachment = pending[pid]
+                    self.assertTrue(attachment.exit_only)
+                    self.assertFalse(observer.pidfd_ready(attachment.pidfd))
+                    self.assertFalse(observer.retry_pending_trace_generation(pid, pending, admitted, None))
+                    self.assertEqual(admitted, {})
+                    if exit_stage == "retry-missing":
+                        process.stdin.write(b"x")
+                        process.stdin.flush()
+                    os.write(worker_write, b"x")
+                    process.wait(timeout=5)
+                    self.assertTrue(observer.pidfd_ready(attachment.pidfd))
+                    self.assertFalse(observer.retry_pending_trace_generation(pid, pending, admitted, None))
+                    trace = observer.scan_trace(directory, prefix, final=True)
+                    incomplete = dict(trace)
+                    incomplete["creations"] = {**trace["creations"], pid: []}
+                    self.assertFalse(observer.retry_pending_trace_generation(pid, pending, admitted, incomplete))
+                    self.assertTrue(observer.retry_pending_trace_generation(pid, pending, admitted, trace))
+                    self.assertEqual(admitted, {})
+                finally:
+                    with contextlib.suppress(OSError):
+                        os.write(worker_write, b"x")
+                    if process is not None and process.poll() is None:
+                        process.kill()
+                        process.wait(timeout=5)
+                    if process is not None:
+                        for stream in (process.stdin, process.stdout):
+                            if stream is not None:
+                                stream.close()
+                    for fd in (worker_read, worker_write, cleanup_fd):
+                        if fd is not None and fd >= 0:
+                            with contextlib.suppress(OSError):
+                                os.close(fd)
+                    for attachment in pending.values():
+                        with contextlib.suppress(OSError):
+                            os.close(attachment.pidfd)
+
     def test_initial_incomplete_sample_exit_before_pidfd_does_not_admit_generation(self) -> None:
         import errno
 
@@ -1303,7 +1450,10 @@ sys.stdin.buffer.read(1)
                         os.close(cleanup_pidfd)
 
     def test_failure_cleanup_drains_late_traced_children_without_signaling_foreign_generations(self) -> None:
-        for authority in ("retained-tracer", "changed-generation", "foreign-tracer"):
+        for authority in (
+            "retained-tracer", "changed-generation", "foreign-tracer",
+            "exit-only-retained", "exit-only-foreign", "missing-identity-retained", "pending-retained",
+        ):
             with self.subTest(authority=authority):
                 self.check_failure_cleanup_late_child(authority)
 
@@ -1456,6 +1606,35 @@ else:
                     forced: list[int] = []
                     errors: list[dict[str, object]] = []
 
+                    if authority == "pending-retained":
+                        pending[child_pid] = observer.PendingTraceGeneration(
+                            child_pid, int(identity["ppid"]), int(identity["startTicks"]),
+                            os.pidfd_open(child_pid, 0), observer.utc_now(),
+                        )
+                        observer.cleanup_pending_traced_generations(pending, forced, errors)
+                        self.assertEqual(errors, [])
+                        self.assertNotIn(child_pid, pending)
+                        self.assertIn(child_pid, forced)
+                        self.assertTrue(observer.pidfd_ready(child_fd))
+                        return
+
+                    if authority in ("exit-only-retained", "exit-only-foreign", "missing-identity-retained"):
+                        pending[child_pid] = observer.PendingTraceGeneration(
+                            child_pid, int(identity["ppid"]), int(identity["startTicks"]),
+                            os.pidfd_open(child_pid, 0), observer.utc_now(),
+                            exit_only=authority != "missing-identity-retained",
+                        )
+                        if authority == "missing-identity-retained":
+                            with mock.patch.object(observer, "read_proc_kernel_identity", side_effect=FileNotFoundError):
+                                observer.cleanup_pending_traced_generations(pending, forced, errors)
+                            self.assertTrue(errors)
+                            errors.clear()
+                        else:
+                            observer.cleanup_pending_traced_generations(pending, forced, errors)
+                        self.assertTrue(pending[child_pid].exit_only)
+                        self.assertNotIn(child_pid, forced)
+                        self.assertFalse(observer.pidfd_ready(child_fd))
+
                     if boundary is None:
                         observer.terminate_retained_generation(parent_generation, forced)
                     else:
@@ -1472,7 +1651,7 @@ else:
 
                     if authority == "changed-generation":
                         supervisor_generation.start_ticks += 1
-                    elif authority == "foreign-tracer":
+                    elif authority in ("foreign-tracer", "exit-only-foreign"):
                         selected_supervisor = unrelated
                         selected_generation = unrelated_generation
 
@@ -1604,7 +1783,7 @@ else:
 
                         return
 
-                    if authority != "retained-tracer":
+                    if authority in ("changed-generation", "foreign-tracer", "exit-only-foreign"):
                         expected_error = (
                             "PID generation changed while its pidfd was retained"
                             if authority == "changed-generation"

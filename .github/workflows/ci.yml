@@ -4,7 +4,8 @@ on:
     branches:
       - main
       - "release/*"
-      - feature/milestone-3
+      - "feature/**"
+      - "work/**"
     types:
       - opened
       - synchronize
