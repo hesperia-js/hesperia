@@ -15,7 +15,7 @@ import {
 import { Observable } from "rxjs";
 import { createGraphQLClient } from "../../packages/graphql/src/index.ts";
 
-type Board = { board: { id: string; detail: string } };
+type Board = { board: { __typename?: "Board"; id: string; detail: string } };
 const document = parse(
   `query Board { board { id ... @defer(label: "detail") { detail } } }`,
 ) as TypedDocumentNode<Board, Record<string, never>>;
