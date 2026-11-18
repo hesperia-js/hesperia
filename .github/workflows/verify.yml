@@ -582,7 +582,7 @@ jobs:
         run: "bun run build"
       - name: "Install the selected browser engine and system dependencies"
         if: "runner.os == 'Linux'"
-        timeout-minutes: 25
+        timeout-minutes: 35
         run: 'node node_modules/playwright/cli.js install --with-deps "$GOLDEN_PROJECT"'
         shell: bash
       - name: "Install the selected browser engine"
