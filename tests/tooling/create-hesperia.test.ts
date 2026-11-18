@@ -457,6 +457,63 @@ test("retains the completed scaffold when a real installer fails", async () => {
   }
 }, 45_000);
 
+test("retires an installer cancelled at its start and retains the completed scaffold", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-create-installer-cancel-"));
+  const destination = join(root, "application");
+  const script = join(root, "postinstall.mjs");
+  const controller = new AbortController();
+  const progress: string[] = [];
+  let cleanupAllowed = true;
+
+  try {
+    await writeFile(script, "setTimeout(() => {}, 1500);\n");
+
+    const result = await executeCreator(
+      resolveCreator({ destination, hostIntegration: "none", install: true }),
+      {
+        signal: controller.signal,
+        installerOutput: { stdout: process.stdout.fd, stderr: process.stderr.fd },
+        onProgress(event) {
+          if (event.kind === "created") {
+            writeFileSync(
+              join(event.projectRoot, "package.json"),
+              JSON.stringify({
+                name: event.packageName,
+                private: true,
+                scripts: { postinstall: `"${process.execPath}" "${script}"` },
+              }),
+            );
+            progress.push("created");
+          }
+
+          if (event.kind === "install") {
+            progress.push(event.status);
+
+            if (event.status === "started") controller.abort();
+          }
+        },
+      },
+    );
+
+    expect(result.status).toBe("cancelled");
+
+    if (result.status !== "cancelled") throw new Error("Expected installation to cancel");
+
+    cleanupAllowed = result.installer?.pendingResource !== true;
+
+    expect(progress).toStrictEqual(["created", "started"]);
+    expect(result.projectRoot).toBe(destination);
+    expect(result.cleanup.status).toBe("retained");
+    expect(result.cleanup.retainedPaths).toContain(destination);
+    expect(result.installer?.pid).toBeGreaterThan(0);
+    expect(result.installer?.reaped).toBe(true);
+    expect(result.installer?.pendingResource).toBe(false);
+    expect(await readFile(join(destination, "app.tsx"), "utf8")).toContain("application");
+  } finally {
+    if (cleanupAllowed) await rm(root, { recursive: true, force: true });
+  }
+}, 45_000);
+
 test("refuses to overwrite existing files before execution or after resolution", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-create-existing-"));
   const destination = join(root, "existing");
