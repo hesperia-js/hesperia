@@ -307,7 +307,9 @@ test("a real deferred GraphQL resolver streams before query completion", async (
       expect(queries).toBe(1);
       expect(details).toBe(1);
       release();
-      expect((await ready).data).toEqual({ board: { id: "real", detail: "resolved" } });
+      expect((await ready).data).toEqual({
+        board: { __typename: "Board", id: "real", detail: "resolved" },
+      });
       expect(observation.capture().status).toBe("complete");
     } finally {
       stop();
