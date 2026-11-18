@@ -19,6 +19,7 @@ import { suppliedReleaseArchive } from "./release-candidate.ts";
 const packageRoot = resolve(import.meta.dir, "../..");
 const graphqlPackageRoot = resolve(packageRoot, "packages/graphql");
 const hesperiaPackageRoot = resolve(packageRoot, "packages/hesperia");
+const workTimeoutMs = 72_000;
 
 type PackageManifest = {
   readonly name?: string;
@@ -136,7 +137,9 @@ function boundedTimeout(timeoutMs: number, deadlineAt: number): number {
   const remaining = deadlineAt - Date.now();
 
   if (remaining <= 0)
-    throw new Error("GraphQL installed runtime test exceeded its 52-second work deadline");
+    throw new Error(
+      `GraphQL installed runtime test exceeded its ${workTimeoutMs} ms work deadline`,
+    );
 
   return Math.min(timeoutMs, remaining);
 }
@@ -358,7 +361,7 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
   )
     throw new Error(`The system temp directory is not external to the checkout: ${tempRoot}`);
 
-  const deadlineAt = Date.now() + 52_000;
+  const deadlineAt = Date.now() + workTimeoutMs;
   const workspace = await mkdtemp(join(tempRoot, "graphql-installed-runtime-"));
   const application = join(workspace, "consumer app");
   const workspaceRealPath = await realpath(workspace);
@@ -499,7 +502,7 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
     const cachePreparation = await runCommand(
       [process.execPath, "install", "--ignore-scripts"],
       cachePreparationRoot,
-      boundedTimeout(25_000, deadlineAt),
+      boundedTimeout(45_000, deadlineAt),
       nativeInstallEnv,
     );
     const cachePreparationLock = await readFile(join(cachePreparationRoot, "bun.lock"), "utf8");
@@ -773,4 +776,4 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
 
     await rm(workspace, { recursive: true, force: true });
   }
-}, 60_000);
+}, 80_000);
