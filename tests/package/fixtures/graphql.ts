@@ -1,10 +1,12 @@
 import { affects, createGraph, defineContract } from "aeolia";
-import type { StreamDefinition } from "aeolia";
+import type { QueryDefinition, StreamDefinition } from "aeolia";
 import type { TypedDocumentNode } from "@apollo/client";
 import type { HttpLink } from "@apollo/client/link/http";
 import { parse } from "graphql";
 import {
   createGraphQLClient,
+  type GraphQLClientOptions,
+  type GraphQLProgress,
   type GraphQLResult,
   type GraphQLResultError,
   type GraphQLSubscriptionOptions,
@@ -15,6 +17,14 @@ import type { Feed, FeedProjection } from "hesperia/aeolia";
 type EchoVariables = { readonly value: string };
 
 type EchoData = { readonly echo: string };
+
+type ProductVariables = { readonly id: string };
+type ProductData = {
+  readonly product: {
+    readonly id: string;
+    readonly details: { readonly description: string };
+  } | null;
+};
 
 type WriteVariables = { readonly value: string };
 
@@ -44,6 +54,15 @@ const echoDocument = parse(`
   }
 `) as TypedDocumentNode<EchoData, EchoVariables>;
 
+const productDocument = parse(`
+  query IncrementalProduct($id: ID!) {
+    product(id: $id) {
+      id
+      ... @defer(label: "details") { details { description } }
+    }
+  }
+`) as TypedDocumentNode<ProductData, ProductVariables>;
+
 const writeDocument = parse(`
   mutation WriteThenFail($value: String!) {
     writeThenFail(value: $value) {
@@ -64,6 +83,15 @@ const messageDocument = parse(`
 
 export function checkPublishedGraphQLTypes(link: HttpLink): void {
   const graphql = createGraphQLClient({ link, subscriptionErrorPolicy: "none" });
+  const incrementalGraphql = createGraphQLClient({
+    link,
+    experimentalIncremental: { profile: "graphql17-v0.2" },
+  });
+  const broadOptions: GraphQLClientOptions = {
+    link,
+    experimentalIncremental: { profile: "graphql17-v0.2" },
+  };
+  const broadGraphql = createGraphQLClient(broadOptions);
   const echo = graphql.query({
     name: "consumer.echo",
     document: echoDocument,
@@ -109,6 +137,80 @@ export function checkPublishedGraphQLTypes(link: HttpLink): void {
   const api = withAeolia(graph, contract);
   const queryView = api.echo({ value: "Ada" });
   const result: GraphQLResult<EchoData> | undefined = queryView.value();
+  // @ts-expect-error finite queries do not expose progress projections
+  queryView.project();
+
+  const broadProduct = broadGraphql.query({
+    name: "consumer.broad-product",
+    document: productDocument,
+    key: ({ id }) => `product/${id}` as const,
+  });
+  const broadContract = defineContract({
+    namespace: "consumer-broad",
+    operations: { broadProduct },
+  });
+  const broadGraph = createGraph({ contract: broadContract });
+  const broadApi = withAeolia(broadGraph, broadContract);
+  // @ts-expect-error a broadly typed factory does not promise incremental progress
+  broadApi.broadProduct({ id: "p-1" }).project();
+
+  const incrementalProduct = incrementalGraphql.query({
+    name: "consumer.incremental-product",
+    document: productDocument,
+    key: ({ id }) => `product/${id}` as const,
+  });
+  const incrementalDefinition: QueryDefinition<
+    ProductVariables,
+    GraphQLResult<ProductData>,
+    `product/${string}`,
+    GraphQLProgress<ProductData>
+  > = incrementalProduct;
+  const incrementalContract = defineContract({
+    namespace: "consumer-incremental",
+    operations: { incrementalProduct },
+  });
+  const incrementalGraph = createGraph({ contract: incrementalContract });
+  const incrementalApi = withAeolia(incrementalGraph, incrementalContract);
+  const incrementalView = incrementalApi.incrementalProduct({ id: "p-1" });
+  const progress = incrementalView.project();
+  const latest: GraphQLProgress<ProductData> | undefined = progress.value();
+  const progressHistory: readonly GraphQLProgress<ProductData>[] = incrementalView
+    .project({ kind: "accumulate", max: 3 })
+    .value();
+  const reduced: string = incrementalView
+    .project({
+      kind: "reduce",
+      initial: "",
+      step(previous, value) {
+        switch (value.dataState) {
+          case "streaming": {
+            const partial: string | undefined = value.data?.product?.details?.description;
+            return previous + (partial ?? "");
+          }
+          case "complete": {
+            const full: string | undefined = value.data?.product?.details.description;
+            return previous + (full ?? "");
+          }
+          case "empty": {
+            const empty: null = value.data;
+            return previous + String(empty);
+          }
+        }
+      },
+    })
+    .value();
+  // @ts-expect-error partial progress is not a complete query result
+  const invalidResult: GraphQLResult<ProductData> | undefined = latest;
+  // @ts-expect-error progress views are not awaitable query handles
+  const invalidAwait: PromiseLike<GraphQLProgress<ProductData>> = progress;
+  // @ts-expect-error progress views do not expose promise chaining
+  progress.then(() => undefined);
+  // @ts-expect-error projections have no writer
+  progress.set(latest);
+  // @ts-expect-error projections have no updater
+  progress.update(() => latest);
+  // @ts-expect-error progress views cannot create chained projections
+  progress.project();
   const rawMessages = graph.api.messages({ channel: "native" });
   const rawMessage: GraphQLResult<MessageData> | undefined = rawMessages.value.get();
   const messageFeed: Feed<GraphQLResult<MessageData>> = api.messages({ channel: "native" });
@@ -158,6 +260,11 @@ export function checkPublishedGraphQLTypes(link: HttpLink): void {
     feedMessage,
     latestHistoryMessage,
     result,
+    incrementalDefinition,
+    progressHistory,
+    reduced,
+    invalidResult,
+    invalidAwait,
     mutationResult,
     wrongMessageResult,
     wrongMutationResult,
@@ -165,5 +272,9 @@ export function checkPublishedGraphQLTypes(link: HttpLink): void {
   ];
 
   graph.dispose();
+  broadGraph.dispose();
+  incrementalGraph.dispose();
   graphql.stop();
+  broadGraphql.stop();
+  incrementalGraphql.stop();
 }

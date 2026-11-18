@@ -5,9 +5,11 @@ import { ApolloLink } from "@apollo/client/link";
 import { HttpLink } from "@apollo/client/link/http";
 import { GraphQLWsLink } from "@apollo/client/link/subscriptions";
 import type { TypedDocumentNode } from "@apollo/client";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { GraphQLError, parse } from "graphql";
+import { Window } from "happy-dom";
 import { createClient as createNativeWebSocketClient } from "graphql-ws";
-import { Observable } from "rxjs";
+import { Observable, tap } from "rxjs";
 import { randomUUID } from "node:crypto";
 import { createGraphQLClient } from "../../packages/graphql/src/index.ts";
 import type { GraphQLResult, GraphQLResultError } from "../../packages/graphql/src/index.ts";
@@ -15,6 +17,14 @@ import { withAeolia } from "../../packages/hesperia/src/aeolia/index.ts";
 import type { ImportedApi } from "../../packages/hesperia/src/aeolia/index.ts";
 import { bindImported } from "../../packages/hesperia/src/data/api.ts";
 import { Owner, type RuntimeContext } from "../../packages/hesperia/src/runtime/owner.ts";
+import {
+  defineComponent,
+  mount,
+  text,
+  type MountedApplication,
+} from "../../packages/hesperia/src/runtime/index.ts";
+import { createDataApplication } from "../../packages/hesperia/src/data/environment.ts";
+import { registerNativeQueryProfile } from "../../packages/hesperia/src/data/native-observation.ts";
 import { isAbsolute, resolve } from "node:path";
 
 type EmptyVariables = Record<string, never>;
@@ -34,6 +44,10 @@ type PartialData = {
 };
 
 type RootFailureData = { readonly rootFailure: string };
+type DeferredRootFailureData = { readonly __typename: "Query"; readonly rootFailure: string };
+type IncrementalFailureData = {
+  readonly incrementalFailureItems: readonly (string | null)[] | null;
+};
 
 type ServerStateData = {
   readonly state: { readonly revision: number; readonly writes: readonly string[] };
@@ -113,6 +127,8 @@ const clients: Array<{ stop(): void }> = [];
 const children: ChildResource[] = [];
 const subscriptions: Array<() => void> = [];
 const webSocketClients: Array<{ dispose(): void | Promise<void> }> = [];
+const mounts: MountedApplication[] = [];
+const windows: Window[] = [];
 
 const fullDocument = parse(`
   query Full($value: String!) {
@@ -135,6 +151,48 @@ const partialDocument = parse(`
 
 const rootFailureDocument = parse(`query RootFailure { rootFailure }`) as TypedDocumentNode<
   RootFailureData,
+  EmptyVariables
+>;
+
+const deferredRootFailureDocument = parse(`
+  query IncrementalDeferredRootFailure {
+    __typename
+    ... @defer(label: "deferred-root-failure") { rootFailure }
+  }
+`) as TypedDocumentNode<DeferredRootFailureData, EmptyVariables>;
+
+const incrementalPartialErrorDocument = parse(`
+  query IncrementalPartialError {
+    ... @defer(label: "partial-error") { partial { ok broken } }
+  }
+`) as TypedDocumentNode<PartialData, EmptyVariables>;
+
+const incrementalStreamErrorDocument = parse(`
+  query IncrementalStreamError {
+    incrementalFailureItems @stream(initialCount: 1, label: "failure-items")
+  }
+`) as TypedDocumentNode<IncrementalFailureData, EmptyVariables>;
+
+const incrementalBoardDocument = parse(`
+  query IncrementalBoard {
+    incrementalBoard {
+      items @stream(initialCount: 1, label: "board-items") {
+        id
+        title
+        ... @defer(label: "item-details") { details }
+      }
+    }
+  }
+`) as TypedDocumentNode<
+  {
+    readonly incrementalBoard: {
+      readonly items: readonly {
+        readonly id: string;
+        readonly title: string;
+        readonly details: string;
+      }[];
+    };
+  },
   EmptyVariables
 >;
 
@@ -206,6 +264,27 @@ function makeOwner(): Owner {
 
 function bindOwner<C extends Contract>(owner: Owner, graph: Graph<C>, contract: C): ImportedApi<C> {
   return bindImported(owner, withAeolia(graph, contract)) as ImportedApi<C>;
+}
+
+function mountQueryOwner(): Owner {
+  const window = new Window({ url: "https://graphql.test/" });
+  windows.push(window);
+  let captured: Owner | undefined;
+  const Consumer = defineComponent((owner) => {
+    captured = owner;
+    return text(owner, () => "");
+  });
+  const application = mount(
+    window.document.body as unknown as Element,
+    Consumer,
+    {},
+    {
+      dataBinding: { application: createDataApplication(), security: () => ({ kind: "none" }) },
+    },
+  );
+  mounts.push(application);
+  if (!captured) throw new Error("The public mount did not prepare its query owner");
+  return captured;
 }
 
 function makeClient(uri: string, context?: { readonly headers: Record<string, string> }) {
@@ -535,6 +614,7 @@ function observed<T>(read: () => T, accept: (value: T) => boolean): Promise<T> {
 
 afterEach(async () => {
   for (const stop of subscriptions.splice(0)) stop();
+  for (const application of mounts.splice(0)) application.dispose();
 
   for (const owner of owners) {
     owners.delete(owner);
@@ -553,6 +633,708 @@ afterEach(async () => {
   for (const client of webSocketClients.splice(0)) await client.dispose();
 
   for (const child of children.splice(0)) await stopChild(child);
+  for (const window of windows.splice(0)) window.close();
+});
+
+test("incremental progress reports terminal null only for a completed response", async () => {
+  const fixture = await startFixture();
+  let nullResponseFrames = 0;
+  let rootFailureLinkCompletions = 0;
+  let missingDataResponsesWithoutData = 0;
+  let missingDataLinkCompletions = 0;
+  const rootFailureObserver = new ApolloLink((operation, forward) => {
+    if (!forward) throw new Error("The root-failure observer has no forwarded link");
+
+    return forward(operation).pipe(
+      tap({
+        next(result) {
+          const response = result as {
+            readonly data?: unknown;
+            readonly errors?: readonly unknown[];
+          };
+
+          if (
+            operation.operationName === "RootFailure" &&
+            Object.prototype.hasOwnProperty.call(result, "data") &&
+            response.data === null
+          )
+            nullResponseFrames += 1;
+
+          if (
+            operation.operationName === "IncrementalMissingData" &&
+            !Object.prototype.hasOwnProperty.call(result, "data") &&
+            Array.isArray(response.errors) &&
+            response.errors.length > 0
+          )
+            missingDataResponsesWithoutData += 1;
+        },
+        complete() {
+          if (operation.operationName === "RootFailure") rootFailureLinkCompletions += 1;
+
+          if (operation.operationName === "IncrementalMissingData") missingDataLinkCompletions += 1;
+        },
+      }),
+    );
+  });
+  const client = createGraphQLClient({
+    link: ApolloLink.from([
+      rootFailureObserver,
+      new HttpLink({
+        uri: fixture.graphqlUrl.replace(/\/graphql$/, "/graphql-incremental"),
+      }),
+    ]),
+    experimentalIncremental: { profile: "graphql17-v0.2" },
+  });
+
+  clients.push(client);
+
+  const missingDataDocument = parse(
+    "query IncrementalMissingData($value: String!) { echo(value: $value) }",
+  ) as TypedDocumentNode<EmptyVariables, EmptyVariables>;
+  const rejectedNullOutput: StandardSchemaV1<GraphQLResult<RootFailureData>, RootFailureData> = {
+    "~standard": {
+      version: 1,
+      vendor: "graphql-terminal-null-test",
+      validate() {
+        return { issues: [{ message: "terminal null output validation rejected" }] };
+      },
+    },
+  };
+  const terminalNullAll = client.query({
+    name: "graphql-incremental.terminal-null-all",
+    document: rootFailureDocument,
+    key: () => "terminal-null/all",
+    errorPolicy: "all",
+  });
+  const terminalNullIgnore = client.query({
+    name: "graphql-incremental.terminal-null-ignore",
+    document: rootFailureDocument,
+    key: () => "terminal-null/ignore",
+    errorPolicy: "ignore",
+  });
+  const terminalNullNone = client.query({
+    name: "graphql-incremental.terminal-null-none",
+    document: rootFailureDocument,
+    key: () => "terminal-null/none",
+    errorPolicy: "none",
+  });
+  const terminalNullOutputRejected = registerNativeQueryProfile(
+    client.query({
+      name: "graphql-incremental.terminal-null-output-rejected",
+      document: rootFailureDocument,
+      key: () => "terminal-null/output-rejected",
+    }),
+    { output: rejectedNullOutput },
+  );
+  const missingData = client.query({
+    name: "graphql-incremental.missing-data",
+    document: missingDataDocument,
+    key: () => "missing-data",
+  });
+  const contract = defineContract({
+    namespace: "graphql-incremental-terminal-null",
+    operations: {
+      terminalNullAll,
+      terminalNullIgnore,
+      terminalNullNone,
+      terminalNullOutputRejected,
+      missingData,
+    },
+  });
+  const graph = ownGraph(contract);
+  const owner = mountQueryOwner();
+
+  const api = bindOwner(owner, graph, contract);
+  const terminalNullCases = [
+    { run: () => api.terminalNullAll({}), hasErrors: true },
+    { run: () => api.terminalNullIgnore({}), hasErrors: false },
+  ] as const;
+
+  for (const { run, hasErrors } of terminalNullCases) {
+    const view = run();
+    const progress = view.project();
+    const previousFrames = nullResponseFrames;
+    const previousCompletions = rootFailureLinkCompletions;
+    const result = await view.ready;
+    const value = progress.value();
+
+    if (value === undefined) throw new Error("Expected terminal-null progress");
+
+    expect(nullResponseFrames).toBe(previousFrames + 1);
+    expect(rootFailureLinkCompletions).toBe(previousCompletions + 1);
+    expect(result.data).toBeNull();
+    expect(result.extensions).toMatchObject({ fixture: { instanceId: fixture.instanceId } });
+    expect(value.dataState).toBe("empty");
+    expect(value.data).toBeNull();
+    expect(value.errors).toStrictEqual(result.errors);
+    expect(value.extensions).toStrictEqual(result.extensions);
+    expect(progress.status()).toBe("complete");
+    expect(progress.pending()).toBe(false);
+
+    if (hasErrors) {
+      expect(value.errors?.map(({ message, path }) => ({ message, path }))).toStrictEqual([
+        { message: "fixture root failure", path: ["rootFailure"] },
+      ]);
+    } else {
+      expect("errors" in value).toBe(false);
+    }
+  }
+
+  const noneView = api.terminalNullNone({});
+  const noneProgress = noneView.project();
+  const previousNoneFrames = nullResponseFrames;
+  const noneFailure = await captureFailure(noneView.ready);
+  const noneResult = (noneFailure as GraphQLResultError<RootFailureData> | undefined)?.result;
+
+  expect(nullResponseFrames).toBe(previousNoneFrames + 1);
+  expect(noneFailure).toBeInstanceOf(Error);
+  expect(noneResult?.data).toBeNull();
+  expect(noneResult?.errors?.map(({ message }) => message)).toStrictEqual(["fixture root failure"]);
+  expect(noneProgress.value()).toBeUndefined();
+  expect(noneProgress.status()).toBe("failed");
+  expect(noneProgress.pending()).toBe(false);
+
+  const outputRejectedView = api.terminalNullOutputRejected({});
+  const outputRejectedProgress = outputRejectedView.project();
+  const previousOutputFrames = nullResponseFrames;
+  const previousOutputCompletions = rootFailureLinkCompletions;
+  const outputFailure = await captureFailure(outputRejectedView.ready);
+
+  expect(nullResponseFrames).toBe(previousOutputFrames + 1);
+  expect(rootFailureLinkCompletions).toBe(previousOutputCompletions + 1);
+  expect(outputFailure).toBeDefined();
+  expect(outputRejectedProgress.value()?.dataState).toBe("empty");
+  expect(outputRejectedProgress.value()?.data).toBeNull();
+  expect(outputRejectedProgress.status()).toBe("failed");
+  expect(outputRejectedProgress.pending()).toBe(false);
+
+  const missingDataView = api.missingData({});
+  const missingDataProgress = missingDataView.project();
+  const missingDataFailure = await captureFailure(missingDataView.ready);
+  const missingDataResult = (missingDataFailure as GraphQLResultError<EmptyVariables> | undefined)
+    ?.result;
+
+  expect(missingDataFailure).toBeInstanceOf(Error);
+  expect(missingDataResponsesWithoutData).toBe(1);
+  expect(missingDataLinkCompletions).toBe(1);
+  expect(missingDataResult?.data).toBeUndefined();
+  expect(missingDataResult?.errors?.[0]?.message).toContain("$value");
+  expect(missingDataProgress.value()).toBeUndefined();
+  expect(missingDataProgress.status()).toBe("failed");
+  expect(missingDataProgress.pending()).toBe(false);
+});
+
+test("incremental error policies retain actual patch and completion errors", async () => {
+  const fixture = await startFixture();
+  const client = createGraphQLClient({
+    link: new HttpLink({
+      uri: fixture.graphqlUrl.replace(/\/graphql$/, "/graphql-incremental"),
+    }),
+    experimentalIncremental: { profile: "graphql17-v0.2" },
+  });
+
+  clients.push(client);
+
+  const all = client.query({
+    name: "graphql-incremental.errors.all",
+    document: incrementalPartialErrorDocument,
+    key: () => "partial/all",
+    errorPolicy: "all",
+  });
+  const ignore = client.query({
+    name: "graphql-incremental.errors.ignore",
+    document: incrementalPartialErrorDocument,
+    key: () => "partial/ignore",
+    errorPolicy: "ignore",
+  });
+  const none = client.query({
+    name: "graphql-incremental.errors.none",
+    document: incrementalPartialErrorDocument,
+    key: () => "partial/none",
+    errorPolicy: "none",
+  });
+  const completed = client.query({
+    name: "graphql-incremental.errors.completed",
+    document: incrementalStreamErrorDocument,
+    key: () => "stream/completed-error",
+    errorPolicy: "all",
+  });
+  const contract = defineContract({
+    namespace: "graphql-incremental-errors",
+    operations: { all, ignore, none, completed },
+  });
+  const graph = ownGraph(contract);
+  const owner = makeOwner();
+  const api = bindOwner(owner, graph, contract);
+
+  const allView = api.all({});
+  const allProgress = allView.project();
+  const allResult = await allView.ready;
+
+  expect(allResult.data?.partial).toStrictEqual({
+    __typename: "PartialResult",
+    ok: "partial-ok",
+    broken: null,
+  });
+  expect(allResult.errors?.map(({ message }) => message)).toStrictEqual([
+    "fixture partial field failure",
+  ]);
+  expect(allResult.extensions?.fixture).toStrictEqual({
+    instanceId: fixture.instanceId,
+    phase: "subsequent",
+  });
+  expect(allProgress.value()?.dataState).toBe("complete");
+  expect(allProgress.value()?.errors?.map(({ message }) => message)).toStrictEqual([
+    "fixture partial field failure",
+  ]);
+  expect(allProgress.status()).toBe("complete");
+
+  const ignoreView = api.ignore({});
+  const ignoreProgress = ignoreView.project();
+  const ignoreResult = await ignoreView.ready;
+
+  expect(ignoreResult.data?.partial).toStrictEqual({
+    __typename: "PartialResult",
+    ok: "partial-ok",
+    broken: null,
+  });
+  expect(ignoreResult.errors).toBeUndefined();
+  expect(ignoreResult.extensions?.fixture).toStrictEqual({
+    instanceId: fixture.instanceId,
+    phase: "subsequent",
+  });
+  expect(ignoreProgress.value()?.dataState).toBe("complete");
+  expect(ignoreProgress.value()?.errors).toBeUndefined();
+  expect(ignoreProgress.status()).toBe("complete");
+
+  const noneView = api.none({});
+  const noneProgress = noneView.project();
+  const noneError = await captureFailure(noneView.ready);
+  const noneResult = (noneError as GraphQLResultError<unknown> | undefined)?.result;
+
+  expect(noneError).toBeInstanceOf(Error);
+  expect(noneResult?.data).toMatchObject({
+    partial: { ok: "partial-ok", broken: null },
+  });
+  expect(noneResult?.errors?.map(({ message }) => message)).toStrictEqual([
+    "fixture partial field failure",
+  ]);
+  expect(noneResult?.extensions?.fixture).toStrictEqual({
+    instanceId: fixture.instanceId,
+    phase: "subsequent",
+  });
+  expect(noneProgress.status()).toBe("failed");
+  expect(noneProgress.pending()).toBe(false);
+
+  const completedView = api.completed({});
+  const completedProgress = completedView.project();
+  const completedResult = await completedView.ready;
+
+  expect(completedResult.data?.incrementalFailureItems).toStrictEqual(["initial failure item"]);
+  expect(completedResult.errors?.map(({ message }) => message)).toStrictEqual([
+    "fixture incremental stream failure",
+  ]);
+  expect(completedResult.extensions?.fixture).toStrictEqual({
+    instanceId: fixture.instanceId,
+    phase: "subsequent",
+  });
+  expect(completedProgress.value()?.dataState).toBe("complete");
+  expect(completedProgress.value()?.data).toStrictEqual({
+    incrementalFailureItems: ["initial failure item"],
+  });
+  expect(completedProgress.value()?.errors?.map(({ message }) => message)).toStrictEqual([
+    "fixture incremental stream failure",
+  ]);
+  expect(completedProgress.status()).toBe("complete");
+  expect(completedProgress.pending()).toBe(false);
+});
+
+test("a completed deferred error preserves Apollo streaming progress", async () => {
+  const fixture = await startFixture();
+  const deferredFrames: Array<{
+    readonly hasNext: unknown;
+    readonly hasExtensions: boolean;
+    readonly extensions?: Record<string, unknown>;
+    readonly pendingLabels: readonly string[];
+    readonly completionErrorMessages: readonly string[];
+  }> = [];
+  let deferredLinkCompletions = 0;
+  const deferredLinkObserver = new ApolloLink((operation, forward) => {
+    if (!forward) throw new Error("The deferred Link observer has no forwarded link");
+
+    return forward(operation).pipe(
+      tap({
+        next(result) {
+          if (operation.operationName !== "IncrementalDeferredRootFailure") return;
+
+          const frame = result as {
+            readonly hasNext?: unknown;
+            readonly extensions?: Record<string, unknown>;
+            readonly pending?: readonly { readonly label?: unknown }[];
+            readonly completed?: readonly {
+              readonly errors?: readonly { readonly message?: unknown }[];
+            }[];
+          };
+          deferredFrames.push({
+            hasNext: frame.hasNext,
+            hasExtensions: Object.prototype.hasOwnProperty.call(result, "extensions"),
+            extensions: frame.extensions,
+            pendingLabels: (frame.pending ?? []).flatMap(({ label }) =>
+              typeof label === "string" ? [label] : [],
+            ),
+            completionErrorMessages: (frame.completed ?? []).flatMap(({ errors }) =>
+              (errors ?? []).flatMap(({ message }) =>
+                typeof message === "string" ? [message] : [],
+              ),
+            ),
+          });
+        },
+        complete() {
+          if (operation.operationName === "IncrementalDeferredRootFailure")
+            deferredLinkCompletions += 1;
+        },
+      }),
+    );
+  });
+  const client = createGraphQLClient({
+    link: ApolloLink.from([
+      deferredLinkObserver,
+      new HttpLink({
+        uri: fixture.graphqlUrl.replace("/graphql", "/graphql-incremental"),
+      }),
+    ]),
+    experimentalIncremental: { profile: "graphql17-v0.2" },
+  });
+
+  clients.push(client);
+
+  let deferredOutputValidationCount = 0;
+  let deferredOutputValidationInput: unknown;
+  const rejectedDeferredOutput: StandardSchemaV1<
+    GraphQLResult<DeferredRootFailureData>,
+    DeferredRootFailureData
+  > = {
+    "~standard": {
+      version: 1,
+      vendor: "graphql-deferred-root-failure-test",
+      validate(value) {
+        deferredOutputValidationCount += 1;
+        deferredOutputValidationInput = value;
+
+        return { issues: [{ message: "deferred output validation rejected" }] };
+      },
+    },
+  };
+  const latestExtensions = (frames: typeof deferredFrames): Record<string, unknown> | undefined => {
+    let latest: Record<string, unknown> | undefined;
+
+    for (const frame of frames) {
+      if (frame.hasExtensions) latest = frame.extensions;
+    }
+
+    return latest;
+  };
+  const cases = [
+    { policy: "all", hasErrors: true },
+    { policy: "ignore", hasErrors: false },
+  ] as const;
+
+  for (const { policy, hasErrors } of cases) {
+    const query = client.query({
+      name: "graphql-incremental.deferred-root-failure." + policy,
+      document: deferredRootFailureDocument,
+      key: () => "deferred-root-failure/" + policy,
+      errorPolicy: policy,
+    });
+    const contract = defineContract({
+      namespace: "graphql-incremental-deferred-failure-" + policy,
+      operations: { query },
+    });
+    const graph = ownGraph(contract);
+    const owner = makeOwner();
+    const previousFrameCount = deferredFrames.length;
+    const previousCompletionCount = deferredLinkCompletions;
+    const view = bindOwner(owner, graph, contract).query({});
+    const progress = view.project();
+    const result = await view.ready;
+    const requestFrames = deferredFrames.slice(previousFrameCount);
+    const finalFrame = requestFrames.at(-1);
+    const extensions = latestExtensions(requestFrames);
+    const value = progress.value();
+
+    if (!finalFrame) throw new Error("Expected raw deferred response frames");
+    if (!extensions) throw new Error("Expected top-level fixture extensions");
+    if (!value) throw new Error("Expected deferred progress");
+
+    expect(deferredLinkCompletions).toBe(previousCompletionCount + 1);
+    expect(
+      requestFrames.some(({ pendingLabels }) => pendingLabels.includes("deferred-root-failure")),
+    ).toBe(true);
+    expect(
+      requestFrames.some(
+        ({ completionErrorMessages, hasNext }) =>
+          completionErrorMessages.includes("fixture root failure") && hasNext === false,
+      ),
+    ).toBe(true);
+    expect(finalFrame.hasNext).toBe(false);
+    expect(extensions).toMatchObject({
+      fixture: { instanceId: fixture.instanceId, phase: "subsequent" },
+    });
+    expect(result.extensions).toStrictEqual(extensions);
+    expect(value.extensions).toStrictEqual(extensions);
+    expect(value.dataState).toBe("streaming");
+    expect(progress.status()).toBe("complete");
+    expect(progress.pending()).toBe(false);
+
+    if (hasErrors) {
+      expect(result.errors?.map(({ message }) => message)).toContain("fixture root failure");
+      expect(value.errors?.map(({ message }) => message)).toContain("fixture root failure");
+    } else {
+      expect("errors" in result).toBe(false);
+      expect("errors" in value).toBe(false);
+    }
+  }
+
+  const outputRejectedQuery = registerNativeQueryProfile(
+    client.query({
+      name: "graphql-incremental.deferred-root-failure.output-rejected",
+      document: deferredRootFailureDocument,
+      key: () => "deferred-root-failure/output-rejected",
+      errorPolicy: "all",
+    }),
+    { output: rejectedDeferredOutput },
+  );
+  const outputRejectedContract = defineContract({
+    namespace: "graphql-incremental-deferred-failure-output",
+    operations: { query: outputRejectedQuery },
+  });
+  const outputRejectedGraph = ownGraph(outputRejectedContract);
+  const outputRejectedOwner = mountQueryOwner();
+
+  const previousOutputFrameCount = deferredFrames.length;
+  const previousOutputCompletionCount = deferredLinkCompletions;
+  const outputRejectedView = bindOwner(
+    outputRejectedOwner,
+    outputRejectedGraph,
+    outputRejectedContract,
+  ).query({});
+  const outputRejectedProgress = outputRejectedView.project();
+  const outputFailure = await captureFailure(outputRejectedView.ready);
+  const outputFrames = deferredFrames.slice(previousOutputFrameCount);
+  const outputFinalFrame = outputFrames.at(-1);
+  const outputExtensions = latestExtensions(outputFrames);
+
+  if (!outputFinalFrame) throw new Error("Expected raw output-rejected deferred frames");
+  if (!outputExtensions) throw new Error("Expected output-rejected fixture extensions");
+
+  expect(outputFailure).toBeInstanceOf(Error);
+  expect(deferredOutputValidationCount).toBe(1);
+  expect(deferredOutputValidationInput).toMatchObject({
+    errors: expect.arrayContaining([expect.objectContaining({ message: "fixture root failure" })]),
+  });
+  expect(deferredLinkCompletions).toBe(previousOutputCompletionCount + 1);
+  expect(outputFinalFrame.hasNext).toBe(false);
+  expect(
+    outputFrames.some(
+      ({ completionErrorMessages, hasNext }) =>
+        completionErrorMessages.includes("fixture root failure") && hasNext === false,
+    ),
+  ).toBe(true);
+  expect(outputRejectedProgress.value()?.dataState).toBe("streaming");
+  expect(outputExtensions).toMatchObject({
+    fixture: { instanceId: fixture.instanceId, phase: "subsequent" },
+  });
+  expect(outputRejectedProgress.value()?.extensions).toStrictEqual(outputExtensions);
+  expect(outputRejectedProgress.status()).toBe("failed");
+  expect(outputRejectedProgress.pending()).toBe(false);
+
+  const noneQuery = client.query({
+    name: "graphql-incremental.deferred-root-failure.none",
+    document: deferredRootFailureDocument,
+    key: () => "deferred-root-failure/none",
+    errorPolicy: "none",
+  });
+  const noneContract = defineContract({
+    namespace: "graphql-incremental-deferred-failure-none",
+    operations: { query: noneQuery },
+  });
+  const noneGraph = ownGraph(noneContract);
+  const noneOwner = makeOwner();
+  const previousNoneFrameCount = deferredFrames.length;
+  const noneView = bindOwner(noneOwner, noneGraph, noneContract).query({});
+  const noneProgress = noneView.project();
+  const noneFailure = await captureFailure(noneView.ready);
+  const noneFrames = deferredFrames.slice(previousNoneFrameCount);
+
+  expect(noneFailure).toBeInstanceOf(Error);
+  expect(
+    noneFrames.some(
+      ({ completionErrorMessages, hasNext }) =>
+        completionErrorMessages.includes("fixture root failure") && hasNext === false,
+    ),
+  ).toBe(true);
+  const noneResult = (noneFailure as GraphQLResultError<DeferredRootFailureData>).result;
+  expect(noneResult?.errors?.map(({ message }) => message)).toContain("fixture root failure");
+  expect(noneProgress.status()).toBe("failed");
+  expect(noneProgress.pending()).toBe(false);
+});
+
+test("incremental queries preserve transport and Link failures", async () => {
+  const fixture = await startFixture();
+  let incrementalTransportLinkError: unknown;
+  const incrementalTransportObserver = new ApolloLink((operation, forward) => {
+    if (!forward) throw new Error("The incremental transport observer has no forwarded link");
+
+    return forward(operation).pipe(
+      tap({
+        error(error) {
+          incrementalTransportLinkError = error;
+        },
+      }),
+    );
+  });
+  const incrementalIgnoredTransportClient = createGraphQLClient({
+    link: ApolloLink.from([
+      incrementalTransportObserver,
+      new HttpLink({ uri: fixture.controlUrl + "/transport-error" }),
+    ]),
+    queryErrorPolicy: "ignore",
+    experimentalIncremental: { profile: "graphql17-v0.2" },
+  });
+
+  const incrementalPostFrameLinkError = new Error("incremental Link failed after a response frame");
+  let incrementalUndefinedLinkErrorObserved = false;
+  const incrementalPostFrameLink = new ApolloLink(
+    (operation) =>
+      new Observable<ApolloLink.Result>((observer) => {
+        const value = operation.variables.value as string;
+        if (value === "undefined-null-frame") {
+          observer.next({ data: null } as unknown as ApolloLink.Result);
+          incrementalUndefinedLinkErrorObserved = true;
+          observer.error(undefined);
+
+          return;
+        }
+
+        observer.next({
+          data: { echo: value, contextEcho: { value, identity: null } },
+          hasNext: false,
+        } as unknown as ApolloLink.Result);
+        observer.error(incrementalPostFrameLinkError);
+      }),
+  );
+  const incrementalPostFrameClient = createGraphQLClient({
+    link: incrementalPostFrameLink,
+    queryErrorPolicy: "ignore",
+    experimentalIncremental: { profile: "graphql17-v0.2" },
+  });
+  clients.push(incrementalIgnoredTransportClient, incrementalPostFrameClient);
+
+  const ignoredTransportQuery = incrementalIgnoredTransportClient.query({
+    name: "graphql-incremental-policy.ignored-transport",
+    document: rootFailureDocument,
+    key: () => "ignored-transport",
+    revalidateAfterMs: 60_000,
+  });
+  const incrementalPostFrameQuery = incrementalPostFrameClient.query({
+    name: "graphql-incremental-policy.post-frame-error",
+    document: fullDocument,
+    key: ({ value }) => "post-frame-error/" + value,
+    revalidateAfterMs: 60_000,
+  });
+  const incrementalUndefinedLinkQuery = incrementalPostFrameClient.query({
+    name: "graphql-incremental-policy.undefined-null-frame-error",
+    document: fullDocument,
+    key: ({ value }) => "undefined-null-frame-error/" + value,
+    revalidateAfterMs: 60_000,
+  });
+  const contract = defineContract({
+    namespace: "graphql-incremental-policy",
+    operations: { ignoredTransportQuery, incrementalPostFrameQuery, incrementalUndefinedLinkQuery },
+  });
+  const graph = ownGraph(contract);
+  const owner = mountQueryOwner();
+
+  const api = bindOwner(owner, graph, contract);
+
+  const ignoredTransportView = api.ignoredTransportQuery({});
+  const ignoredTransportProgress = ignoredTransportView.project();
+  const ignoredTransportFailure = await captureFailure(ignoredTransportView.ready);
+  expect(ignoredTransportFailure).toBeInstanceOf(Error);
+  expect((ignoredTransportFailure as Error).message).toBe(
+    "The incremental GraphQL operation did not produce a complete result",
+  );
+  expect((ignoredTransportFailure as GraphQLResultError).cause).toBe(incrementalTransportLinkError);
+  expect(incrementalTransportLinkError).toBeInstanceOf(Error);
+  expect(ignoredTransportProgress.status()).toBe("failed");
+  expect(ignoredTransportProgress.pending()).toBe(false);
+  expect(ignoredTransportProgress.value()).toBeUndefined();
+
+  const incrementalPostFrameView = api.incrementalPostFrameQuery({ value: "frame-error" });
+  const incrementalPostFrameProgress = incrementalPostFrameView.project();
+  const incrementalPostFrameFailure = await captureFailure(incrementalPostFrameView.ready);
+  expect(incrementalPostFrameFailure).toBeInstanceOf(Error);
+  expect(
+    incrementalPostFrameFailure === incrementalPostFrameLinkError ||
+      (incrementalPostFrameFailure as GraphQLResultError).cause === incrementalPostFrameLinkError,
+  ).toBe(true);
+  expect(incrementalPostFrameProgress.status()).toBe("failed");
+  expect(incrementalPostFrameProgress.pending()).toBe(false);
+  expect(incrementalPostFrameProgress.value()?.dataState).not.toBe("complete");
+
+  const undefinedFrameView = api.incrementalUndefinedLinkQuery({
+    value: "undefined-null-frame",
+  });
+  const undefinedFrameProgress = undefinedFrameView.project();
+  const undefinedFrameOutcome = await undefinedFrameView.ready.then(
+    () => "resolved",
+    () => "rejected",
+  );
+
+  expect(incrementalUndefinedLinkErrorObserved).toBe(true);
+  expect(undefinedFrameOutcome).toBe("rejected");
+  expect(undefinedFrameProgress.value()).toBeUndefined();
+  expect(undefinedFrameProgress.status()).toBe("failed");
+  expect(undefinedFrameProgress.pending()).toBe(false);
+});
+
+test("aborting an incremental HTTP execution interrupts its observed progress", async () => {
+  const fixture = await startFixture();
+  const client = createGraphQLClient({
+    link: new HttpLink({ uri: fixture.graphqlUrl.replace(/\/graphql$/, "/graphql-incremental") }),
+    experimentalIncremental: { profile: "graphql17-v0.2" },
+  });
+  clients.push(client);
+  const query = client.query({
+    name: "graphql-incremental.interrupted",
+    document: incrementalBoardDocument,
+    key: () => "interrupted",
+  });
+  const contract = defineContract({
+    namespace: "graphql-incremental-interrupted",
+    operations: { query },
+  });
+  const graph = ownGraph(contract);
+  const caller = new AbortController();
+  const view = bindOwner(mountQueryOwner(), graph, contract).query(
+    {},
+    { abortSignal: caller.signal },
+  );
+  const progress = view.project();
+  const failure = captureFailure(view.ready);
+  const partial = await observed(progress.value, (value) => value?.dataState === "streaming");
+  const started = await waitForGate(fixture, "incremental-streamed-details", "started");
+  expect(partial?.dataState).toBe("streaming");
+  expect(started).toMatchObject({ started: 1, completed: 0, pending: true });
+
+  const reason = new DOMException("caller interrupted incremental query", "AbortError");
+  caller.abort(reason);
+  expect(await failure).toBe(reason);
+  const aborted = await waitForGate(fixture, "incremental-streamed-details", "aborted");
+  expect(aborted.aborted).toBe(1);
+  expect(progress.status()).toBe("interrupted");
+  expect(progress.value()?.dataState).toBe("streaming");
+  expect(progress.pending()).toBe(false);
 });
 
 test("native GraphQL execution preserves full, partial, null, error, and extension results", async () => {

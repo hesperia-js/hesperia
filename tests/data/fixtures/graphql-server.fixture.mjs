@@ -102,6 +102,7 @@ const schema = buildSchema(`
     state: MutationState!
     gate(id: ID!): String!
     incrementalBoard: IncrementalBoard!
+    incrementalFailureItems: [String]
   }
 
   type Mutation {
@@ -488,6 +489,11 @@ incrementalQueryFields.incrementalBoard.resolve = (_root, _args, context) => {
     ],
   };
 };
+incrementalQueryFields.incrementalFailureItems.resolve = () =>
+  (async function* () {
+    yield "initial failure item";
+    throw new Error("fixture incremental stream failure");
+  })();
 const incrementalItemFields = incrementalSchema.getType("IncrementalItem").getFields();
 incrementalItemFields.details.resolve = (item, _args, context) =>
   item.gateId === undefined ? item.details : gateResolver(item, { id: item.gateId }, context);
