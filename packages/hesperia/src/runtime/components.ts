@@ -3,8 +3,10 @@ import type { Accessor } from "../client.ts";
 import {
   attachComponentBinding,
   isRequiredBinding,
+  prepareComponentBinding,
   reassignComponentBinding,
   type Binding,
+  type ComponentBindingAttachmentV1,
   type WritableBinding,
 } from "./binding.ts";
 import type { Rendered } from "./dom.ts";
@@ -354,6 +356,13 @@ interface PropSlot {
   present: boolean;
 }
 
+const structuralMappedRestorations = new WeakMap<
+  Owner,
+  WeakMap<
+    object,
+    { readonly props: Record<string, unknown>; readonly slots: ReadonlyMap<string, PropSlot> }
+  >
+>();
 const mappedProps = new WeakMap<object, MappedPropsOrigin>();
 const ownerMappings = new WeakMap<Owner, Set<ComponentMapping>>();
 const nextMappingIds = new WeakMap<RuntimeContext, number>();
@@ -441,6 +450,11 @@ function mapComponentInputs(
   schemas: ReadonlyMap<string, PropSchema>,
   values: ReadonlyMap<string, unknown>,
   componentId?: string,
+  staged?: {
+    readonly defined: ReadonlySet<string>;
+    readonly assertHydrated: () => void;
+    readonly attachments: (() => ComponentBindingAttachmentV1 | undefined)[];
+  },
 ): { readonly props: Record<string, unknown>; readonly slots: ReadonlyMap<string, PropSlot> } {
   const props: Record<string, unknown> = {};
   const slots = new Map<string, PropSlot>();
@@ -458,26 +472,34 @@ function mapComponentInputs(
       present: values.has(name),
     };
 
+    const defined = staged ? staged.defined.has(name) : value !== undefined;
+
     if (schema.kind === "plain") {
       bodyValue = value;
     } else if (schema.kind === "binding") {
-      bodyValue =
-        value === undefined ? undefined : attachComponentBinding(value as Binding<unknown>, owner);
-    } else if (schema.kind === "callback") {
-      bodyValue =
-        value === undefined
-          ? undefined
-          : function (this: unknown, ...args: unknown[]) {
-              owner.assertReadable();
+      if (!defined) bodyValue = undefined;
+      else if (staged) {
+        const prepared = prepareComponentBinding(owner);
 
-              return Reflect.apply(slot.current as Function, this, args);
-            };
+        bodyValue = prepared.endpoint;
+        staged.attachments.push(() => prepared.attach(slot.current as Binding<unknown>));
+      } else bodyValue = attachComponentBinding(value as Binding<unknown>, owner);
+    } else if (schema.kind === "callback") {
+      bodyValue = !defined
+        ? undefined
+        : function (this: unknown, ...args: unknown[]) {
+            owner.assertReadable();
+            staged?.assertHydrated();
+
+            return Reflect.apply(slot.current as Function, this, args);
+          };
     } else {
       source = signal(value);
       const readable = source;
 
       const read = () => {
         owner.assertReadable();
+        staged?.assertHydrated();
 
         return readable.get();
       };
@@ -636,6 +658,38 @@ export function snapshotMappedProps(value: unknown): {
     },
     mapped: true,
   };
+}
+
+/** @internal Reconstruct accessors from slot data, rather than serializing their functions. */
+export function restoreMappedProps(owner: Owner, value: unknown): unknown {
+  if (typeof value !== "object" || value === null || !("type" in value) || !("slots" in value))
+    return value;
+
+  const transfer = value as MappedPropsTransfer;
+
+  if ((transfer.type !== "container" && transfer.type !== "slot") || !Array.isArray(transfer.slots))
+    throw new RenderFault("resume-props", "Invalid mapped props transfer");
+
+  const restorations =
+    structuralMappedRestorations.get(owner) ??
+    new WeakMap<
+      object,
+      { readonly props: Record<string, unknown>; readonly slots: ReadonlyMap<string, PropSlot> }
+    >();
+  const existing = restorations.get(value);
+  if (existing)
+    return transfer.type === "container"
+      ? existing.props
+      : existing.slots.values().next().value?.bodyValue;
+  const schema = new Map(transfer.slots.map((slot) => [slot.name, slot.schema]));
+  const values = new Map(transfer.slots.map((slot) => [slot.name, slot.value]));
+  const mapped = mapComponentInputs(owner, schema, values);
+  restorations.set(value, mapped);
+  structuralMappedRestorations.set(owner, restorations);
+  owner.onRelease(() => restorations.delete(value));
+  return transfer.type === "container"
+    ? mapped.props
+    : mapped.slots.values().next().value?.bodyValue;
 }
 
 /** Execute one fresh body from an already-validated input snapshot. */
