@@ -46,19 +46,16 @@ type PatternParams<S extends string> = string extends S
     ? SegmentParams<H> & PatternParams<T>
     : SegmentParams<S>;
 
-type RouteConfigurationWithReadonlyTags<Configuration> = Omit<Configuration, "tags"> &
-  Readonly<{
-    [Key in keyof Configuration as Key extends "tags" ? Key : never]: Readonly<Configuration[Key]>;
-  }>;
-
 /**
- * Declare a route for compiler inspection. Server members are not included in the browser manifest.
+ * Declare a route with readonly literal tag types for compiler inspection.
+ * Server members are not included in the browser manifest.
+ * @typeParam Tags The authored literal tags.
  * @param configuration The authored route declaration.
  * @returns The same configuration object with readonly tag types.
  */
-export function route<const Configuration extends Route.Declaration>(
-  configuration: Configuration,
-): RouteConfigurationWithReadonlyTags<Configuration>;
+export function route<const Tags extends readonly string[]>(
+  configuration: Route.Declaration & { readonly tags: Tags },
+): Route.Declaration & { readonly tags: Readonly<Tags> };
 /**
  * Declare a route with an explicit path pattern for its guard parameters.
  * @typeParam Pattern Route path pattern.
