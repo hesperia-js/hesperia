@@ -1,5 +1,5 @@
-import { expect, test } from "bun:test";
-import { mkdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { expect, spyOn, test } from "bun:test";
+import { existsSync, mkdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -457,17 +457,20 @@ test("retains the completed scaffold when a real installer fails", async () => {
   }
 }, 45_000);
 
-test("retires an installer cancelled at its start and retains the completed scaffold", async () => {
+test("does not start an installer cancelled by its progress callback", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-create-installer-cancel-"));
   const destination = join(root, "application");
-  const script = join(root, "postinstall.mjs");
   const controller = new AbortController();
   const progress: string[] = [];
-  let cleanupAllowed = true;
+  const spawnSpy = spyOn(Bun, "spawn");
+
+  const installerStarted = (): boolean =>
+    spawnSpy.mock.calls.some(
+      (args) =>
+        Array.isArray(args[0]) && args[0][0] === process.execPath && args[0][1] === "install",
+    );
 
   try {
-    await writeFile(script, "setTimeout(() => {}, 1500);\n");
-
     const result = await executeCreator(
       resolveCreator({ destination, hostIntegration: "none", install: true }),
       {
@@ -475,14 +478,6 @@ test("retires an installer cancelled at its start and retains the completed scaf
         installerOutput: { stdout: process.stdout.fd, stderr: process.stderr.fd },
         onProgress(event) {
           if (event.kind === "created") {
-            writeFileSync(
-              join(event.projectRoot, "package.json"),
-              JSON.stringify({
-                name: event.packageName,
-                private: true,
-                scripts: { postinstall: `"${process.execPath}" "${script}"` },
-              }),
-            );
             progress.push("created");
           }
 
@@ -499,18 +494,109 @@ test("retires an installer cancelled at its start and retains the completed scaf
 
     if (result.status !== "cancelled") throw new Error("Expected installation to cancel");
 
-    cleanupAllowed = result.installer?.pendingResource !== true;
-
     expect(progress).toStrictEqual(["created", "started"]);
     expect(result.projectRoot).toBe(destination);
     expect(result.cleanup.status).toBe("retained");
     expect(result.cleanup.retainedPaths).toContain(destination);
+    expect(result.installer).toBeUndefined();
+    expect(installerStarted()).toBe(false);
+    expect(await readFile(join(destination, "app.tsx"), "utf8")).toContain("application");
+  } finally {
+    const started = installerStarted();
+    spawnSpy.mockRestore();
+    if (!started) await rm(root, { recursive: true, force: true });
+  }
+}, 45_000);
+
+test("reaps a running installer after cancellation and retains the scaffold", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-create-running-installer-"));
+  const destination = join(root, "application");
+  const script = join(root, "postinstall.mjs");
+  const marker = join(root, "postinstall-started");
+  const controller = new AbortController();
+  const originalSpawn = Bun.spawn;
+  let observedInstaller: Bun.Subprocess | undefined;
+  const spawnSpy = spyOn(Bun, "spawn").mockImplementation(((...args: unknown[]) => {
+    const child = Reflect.apply(originalSpawn, Bun, args) as Bun.Subprocess;
+    const [command, options] = args;
+
+    if (
+      Array.isArray(command) &&
+      command[0] === process.execPath &&
+      command[1] === "install" &&
+      typeof options === "object" &&
+      options !== null &&
+      "cwd" in options &&
+      options.cwd === destination
+    ) {
+      observedInstaller = child;
+    }
+
+    return child;
+  }) as typeof Bun.spawn);
+  let execution: ReturnType<typeof executeCreator> | undefined;
+
+  try {
+    await writeFile(
+      script,
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "started");\nsetTimeout(() => {}, 5000);\n`,
+    );
+
+    execution = executeCreator(
+      resolveCreator({ destination, hostIntegration: "none", install: true }),
+      {
+        signal: controller.signal,
+        installerOutput: { stdout: process.stdout.fd, stderr: process.stderr.fd },
+        onProgress(event) {
+          if (event.kind === "created") {
+            writeFileSync(
+              join(event.projectRoot, "package.json"),
+              JSON.stringify({
+                name: event.packageName,
+                private: true,
+                scripts: { postinstall: `"${process.execPath}" "${script}"` },
+              }),
+            );
+          }
+        },
+      },
+    );
+
+    const deadline = Date.now() + 15_000;
+    while (!existsSync(marker) && Date.now() < deadline) await Bun.sleep(25);
+    expect(existsSync(marker)).toBe(true);
+    controller.abort();
+
+    const result = await execution;
+    expect(result.status).toBe("cancelled");
+    if (result.status !== "cancelled") throw new Error("Expected installation to cancel");
+
+    expect(result.projectRoot).toBe(destination);
+    expect(result.cleanup.status).toBe("retained");
+    expect(result.cleanup.retainedPaths).toContain(destination);
+    expect(observedInstaller).toBeDefined();
     expect(result.installer?.pid).toBeGreaterThan(0);
+    expect(result.installer?.pid).toBe(observedInstaller?.pid);
     expect(result.installer?.reaped).toBe(true);
     expect(result.installer?.pendingResource).toBe(false);
     expect(await readFile(join(destination, "app.tsx"), "utf8")).toContain("application");
   } finally {
-    if (cleanupAllowed) await rm(root, { recursive: true, force: true });
+    controller.abort();
+    let result: Awaited<ReturnType<typeof executeCreator>> | undefined;
+    try {
+      result = await execution;
+    } finally {
+      spawnSpy.mockRestore();
+    }
+    await Bun.sleep(5_100);
+    if (
+      observedInstaller === undefined ||
+      (result?.status === "cancelled" &&
+        result.installer?.reaped === true &&
+        result.installer.pendingResource === false)
+    ) {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 }, 45_000);
 
