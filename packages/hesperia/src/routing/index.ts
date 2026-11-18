@@ -46,10 +46,26 @@ type PatternParams<S extends string> = string extends S
     ? SegmentParams<H> & PatternParams<T>
     : SegmentParams<S>;
 
-/** Typed route declaration inspected by the compiler; its server members never enter the browser manifest. */
+/**
+ * Declare a route with readonly literal tag types for compiler inspection.
+ * Server members are not included in the browser manifest.
+ * @typeParam Tags The authored literal tags.
+ * @param configuration The authored route declaration.
+ * @returns The same configuration object with readonly tag types.
+ */
+export function route<const Tags extends readonly string[]>(
+  configuration: Route.Declaration & { readonly tags: Tags },
+): Route.Declaration & { readonly tags: Readonly<Tags> };
+/**
+ * Declare a route with an explicit path pattern for its guard parameters.
+ * @typeParam Pattern Route path pattern.
+ * @param configuration The authored route declaration.
+ * @returns The same configuration object.
+ */
 export function route<Pattern extends string = string>(
   configuration: Route.Declaration<Pattern>,
-): Route.Declaration<Pattern> {
+): Route.Declaration<Pattern>;
+export function route(configuration: object): object {
   return configuration;
 }
 
@@ -73,5 +89,7 @@ export namespace Route {
     readonly load?: unknown;
     /** Literal response policy inspected by the compiler. */
     readonly headers?: Readonly<Record<string, string>>;
+    /** Literal tag declarations inspected by the compiler; generation does not yet publish them. */
+    readonly tags?: readonly string[];
   }
 }
