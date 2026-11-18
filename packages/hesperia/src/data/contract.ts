@@ -5,6 +5,7 @@ import type {
   Graph,
   MutationDefinition,
   MutationOptions,
+  NativeTransferSource,
   OperationDefinition,
   OperationTree,
   QueryDefinition,
@@ -44,6 +45,60 @@ type BrandedOperationOptions<Options extends StoreOptions<any> | MutationOptions
 >;
 type FiniteOperation = Extract<OperationDefinition, { readonly kind: "query" | "mutation" }>;
 type OperationPolicies = ReadonlyMap<FiniteOperation, NativeOperationPolicy>;
+
+/** One Query member issued by an Owner-bound contract API. @internal */
+export interface OwnerBoundQueryApiMember {
+  readonly owner: Owner;
+  readonly graph: Graph;
+  readonly definition: object;
+  readonly registration: object | undefined;
+  readonly apiMember: Function;
+  readonly receiver: object;
+  readonly nativeMember: NativeTransferSource;
+  readonly nativeReceiver: object;
+}
+
+const ownerBoundQueryApiMembers = new WeakMap<
+  object,
+  ReadonlyMap<string, OwnerBoundQueryApiMember>
+>();
+
+/** Resolve an unchanged own-data Query member from its issuing API. @internal */
+export function resolveOwnerBoundQueryApiMember(
+  owner: Owner,
+  boundApi: unknown,
+  memberName: string,
+): OwnerBoundQueryApiMember | undefined {
+  if (boundApi === null || typeof boundApi !== "object" || typeof memberName !== "string")
+    return undefined;
+
+  const member = ownerBoundQueryApiMembers.get(boundApi)?.get(memberName);
+
+  if (
+    member === undefined ||
+    member.owner !== owner ||
+    member.receiver !== boundApi ||
+    !Object.isFrozen(boundApi)
+  )
+    return undefined;
+
+  const descriptor = Object.getOwnPropertyDescriptor(boundApi, memberName);
+  const nativeDescriptor = Object.getOwnPropertyDescriptor(member.nativeReceiver, memberName);
+
+  if (
+    !descriptor ||
+    !("value" in descriptor) ||
+    descriptor.value !== member.apiMember ||
+    !nativeDescriptor ||
+    !("value" in nativeDescriptor) ||
+    nativeDescriptor.value !== member.nativeMember ||
+    member.registration !==
+      nativeQueryRegistration(member.definition as QueryDefinition<any, any, string, any>)
+  )
+    return undefined;
+
+  return member;
+}
 
 /**
  * Owner-bound mutation controller returned by an adapted contract member.
@@ -147,6 +202,7 @@ function buildTree(
 
   const source = rawApi as Record<string, unknown>;
   const result: Record<string, unknown> = {};
+  const queryMembers = new Map<string, OwnerBoundQueryApiMember>();
 
   for (const [property, declaration] of Object.entries(declarations)) {
     const member = source[property];
@@ -241,6 +297,20 @@ function buildTree(
           queryMember(...args);
         });
       };
+
+      queryMembers.set(
+        property,
+        Object.freeze({
+          owner,
+          graph,
+          definition: declaration,
+          registration: nativeQueryRegistration(declaration),
+          apiMember: result[property] as Function,
+          receiver: result,
+          nativeMember: member as NativeTransferSource,
+          nativeReceiver: source,
+        }),
+      );
     } else if (isMutationDefinition(declaration)) {
       if (typeof member !== "function") throw malformedMember(property);
 
@@ -459,7 +529,10 @@ function buildTree(
     }
   }
 
-  return Object.freeze(result);
+  const frozen = Object.freeze(result);
+  ownerBoundQueryApiMembers.set(frozen, queryMembers);
+
+  return frozen;
 }
 
 function isPreparedPromise<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {

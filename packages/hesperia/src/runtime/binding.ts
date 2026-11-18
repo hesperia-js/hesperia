@@ -223,6 +223,140 @@ export function attachComponentBinding<T>(binding: Binding<T>, owner: Owner): Wr
   return read;
 }
 
+/** @internal Exact, idempotent release for one prepared component endpoint. */
+export interface ComponentBindingAttachmentV1 {
+  detach(): void;
+}
+
+/** @internal Allocate the actual endpoint before cyclic route inputs are hydrated. */
+export function prepareComponentBinding<T>(owner: Owner): {
+  readonly endpoint: WritableBinding<T>;
+  attach(binding: Binding<T>): ComponentBindingAttachmentV1;
+} {
+  let current: Binding<T> | undefined;
+  let record: BindingRecord | undefined;
+  let attachment: Attachment | undefined;
+  let published: T | undefined;
+  let hasPublished = false;
+  let ownerReleaseRegistered = false;
+  const assertAttached = (): BindingRecord => {
+    if (!current || !record)
+      throw new RenderFault(
+        "resume-props",
+        "A component binding endpoint is not hydrated and attached",
+      );
+
+    return record;
+  };
+  const read = (() => {
+    assertAttached();
+
+    return current!();
+  }) as WritableBinding<T>;
+  const detachRecord = (active: BindingRecord, activeAttachment: Attachment): void => {
+    if (active.attachment !== activeAttachment) return;
+    active.attachment = undefined;
+    active.published = false;
+    if (active.optional) active.value.set(undefined);
+    else if (active.creator.state === "mounted") owner.context.scheduler.requestEffects();
+  };
+  const detachCurrent = (): void => {
+    const active = record;
+    const activeAttachment = attachment;
+    if (!active || !activeAttachment) return;
+    detachRecord(active, activeAttachment);
+    if (record === active && attachment === activeAttachment) {
+      current = undefined;
+      record = undefined;
+      attachment = undefined;
+    }
+  };
+  read.set = (value: T) => {
+    owner.assertActive();
+    const active = assertAttached();
+
+    if (active.attachment !== attachment) {
+      throw new RenderFault("binding-stale", "The binding publication endpoint is stale");
+    }
+
+    if (value === undefined) {
+      throw new RenderFault("binding-publication", "A component must publish a defined interface");
+    }
+
+    published = value;
+    hasPublished = true;
+    active.published = true;
+
+    active.value.set(exposePublishedValue(value, owner));
+  };
+
+  endpoints.set(read, {
+    reassign(next) {
+      owner.assertActive();
+      const active = assertAttached();
+
+      if (next === current) return;
+
+      const nextRecord = getRecord(next);
+
+      nextRecord.creator.assertActive();
+
+      if (nextRecord.attachment)
+        throw new RenderFault(
+          "binding-duplicate",
+          "A binding cannot attach to multiple live targets",
+        );
+
+      active.attachment = undefined;
+      active.published = false;
+
+      if (active.optional) active.value.set(undefined);
+      else if (active.creator.state === "mounted") owner.context.scheduler.requestEffects();
+
+      current = next as Binding<T>;
+      record = attach(current, owner, owner);
+      attachment = record.attachment;
+
+      if (hasPublished) read.set(published as T);
+    },
+  });
+
+  return {
+    endpoint: read,
+    attach(binding) {
+      owner.assertActive();
+
+      if (current)
+        throw new RenderFault("binding-duplicate", "A component endpoint can attach only once");
+
+      record = attach(binding, owner, owner);
+      current = binding;
+      const leasedAttachment = record.attachment!;
+      attachment = leasedAttachment;
+      const leasedRecord = record;
+      let active = true;
+      const lease = Object.freeze({
+        detach() {
+          if (!active) return;
+          active = false;
+          if (record !== leasedRecord || attachment !== leasedAttachment) return;
+          detachRecord(leasedRecord, leasedAttachment);
+          if (record === leasedRecord && attachment === leasedAttachment) {
+            current = undefined;
+            record = undefined;
+            attachment = undefined;
+          }
+        },
+      });
+      if (!ownerReleaseRegistered) {
+        owner.onRelease(detachCurrent);
+        ownerReleaseRegistered = true;
+      }
+      return lease;
+    },
+  };
+}
+
 /** Retarget an intact child endpoint while preserving its body and latest publication. */
 export function reassignComponentBinding(
   endpoint: WritableBinding<unknown>,

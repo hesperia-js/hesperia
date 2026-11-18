@@ -1,7 +1,20 @@
 import { Signal, withoutWrites } from "aeolia";
 import type { Graph, QueryStore } from "aeolia";
+import type { RequestApiScope } from "../data/api.ts";
 import { retireDataBindingRoot } from "../data/environment.ts";
 import type { Scheduler } from "./scheduler.ts";
+import {
+  acquirePhysicalOwner,
+  beginPhysicalOwnerClose,
+  completePhysicalOwnerConstruction,
+  failPhysicalOwnerConstruction,
+  finishPhysicalOwnerClose,
+  physicalOwnerAdmissionOpen,
+  recordPhysicalOwnerCleanupFailure,
+  reservePhysicalOwnerCleanupFailure,
+  retainPhysicalOwnerRetirement,
+  samePhysicalOwnerLifetime,
+} from "./retirement.ts";
 
 /** Lifecycle phases distinguish cleanup access from final destruction. */
 export type OwnerState = "building" | "mounted" | "suspended" | "cleaning" | "destroyed";
@@ -103,6 +116,10 @@ export class ResetRenderSuspension extends Error {
 
 /** Document-scoped services shared by a mounted tree. */
 export interface RuntimeContext {
+  /** Native target; omitted for existing browser roots. */
+  readonly target?: "browser" | "server";
+  /** One request-local API scope shared by a server Owner tree. */
+  readonly requestApiScope?: RequestApiScope;
   /** Document used for native node construction; no ambient document is required. */
   readonly document: Document;
   /** Delivers faults that no component boundary handled. */
@@ -126,6 +143,8 @@ interface CleanupFailureSlot {
   reason?: unknown;
   causes?: readonly unknown[];
   reportable?: boolean;
+  physicalOwner?: Owner;
+  physicalFailure?: (reasons: readonly unknown[]) => void;
 }
 
 type OwnerRetirementMode = "sync" | "join";
@@ -286,6 +305,8 @@ function storeSynchronousIncompleteFailure(
   operation: OwnerRetirementOperation,
   slot: CleanupFailureSlot,
   reason: unknown,
+  owner: Owner = operation.initiator,
+  physicalFailure?: (reasons: readonly unknown[]) => void,
 ): void {
   let synchronousIndex = 0;
 
@@ -300,12 +321,16 @@ function storeSynchronousIncompleteFailure(
   slot.reason = reason;
   operation.synchronousFailures.splice(synchronousIndex, 0, reason);
   operation.incomplete = true;
+  if (physicalFailure) physicalFailure([reason]);
+  else recordPhysicalOwnerCleanupFailure(owner, reason);
 }
 
 function dependOnOwnerRetirement(
   operation: OwnerRetirementOperation,
   dependency: OwnerRetirementOperation,
   dependencySlot?: CleanupFailureSlot,
+  owner: Owner = operation.initiator,
+  physicalFailure?: (reasons: readonly unknown[]) => void,
 ): void {
   if (operation.settled || operation.dependencies.has(dependency)) return;
 
@@ -316,9 +341,17 @@ function dependOnOwnerRetirement(
   };
 
   if (!dependencySlot) operation.failures.push(slot);
+  slot.physicalOwner = owner;
+  slot.physicalFailure = physicalFailure;
 
   if (operation === dependency || retirementDependsOn(dependency, operation)) {
-    storeSynchronousIncompleteFailure(operation, slot, new CleanupRetirementCycleFault());
+    storeSynchronousIncompleteFailure(
+      operation,
+      slot,
+      new CleanupRetirementCycleFault(),
+      owner,
+      physicalFailure,
+    );
 
     return;
   }
@@ -346,6 +379,12 @@ function dependOnOwnerRetirement(
           reason instanceof AggregateError && reason.message === "Component cleanup failed"
             ? [...reason.errors]
             : [reason];
+        if (
+          slot.physicalOwner &&
+          slot.physicalFailure &&
+          !samePhysicalOwnerLifetime(slot.physicalOwner, dependency.initiator)
+        )
+          slot.physicalFailure(slot.causes);
         operation.incomplete ||= dependency.incomplete;
         operation.pending--;
         finishOwnerRetirement(operation);
@@ -353,7 +392,13 @@ function dependOnOwnerRetirement(
     ]);
   } catch (reason) {
     operation.pending--;
-    storeSynchronousIncompleteFailure(operation, slot, new CleanupObservationFault(reason));
+    storeSynchronousIncompleteFailure(
+      operation,
+      slot,
+      new CleanupObservationFault(reason),
+      owner,
+      physicalFailure,
+    );
   }
 }
 
@@ -463,17 +508,27 @@ function recordCleanupFailureAtSlot(
 }
 
 function storeCleanupObservationFault(
+  owner: Owner,
   operation: OwnerRetirementOperation,
   slot: CleanupFailureSlot,
   reason: unknown,
+  physicalFailure?: (reasons: readonly unknown[]) => void,
 ): void {
-  storeSynchronousIncompleteFailure(operation, slot, new CleanupObservationFault(reason));
+  storeSynchronousIncompleteFailure(
+    operation,
+    slot,
+    new CleanupObservationFault(reason),
+    owner,
+    physicalFailure,
+  );
 }
 
 function observeCleanupReturn(
+  owner: Owner,
   operation: OwnerRetirementOperation,
   slot: CleanupFailureSlot,
   value: unknown,
+  physicalFailure?: (reasons: readonly unknown[]) => void,
 ): void {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") {
     slot.state = "fulfilled";
@@ -495,6 +550,8 @@ function observeCleanupReturn(
       const dependencyIndex = operation.failures.indexOf(dependencySlot);
 
       if (callbackIndex >= 0 && dependencyIndex >= 0 && callbackIndex < dependencyIndex) {
+        dependencySlot.physicalOwner = owner;
+        dependencySlot.physicalFailure = physicalFailure;
         operation.failures.splice(dependencyIndex, 1);
         operation.failures.splice(callbackIndex, 1, dependencySlot);
       } else if (callbackIndex >= 0) {
@@ -504,7 +561,7 @@ function observeCleanupReturn(
       return;
     }
 
-    dependOnOwnerRetirement(operation, dependency, slot);
+    dependOnOwnerRetirement(operation, dependency, slot, owner, physicalFailure);
 
     return;
   }
@@ -523,12 +580,13 @@ function observeCleanupReturn(
         slot.state = "rejected";
         slot.reason = reason;
         operation.pending--;
+        physicalFailure?.([reason]);
         finishOwnerRetirement(operation);
       },
     ]);
   } catch (reason) {
     operation.pending--;
-    storeCleanupObservationFault(operation, slot, reason);
+    storeCleanupObservationFault(owner, operation, slot, reason, physicalFailure);
   }
 }
 
@@ -540,7 +598,7 @@ export interface AsyncBoundaryHost {
   readonly owner: Owner;
 
   /** Keep content uncommitted until an owned render wait completes. */
-  capture(owner: Owner, promise: Promise<void>): void;
+  capture(owner: Owner, promise: Promise<unknown>): void;
 
   /** Retain a source and observe value only when the owner consumes its value or awaits it. */
   consumeQuery<T>(
@@ -611,7 +669,7 @@ export class Owner {
   commitDeferred = false;
   /** Internal route-host preparation flag; authored trees retain eager structural setup. */
   deferStructural = false;
-  private readonly controller = new AbortController();
+  private readonly controller: AbortController;
   private readonly cleanups: (() => unknown)[] = [];
   private readonly releases: (() => unknown)[] = [];
   private readonly commits: (() => void)[] = [];
@@ -621,16 +679,25 @@ export class Owner {
 
   /** Create a fresh lifetime attached to its parent's rendered child order. */
   constructor(context: RuntimeContext, parent: Owner | null, identity: string) {
-    this.context = context;
-    this.parentOwner = parent;
-    this.identity = identity;
-    this.generation = context.nextGeneration++;
-    this.asyncBoundary = parent?.asyncBoundary;
+    acquirePhysicalOwner(this, context, parent);
 
-    parent?.assertActive();
+    try {
+      this.context = context;
+      this.parentOwner = parent;
+      this.identity = identity;
+      this.controller = new AbortController();
+      this.generation = context.nextGeneration++;
+      this.asyncBoundary = parent?.asyncBoundary;
 
-    parent?.children.push(this);
-    actualOwnerInstances.add(this);
+      parent?.assertActive();
+
+      parent?.children.push(this);
+      completePhysicalOwnerConstruction(this);
+      actualOwnerInstances.add(this);
+    } catch (error) {
+      failPhysicalOwnerConstruction(this, error);
+      throw error;
+    }
   }
 
   /** Parent lifetime; route hosts may reparent only a suspended retained subtree. */
@@ -679,9 +746,28 @@ export class Owner {
 
   /** Reject capabilities used after teardown started. */
   assertActive(): void {
-    if (this.state === "cleaning" || this.state === "destroyed") {
+    if (!physicalOwnerAdmissionOpen(this) || this.state === "cleaning" || this.state === "destroyed") {
       throw new RenderFault("disposed", `Component ${this.identity} is no longer active`);
     }
+  }
+
+  /** @internal Whether actual physical admission and the full Owner ancestry permit dispatch. */
+  isDispatchEligible(): boolean {
+    if (!physicalOwnerAdmissionOpen(this)) return false;
+
+    if (this.state === "suspended" || this.state === "cleaning" || this.state === "destroyed")
+      return false;
+
+    for (let current: Owner | null = this.parent; current; current = current.parent) {
+      if (
+        current.state === "suspended" ||
+        current.state === "cleaning" ||
+        current.state === "destroyed"
+      )
+        return false;
+    }
+
+    return true;
   }
 
   /** Reject public reads after final destruction; cleanup reads remain permitted. */
@@ -850,6 +936,7 @@ export class Owner {
 
     const operation = makeOwnerRetirementOperation(this, mode, reportSynchronous);
     bindOwnerRetirementAliases(this, operation);
+    retainPhysicalOwnerRetirement(this, operation.promise);
 
     if (mode === "sync") observeSyncRetirementPromise(operation);
 
@@ -894,63 +981,74 @@ export class Owner {
       return;
     }
 
-    if (!wasRetiring) {
-      bindOwnerRetirementAliases(this, operation);
-      this.state = "cleaning";
+    if (wasRetiring) {
+      if (this.parentOwner === null) this.retireDataBinding(ownerOperation, reason);
+      return;
     }
 
-    if (this.parentOwner === null) this.retireDataBinding(ownerOperation, reason);
-
-    if (wasRetiring) return;
+    bindOwnerRetirementAliases(this, operation);
+    beginPhysicalOwnerClose(this);
 
     try {
-      this.controller.abort(reason);
-    } catch (error) {
-      recordCleanupFailure(operation, error);
-    }
-
-    for (const cleanup of this.cleanups.splice(0).reverse()) this.invokeCleanup(cleanup, operation);
-
-    for (const child of this.children.slice()) {
-      try {
-        child.destroy(reason, operation);
-      } catch (error) {
-        recordCleanupFailure(operation, error);
-      }
-    }
-
-    for (const release of this.releases.splice(0).reverse()) this.invokeRelease(release, operation);
-
-    if (this.styleLifecycle) {
-      const binding = this.styleLifecycle;
-      this.styleLifecycle = undefined;
+      this.state = "cleaning";
+      if (this.parentOwner === null) this.retireDataBinding(ownerOperation, reason);
 
       try {
-        binding.lifecycle.released(this, binding.ownerId);
+        this.controller.abort(reason);
       } catch (error) {
-        recordCleanupFailure(operation, error);
+        this.recordPhysicalCleanupFailure(operation, error);
       }
-    }
 
-    for (const node of this.nodes) {
-      try {
-        node.parentNode?.removeChild(node);
-      } catch (error) {
-        recordCleanupFailure(operation, error);
+      for (const cleanup of this.cleanups.splice(0).reverse()) this.invokeCleanup(cleanup, operation);
+
+      for (const child of this.children.slice()) {
+        try {
+          child.destroy(reason, operation);
+        } catch (error) {
+          this.recordPhysicalCleanupFailure(operation, error);
+        }
       }
+
+      for (const release of this.releases.splice(0).reverse()) this.invokeRelease(release, operation);
+
+      if (this.styleLifecycle) {
+        const binding = this.styleLifecycle;
+        this.styleLifecycle = undefined;
+
+        try {
+          binding.lifecycle.released(this, binding.ownerId);
+        } catch (error) {
+          this.recordPhysicalCleanupFailure(operation, error);
+        }
+      }
+
+      for (const node of this.nodes) {
+        try {
+          node.parentNode?.removeChild(node);
+        } catch (error) {
+          this.recordPhysicalCleanupFailure(operation, error);
+        }
+      }
+
+      this.nodes.clear();
+      this.publicationChecks.clear();
+      this.commits.length = 0;
+      resourceLifecycles.delete(this);
+      this.state = "destroyed";
+
+      if (this.parentOwner) {
+        const index = this.parentOwner.children.indexOf(this);
+
+        if (index >= 0) this.parentOwner.children.splice(index, 1);
+      }
+    } finally {
+      finishPhysicalOwnerClose(this);
     }
+  }
 
-    this.nodes.clear();
-    this.publicationChecks.clear();
-    this.commits.length = 0;
-    resourceLifecycles.delete(this);
-    this.state = "destroyed";
-
-    if (this.parentOwner) {
-      const index = this.parentOwner.children.indexOf(this);
-
-      if (index >= 0) this.parentOwner.children.splice(index, 1);
-    }
+  private recordPhysicalCleanupFailure(operation: OwnerRetirementOperation, reason: unknown): void {
+    recordCleanupFailure(operation, reason);
+    recordPhysicalOwnerCleanupFailure(this, reason);
   }
 
   private invokeCleanup(cleanup: () => unknown, operation: OwnerRetirementOperation): void {
@@ -961,11 +1059,13 @@ export class Owner {
     };
 
     operation.failures.push(slot);
+    const physicalFailure = reservePhysicalOwnerCleanupFailure(this);
 
     try {
-      observeCleanupReturn(operation, slot, runCleanup(cleanup));
+      observeCleanupReturn(this, operation, slot, runCleanup(cleanup), physicalFailure);
     } catch (reason) {
       recordCleanupFailureAtSlot(operation, slot, reason);
+      physicalFailure?.([reason]);
     }
   }
 
@@ -977,22 +1077,48 @@ export class Owner {
     };
 
     operation.failures.push(slot);
+    const physicalFailure = reservePhysicalOwnerCleanupFailure(this);
 
     try {
-      observeCleanupReturn(operation, slot, release());
+      observeCleanupReturn(this, operation, slot, release(), physicalFailure);
     } catch (reason) {
       recordCleanupFailureAtSlot(operation, slot, reason);
+      physicalFailure?.([reason]);
     }
   }
 
   private retireDataBinding(operation: OwnerRetirementOperation, reason: unknown): void {
     try {
       for (const error of retireDataBindingRoot(this, reason))
-        recordCleanupFailure(operation, error);
+        this.recordPhysicalCleanupFailure(operation, error);
     } catch (error) {
-      recordCleanupFailure(operation, error);
+      this.recordPhysicalCleanupFailure(operation, error);
     }
   }
+}
+
+/** @internal Authenticated snapshot of one actual Owner's retained cleanup operation. */
+export type OwnerCleanupDispositionV1 =
+  | { readonly state: "not-started" }
+  | { readonly state: "pending" }
+  | { readonly state: "settled" }
+  | { readonly state: "incomplete" };
+
+/**
+ * @internal Read the retained operation of an actual Owner without classifying errors by shape.
+ * @throws {TypeError} If the receiver was not constructed by this Runtime module.
+ */
+export function readOwnerCleanupDisposition(owner: Owner): OwnerCleanupDispositionV1 {
+  if (typeof owner !== "object" || owner === null || !actualOwnerInstances.has(owner))
+    throw new TypeError("Owner cleanup disposition requires an actual Runtime Owner");
+
+  const operation = ownerRetirementByOwner.get(owner);
+
+  if (!operation) return { state: "not-started" };
+  if (operation.incomplete) return { state: "incomplete" };
+  if (!operation.settled) return { state: "pending" };
+
+  return { state: "settled" };
 }
 
 /** @internal Associate a wrapper Promise with the Owner retirement it returns. */
@@ -1121,8 +1247,22 @@ export function runCleanup<T>(cleanup: () => T): T {
   }
 }
 
-/** Route a fault through nearest boundaries, forwarding a boundary's own failure upward. */
-export function reportFault(owner: Owner, error: unknown): void {
+/** The actual handler reached and the failure value it received. */
+export interface FaultReportResult {
+  /** A returning Owner handler handles the fault; reaching the root remains a root fault. */
+  readonly kind: "handled" | "root";
+  /** The original value, or the last replacement thrown by an Owner handler. */
+  readonly failure: unknown;
+}
+
+/**
+ * Report through actual ancestor handlers, then the root channel if none handles it.
+ * @param owner The lifetime from which fault propagation starts.
+ * @param error The original failure value, including undefined.
+ * @returns The reached handler scope and its actual received failure.
+ * @throws If the root error channel throws.
+ */
+export function reportFault(owner: Owner, error: unknown): FaultReportResult {
   let current: Owner | null = owner;
   let failure = error;
 
@@ -1131,7 +1271,7 @@ export function reportFault(owner: Owner, error: unknown): void {
       try {
         current.errorHandler(failure);
 
-        return;
+        return { kind: "handled", failure };
       } catch (error) {
         failure = error;
       }
@@ -1141,4 +1281,6 @@ export function reportFault(owner: Owner, error: unknown): void {
   }
 
   owner.context.onError(failure);
+
+  return { kind: "root", failure };
 }

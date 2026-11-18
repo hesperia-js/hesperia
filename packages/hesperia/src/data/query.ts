@@ -28,6 +28,19 @@ import {
   type QueryProgressView,
 } from "./query-progress.ts";
 import type { ValidationWorkTracker } from "../validation/standard-schema.ts";
+import {
+  acquireSingleRegistrationQueryPreparation,
+  beginSingleRegistrationQueryPreparation,
+  beginSingleRegistrationQueryPreparationDelivery,
+  failSingleRegistrationQueryPreparation,
+  finishSingleRegistrationQueryPreparationDelivery,
+  finishSingleRegistrationQueryPreparationRegistration,
+  finishSynchronousQueryPreparation,
+  recordSingleRegistrationQueryPreparationRaw,
+  type PhysicalOwnerQueryPreparation,
+} from "../runtime/retirement.ts";
+
+const nativeApply = Reflect.apply;
 
 type RecoverQuery = () => void;
 
@@ -674,6 +687,8 @@ export function createPreparedQueryView<Input, T, P = never>(
   callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
 
   if (!finished) {
+    let physicalPreparation: PhysicalOwnerQueryPreparation | undefined;
+
     try {
       const unsubscribe = subscribe(graph.resetVersion, (current) => {
         if (current !== version)
@@ -687,31 +702,87 @@ export function createPreparedQueryView<Input, T, P = never>(
       owner.onRelease(() => preparationCompletion);
       assertCurrent();
 
+      physicalPreparation = acquireSingleRegistrationQueryPreparation(owner);
       const prepared = prepare((completion) => owner.onRelease(() => completion));
+
+      if (physicalPreparation !== undefined)
+        recordSingleRegistrationQueryPreparationRaw(physicalPreparation, prepared);
 
       if (isPreparedPromise(prepared)) {
         const completion = Promise.resolve(prepared);
 
-        void completion.then(
-          (input) => {
-            settlePreparation();
+        if (physicalPreparation === undefined) {
+          void completion.then(
+            (input) => {
+              settlePreparation();
 
-            try {
-              accept(input);
-            } catch (reason) {
+              try {
+                accept(input);
+              } catch (reason) {
+                fail(reason);
+              }
+            },
+            (reason: unknown) => {
+              settlePreparation();
               fail(reason);
-            }
-          },
-          (reason: unknown) => {
-            settlePreparation();
-            fail(reason);
-          },
-        );
+            },
+          );
+        } else {
+          const then = completion.then;
+          beginSingleRegistrationQueryPreparation(physicalPreparation, completion, then);
+
+          void nativeApply(then, completion, [
+            (input: Input) => {
+              const first = beginSingleRegistrationQueryPreparationDelivery(
+                physicalPreparation,
+                "fulfilled",
+              );
+
+              try {
+                settlePreparation();
+
+                try {
+                  accept(input);
+                } catch (reason) {
+                  fail(reason);
+                }
+              } finally {
+                finishSingleRegistrationQueryPreparationDelivery(physicalPreparation, first);
+              }
+            },
+            (reason: unknown) => {
+              const first = beginSingleRegistrationQueryPreparationDelivery(
+                physicalPreparation,
+                "rejected",
+              );
+
+              try {
+                settlePreparation();
+                fail(reason);
+              } finally {
+                finishSingleRegistrationQueryPreparationDelivery(physicalPreparation, first);
+              }
+            },
+          ]);
+          finishSingleRegistrationQueryPreparationRegistration(physicalPreparation);
+        }
       } else {
-        settlePreparation();
-        accept(prepared);
+        if (physicalPreparation === undefined) {
+          settlePreparation();
+          accept(prepared);
+        } else {
+          try {
+            settlePreparation();
+            accept(prepared);
+          } finally {
+            finishSynchronousQueryPreparation(physicalPreparation);
+          }
+        }
       }
     } catch (reason) {
+      if (physicalPreparation !== undefined)
+        failSingleRegistrationQueryPreparation(physicalPreparation, reason);
+
       settlePreparation();
       fail(reason);
     }

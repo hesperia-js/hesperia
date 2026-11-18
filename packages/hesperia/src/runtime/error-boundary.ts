@@ -1,5 +1,7 @@
 import type { Accessor } from "../client.ts";
+import { bindNativeChildSourceOwner } from "./components.ts";
 import { prepareTree, type Rendered } from "./dom.ts";
+import { beginNativeMutation, finishNativeMutation } from "./scheduler.ts";
 import {
   disposeOwnerSyncPreservingFailure,
   Owner,
@@ -25,6 +27,15 @@ export function errorBoundary(
   parent.assertActive();
 
   const owner = new Owner(parent.context, parent, `${parent.identity}/${slot}`);
+
+  try {
+    bindNativeChildSourceOwner(owner, parent, content);
+  } catch (error) {
+    disposeOwnerSyncPreservingFailure(owner, error);
+
+    throw error;
+  }
+
   owner.executingBody = false;
   const document = owner.context.document;
   const fragment = document.createDocumentFragment();
@@ -57,6 +68,19 @@ export function errorBoundary(
     return parentNode && start.parentNode === parentNode ? parentNode : null;
   };
 
+  const runBoundaryMutation = <T>(run: () => T): T => {
+    const scheduler = owner.context.scheduler;
+    const mutation = { owner, start, end };
+
+    beginNativeMutation(scheduler, mutation);
+
+    try {
+      return run();
+    } finally {
+      finishNativeMutation(scheduler, mutation);
+    }
+  };
+
   const fail = (error: unknown) => {
     owner.assertActive();
 
@@ -77,63 +101,69 @@ export function errorBoundary(
         return;
       }
 
-      let node = start.nextSibling;
+      runBoundaryMutation(() => {
+        let node = start.nextSibling;
 
-      while (node && node !== end) {
-        const next = node.nextSibling;
+        while (node && node !== end) {
+          const next = node.nextSibling;
 
-        node.parentNode?.removeChild(node);
+          node.parentNode?.removeChild(node);
 
-        node = next;
-      }
-
-      const viewOwner = new Owner(owner.context, owner, `${owner.identity}/error`);
-
-      const readError = () => {
-        viewOwner.assertReadable();
-
-        return error;
-      };
-
-      let view: ReturnType<typeof prepareTree>;
-
-      try {
-        view = prepareTree(viewOwner, () => runComponentBody(() => fallback(viewOwner, readError)));
-
-        viewOwner.executingBody = false;
-      } catch (fallbackError) {
-        // A boundary's own view is outside its recovery scope. Forward its
-        // failure through the enclosing owner instead of selecting itself again.
-        reportFault(parent, fallbackError);
-
-        return;
-      }
-
-      const insertionParent = rangeParent();
-
-      if (!insertionParent) {
-        viewOwner.disposeSync(error);
-
-        disposeAfterForwarding(error);
-
-        return;
-      }
-
-      try {
-        insertionParent.insertBefore(view.fragment, end);
-
-        if (owner.state === "mounted") {
-          viewOwner.commit();
-
-          owner.context.scheduler.requestEffects();
+          node = next;
         }
-      } catch (fallbackError) {
-        viewOwner.disposeSync(fallbackError);
 
-        // A boundary's own view is outside its recovery scope. Forward its
-        // failure through the enclosing owner instead of selecting itself again.
-        reportFault(parent, fallbackError);
-      }
+        const viewOwner = new Owner(owner.context, owner, `${owner.identity}/error`);
+
+        const readError = () => {
+          viewOwner.assertReadable();
+
+          return error;
+        };
+
+        let view: ReturnType<typeof prepareTree>;
+
+        try {
+          view = prepareTree(viewOwner, () => {
+            bindNativeChildSourceOwner(viewOwner, owner, fallback);
+
+            return runComponentBody(() => fallback(viewOwner, readError));
+          });
+
+          viewOwner.executingBody = false;
+        } catch (fallbackError) {
+          // A boundary's own view is outside its recovery scope. Forward its
+          // failure through the enclosing owner instead of selecting itself again.
+          reportFault(parent, fallbackError);
+
+          return;
+        }
+
+        const insertionParent = rangeParent();
+
+        if (!insertionParent) {
+          viewOwner.disposeSync(error);
+
+          disposeAfterForwarding(error);
+
+          return;
+        }
+
+        try {
+          insertionParent.insertBefore(view.fragment, end);
+
+          if (owner.state === "mounted") {
+            viewOwner.commit();
+
+            owner.context.scheduler.requestEffects();
+          }
+        } catch (fallbackError) {
+          viewOwner.disposeSync(fallbackError);
+
+          // A boundary's own view is outside its recovery scope. Forward its
+          // failure through the enclosing owner instead of selecting itself again.
+          reportFault(parent, fallbackError);
+        }
+      });
     };
 
     let selected: void | PromiseLike<void>;
@@ -180,7 +210,11 @@ export function errorBoundary(
     let failure: { error: unknown } | undefined;
 
     try {
-      tree = prepareTree(contentOwner, () => runComponentBody(() => content(contentOwner)));
+      tree = prepareTree(contentOwner, () => {
+        bindNativeChildSourceOwner(contentOwner, owner, content);
+
+        return runComponentBody(() => content(contentOwner));
+      });
       contentOwner.executingBody = false;
     } catch (error) {
       failure = { error };
@@ -208,7 +242,7 @@ export function errorBoundary(
         );
 
         disposeAfterForwarding(fault);
-      } else insertionParent.insertBefore(tree.fragment, end);
+      } else runBoundaryMutation(() => insertionParent.insertBefore(tree.fragment, end));
     }
 
     return fragment;

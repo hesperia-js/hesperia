@@ -23,6 +23,24 @@ interface Work {
   readonly structural: boolean;
 }
 
+interface NativeMutationWork {
+  readonly active: Set<object>;
+  readonly finish: () => void;
+}
+
+const nativeMutationWork = new WeakMap<Scheduler, NativeMutationWork>();
+
+/** @internal Account one actual Owner-issued native mutation until it unwinds. */
+export function beginNativeMutation(scheduler: Scheduler, mutation: object): void {
+  nativeMutationWork.get(scheduler)!.active.add(mutation);
+}
+
+/** @internal Release only the actual native mutation that has unwound. */
+export function finishNativeMutation(scheduler: Scheduler, mutation: object): void {
+  const work = nativeMutationWork.get(scheduler)!;
+  if (work.active.delete(mutation)) work.finish();
+}
+
 /**
  * Document-tree scheduling over Aeolia's public observer API. Aeolia supplies
  * dependency facts; this scheduler owns only DOM/effect timing and tree order.
@@ -47,6 +65,7 @@ export class Scheduler {
   /** Create a scheduler for a single explicit root lifetime. */
   constructor(root: Owner) {
     this.root = root;
+    nativeMutationWork.set(this, { active: new Set(), finish: () => this.finishIfSettled() });
   }
 
   /** Track a native write immediately, then repeat after synchronous Aeolia settlement. */
@@ -501,6 +520,8 @@ export class Scheduler {
   }
 
   private hasPendingWork(): boolean {
+    if (nativeMutationWork.get(this)!.active.size > 0) return true;
+
     return (
       this.domScheduled ||
       this.effectScheduled ||

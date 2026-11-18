@@ -244,6 +244,92 @@ test("an effect fault replaces only its boundary and cleans connected content pa
   app.dispose();
 });
 
+test("settled called during old content removal waits for the connected fallback effect", async () => {
+  const window = new Window();
+
+  windows.push(window);
+
+  const target = window.document.body as unknown as Element;
+  let fail!: () => void;
+  let settle!: () => Promise<void>;
+  let releaseContent!: () => void;
+  const contentDisposed = new Promise<void>((resolve) => {
+    releaseContent = resolve;
+  });
+  let removed!: () => void;
+  const contentRemoved = new Promise<void>((resolve) => {
+    removed = resolve;
+  });
+  let effectConnected = false;
+  let settledFromRemoval!: Promise<{ content: string | null; effectConnected: boolean }>;
+
+  class OldContent extends window.HTMLElement {
+    disconnectedCallback() {
+      settledFromRemoval = settle().then(() => ({
+        content: target.textContent,
+        effectConnected,
+      }));
+
+      removed();
+    }
+  }
+
+  window.customElements.define("old-boundary-content", OldContent);
+
+  const App = defineComponent((owner) => {
+    settle = () => owner.context.scheduler.settled();
+
+    return errorBoundary(
+      owner,
+      "error",
+      (viewOwner) => {
+        const node = element(viewOwner, "p", {}, ["fallback"]);
+
+        createClient(viewOwner).effect(() => {
+          effectConnected = node.isConnected;
+        });
+
+        return node;
+      },
+      (contentOwner) => {
+        const state = createClient(contentOwner).state(false);
+        fail = () => state.set(true);
+
+        createClient(contentOwner).effect(() => {
+          if (state()) throw new Error("content failed");
+        });
+
+        return target.ownerDocument!.createElement("old-boundary-content");
+      },
+      undefined,
+      () => contentDisposed,
+    );
+  });
+  const app = mount(target, App, {});
+
+  try {
+    await app.settled();
+
+    expect(target.querySelector("old-boundary-content")?.isConnected).toBe(true);
+
+    fail();
+
+    await app.settled();
+
+    expect(target.querySelector("old-boundary-content")?.isConnected).toBe(true);
+
+    releaseContent();
+
+    await contentRemoved;
+
+    expect(await settledFromRemoval).toStrictEqual({ content: "fallback", effectConnected: true });
+  } finally {
+    releaseContent();
+
+    await app.dispose();
+  }
+});
+
 test("an error view's own failure reaches the enclosing boundary", async () => {
   const target = container();
   const seen: unknown[] = [];

@@ -1,10 +1,12 @@
-import { signal, type WritableSignal } from "aeolia";
+import { captureReactiveConstruction, signal, type WritableSignal } from "aeolia";
 import type { Accessor } from "../client.ts";
 import {
   attachComponentBinding,
   isRequiredBinding,
+  prepareComponentBinding,
   reassignComponentBinding,
   type Binding,
+  type ComponentBindingAttachmentV1,
   type WritableBinding,
 } from "./binding.ts";
 import type { Rendered } from "./dom.ts";
@@ -14,6 +16,7 @@ import {
   RenderFault,
   runComponentBody,
   runRenderContext,
+  type RuntimeContext,
 } from "./owner.ts";
 
 declare const componentPropsType: unique symbol;
@@ -77,8 +80,19 @@ export interface PropSchema {
   readonly optional: boolean;
 }
 
+/** Checked compiler metadata; authority requires its original admitted call and construction. */
+export interface CheckedResumeSourceUse {
+  readonly id: string;
+  readonly component?: string;
+  readonly kind: "state" | "derived" | "query" | "feed" | "graph";
+}
+
 /** Compiler-produced contract used before incoming values are published. */
 export interface ComponentOptions {
+  /** Module-qualified identity emitted for a resumable component. */
+  readonly id?: string;
+  /** Exact compiler module array retained by the original registered declaration. */
+  readonly sourceUses?: readonly CheckedResumeSourceUse[];
   /** Mark a body requiring an enclosing async waiting boundary before it starts. */
   readonly async?: boolean;
   /** Diagnostic component name. */
@@ -90,11 +104,143 @@ export interface ComponentOptions {
 }
 
 interface Definition {
+  readonly declaration: Component<unknown>;
   readonly factory: ComponentFactory<unknown>;
   readonly options: ComponentOptions;
+  readonly sourceUses?: readonly CheckedResumeSourceUse[];
 }
 
 const definitions = new WeakMap<Function, Definition>();
+const actualComponentDefinitions = new WeakMap<
+  Owner,
+  {
+    readonly entry: Definition;
+    readonly view:
+      | { readonly definition: Function; readonly sourceUses: readonly CheckedResumeSourceUse[] }
+      | undefined;
+  }
+>();
+
+type ActualNativeSourceView = {
+  readonly definition: Function;
+  readonly sourceUses: readonly CheckedResumeSourceUse[];
+};
+const nativeSourceDelegations = new WeakMap<
+  Owner,
+  {
+    readonly sourceOwner: Owner;
+    readonly entry: Definition;
+    readonly view: ActualNativeSourceView;
+    readonly issuer: object;
+    readonly callbacks: Set<Function>;
+  }
+>();
+
+function bindActualComponentDefinition(owner: Owner, entry: Definition): void {
+  owner.assertActive();
+  const existing = actualComponentDefinitions.get(owner);
+
+  if (existing) {
+    if (existing.entry !== entry)
+      throw new RenderFault(
+        "resume-source",
+        "A component Owner already belongs to another registered declaration",
+      );
+
+    return;
+  }
+
+  actualComponentDefinitions.set(owner, {
+    entry,
+    view:
+      entry.sourceUses === undefined
+        ? undefined
+        : Object.freeze({ definition: entry.declaration, sourceUses: entry.sourceUses }),
+  });
+}
+
+function originalNativeSource(owner: Owner):
+  | {
+      readonly sourceOwner: Owner;
+      readonly entry: Definition;
+      readonly view: ActualNativeSourceView;
+    }
+  | undefined {
+  owner.assertActive();
+  const own = actualComponentDefinitions.get(owner);
+  if (own?.view) return { sourceOwner: owner, entry: own.entry, view: own.view };
+  const delegated = nativeSourceDelegations.get(owner);
+  if (!delegated) return undefined;
+  delegated.sourceOwner.assertActive();
+  const actual = actualComponentDefinitions.get(delegated.sourceOwner);
+  if (
+    delegated.sourceOwner.context !== owner.context ||
+    actual?.entry !== delegated.entry ||
+    actual.view !== delegated.view
+  )
+    throw new RenderFault(
+      "resume-structure",
+      "A native source delegation lost its original actual declaration",
+    );
+  return delegated;
+}
+
+/** @internal Read the creating Owner's actual registered declaration and original module array. */
+export function readActualComponentSourceUses(owner: Owner): ActualNativeSourceView | undefined {
+  owner.assertActive();
+  return originalNativeSource(owner)?.view;
+}
+
+function installNativeSourceDelegation(
+  owner: Owner,
+  source: {
+    readonly sourceOwner: Owner;
+    readonly entry: Definition;
+    readonly view: ActualNativeSourceView;
+  },
+  issuer: object,
+  callback: Function,
+): void {
+  owner.assertActive();
+  const prior = nativeSourceDelegations.get(owner);
+  if (prior) {
+    if (
+      prior.sourceOwner !== source.sourceOwner ||
+      prior.entry !== source.entry ||
+      prior.view !== source.view ||
+      prior.issuer !== issuer
+    )
+      throw new RenderFault(
+        "resume-structure",
+        "A native Owner cannot acquire another original source delegation",
+      );
+    prior.callbacks.add(callback);
+    return;
+  }
+  if (owner.context !== source.sourceOwner.context)
+    throw new RenderFault("resume-structure", "A native callback belongs to another source runtime");
+  nativeSourceDelegations.set(owner, { ...source, issuer, callbacks: new Set([callback]) });
+  owner.onRelease(() => nativeSourceDelegations.delete(owner));
+}
+
+/** @internal Native constructors delegate only their actual parent's registered original source. */
+export function bindNativeChildSourceOwner(owner: Owner, parent: Owner, callback: Function): void {
+  owner.assertActive();
+  parent.assertActive();
+  if (
+    owner.parent !== parent ||
+    owner.context !== parent.context ||
+    !parent.children.includes(owner) ||
+    typeof callback !== "function"
+  )
+    throw new RenderFault(
+      "resume-structure",
+      "A native callback has no actual constructor parent and original function",
+    );
+  const source = originalNativeSource(parent);
+  if (source) installNativeSourceDelegation(owner, source, parent, callback);
+}
+
 const dynamicValue = Symbol("hesperia.dynamic");
 const componentValueAccessors = new WeakSet<Function>();
 
@@ -132,7 +278,12 @@ export function defineComponent<P>(
     throw new RenderFault("component-direct-call", "Components must be reached through JSX");
   }) as Component<P>;
 
-  definitions.set(definition, { factory: factory as ComponentFactory<unknown>, options });
+  definitions.set(definition, {
+    declaration: definition as Component<unknown>,
+    factory: factory as ComponentFactory<unknown>,
+    options,
+    ...(options.sourceUses === undefined ? {} : { sourceUses: options.sourceUses }),
+  });
 
   return definition;
 }
@@ -200,7 +351,84 @@ interface PropSlot {
   readonly schema: PropSchema;
   readonly bodyValue: unknown;
   readonly source?: WritableSignal<unknown>;
+  readonly construction?: ReturnType<typeof captureReactiveConstruction<unknown>>;
   current: unknown;
+  present: boolean;
+}
+
+const structuralMappedRestorations = new WeakMap<
+  Owner,
+  WeakMap<
+    object,
+    { readonly props: Record<string, unknown>; readonly slots: ReadonlyMap<string, PropSlot> }
+  >
+>();
+const mappedProps = new WeakMap<object, MappedPropsOrigin>();
+const ownerMappings = new WeakMap<Owner, Set<ComponentMapping>>();
+const nextMappingIds = new WeakMap<RuntimeContext, number>();
+
+/** @internal Actual native mapped State issued by the original component mapper. */
+export interface MappedInputTransferSource {
+  readonly owner: Owner;
+  readonly ownerId: string;
+  readonly mappingId: string;
+  readonly componentId: string | undefined;
+  readonly slotName: string;
+  readonly source: WritableSignal<unknown>;
+  readonly construction: ReturnType<typeof captureReactiveConstruction<unknown>>;
+}
+const mappedInputTransferSources = new WeakMap<object, MappedInputTransferSource>();
+
+/** @internal Resolve only a native source registered by the actual mapped slot constructor. */
+export function readMappedInputTransferSource(
+  readable: unknown,
+): MappedInputTransferSource | undefined {
+  if ((typeof readable !== "object" || readable === null) && typeof readable !== "function") return;
+
+  const receipt = mappedInputTransferSources.get(readable);
+
+  if (receipt?.source !== readable) return;
+
+  receipt.owner.assertActive();
+
+  return receipt;
+}
+
+export interface MappedSlotTransfer {
+  readonly name: string;
+  readonly schema: PropSchema;
+  readonly value: unknown;
+}
+
+export interface MappedPropsTransfer {
+  readonly type: "container" | "slot";
+  readonly slots: readonly MappedSlotTransfer[];
+}
+
+interface ComponentMapping {
+  readonly id: string;
+  readonly owner: Owner;
+  readonly componentId: string | undefined;
+  readonly props: Record<string, unknown>;
+  readonly slots: ReadonlyMap<string, PropSlot>;
+}
+
+/** @internal Provenance is registered by the mapper, never inferred from a captured value. */
+export interface MappedPropsOrigin {
+  readonly mapping: ComponentMapping;
+  readonly projection: "container" | "slot";
+  readonly slotName?: string;
+}
+/** @internal One complete response-qualified input mapping. */
+export interface RouteMappedInputsRecordV1 {
+  readonly id: string;
+  readonly responseIdentity: string;
+  readonly componentId: string;
+  readonly ownerId: string;
+  readonly transfer: {
+    readonly type: "container";
+    readonly slots: readonly (MappedSlotTransfer & { readonly present: boolean })[];
+  };
 }
 
 /** One executed component instance and its plain body-props mapping. */
@@ -217,6 +445,253 @@ export interface ComponentInstance {
   readonly slots: ReadonlyMap<string, PropSlot>;
 }
 
+function mapComponentInputs(
+  owner: Owner,
+  schemas: ReadonlyMap<string, PropSchema>,
+  values: ReadonlyMap<string, unknown>,
+  componentId?: string,
+  staged?: {
+    readonly defined: ReadonlySet<string>;
+    readonly assertHydrated: () => void;
+    readonly attachments: (() => ComponentBindingAttachmentV1 | undefined)[];
+  },
+): { readonly props: Record<string, unknown>; readonly slots: ReadonlyMap<string, PropSlot> } {
+  const props: Record<string, unknown> = {};
+  const slots = new Map<string, PropSlot>();
+
+  for (const [name, schema] of schemas) {
+    if (name === "key") continue;
+
+    const value = values.get(name);
+    let bodyValue: unknown;
+    let source: WritableSignal<unknown> | undefined;
+    const slot: PropSlot = {
+      schema,
+      current: value,
+      bodyValue: undefined,
+      present: values.has(name),
+    };
+
+    const defined = staged ? staged.defined.has(name) : value !== undefined;
+
+    if (schema.kind === "plain") {
+      bodyValue = value;
+    } else if (schema.kind === "binding") {
+      if (!defined) bodyValue = undefined;
+      else if (staged) {
+        const prepared = prepareComponentBinding(owner);
+
+        bodyValue = prepared.endpoint;
+        staged.attachments.push(() => prepared.attach(slot.current as Binding<unknown>));
+      } else bodyValue = attachComponentBinding(value as Binding<unknown>, owner);
+    } else if (schema.kind === "callback") {
+      bodyValue = !defined
+        ? undefined
+        : function (this: unknown, ...args: unknown[]) {
+            owner.assertReadable();
+            staged?.assertHydrated();
+
+            return Reflect.apply(slot.current as Function, this, args);
+          };
+    } else {
+      source = signal(value);
+      const readable = source;
+
+      const read = () => {
+        owner.assertReadable();
+        staged?.assertHydrated();
+
+        return readable.get();
+      };
+
+      componentValueAccessors.add(read);
+
+      bodyValue = read;
+    }
+
+    Object.assign(slot, {
+      bodyValue,
+      ...(source ? { source, construction: captureReactiveConstruction(source) } : {}),
+    });
+
+    Object.defineProperty(props, name, {
+      value: bodyValue,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+
+    slots.set(name, slot);
+  }
+
+  const next = (nextMappingIds.get(owner.context) ?? 0) + 1;
+  const mapping: ComponentMapping = { id: `mapping:${next}`, owner, componentId, props, slots };
+
+  for (const [slotName, slot] of slots)
+    if (slot.source && slot.construction)
+      mappedInputTransferSources.set(
+        slot.source,
+        Object.freeze({
+          owner,
+          ownerId: owner.identity,
+          mappingId: mapping.id,
+          componentId,
+          slotName,
+          source: slot.source,
+          construction: slot.construction,
+        }),
+      );
+
+  const mappings = ownerMappings.get(owner) ?? new Set<ComponentMapping>();
+
+  nextMappingIds.set(owner.context, next);
+  mappings.add(mapping);
+  ownerMappings.set(owner, mappings);
+  mappedProps.set(props, { mapping, projection: "container" });
+
+  for (const [name, slot] of slots)
+    if (typeof slot.bodyValue === "function" && slot.schema.kind !== "plain")
+      mappedProps.set(slot.bodyValue, { mapping, projection: "slot", slotName: name });
+
+  owner.onRelease(() => {
+    mappings.delete(mapping);
+
+    if (!mappings.size) ownerMappings.delete(owner);
+  });
+
+  return { props, slots };
+}
+
+/** @internal Snapshot the actual Owner mapping without reconstructing its source slots. */
+export function snapshotComponentInputs(
+  owner: Owner,
+  responseIdentity: string,
+): RouteMappedInputsRecordV1 {
+  owner.assertActive();
+
+  const mappings = ownerMappings.get(owner);
+
+  if (mappings?.size !== 1)
+    throw new RenderFault(
+      "resume-props",
+      "A represented component requires one actual input mapping",
+    );
+
+  const mapping = mappings.values().next().value!;
+
+  if (!mapping.componentId)
+    throw new RenderFault(
+      "resume-props",
+      "A route input mapping requires a compiled component identity",
+    );
+
+  if (Reflect.ownKeys(mapping.props).length !== mapping.slots.size)
+    throw new RenderFault(
+      "resume-props",
+      "A damaged input container cannot be captured for route adoption",
+    );
+
+  for (const [name, slot] of mapping.slots) {
+    const property = Object.getOwnPropertyDescriptor(mapping.props, name);
+
+    if (!property || !("value" in property) || property.value !== slot.bodyValue)
+      throw new RenderFault(
+        "resume-props",
+        "A damaged input slot cannot be captured for route adoption",
+      );
+  }
+
+  return {
+    id: mapping.id,
+    responseIdentity,
+    componentId: mapping.componentId,
+    ownerId: owner.identity,
+    transfer: {
+      type: "container",
+      slots: [...mapping.slots].map(([name, slot]) => ({
+        name,
+        schema: slot.schema,
+        value: slot.current,
+        present: slot.present,
+      })),
+    },
+  };
+}
+
+function snapshotSlot(name: string, slot: PropSlot): MappedSlotTransfer {
+  if (slot.schema.kind === "callback" && slot.current !== undefined)
+    throw new RenderFault(
+      "resume-callable-prop",
+      "A required callback prop needs a compiler-qualified behavior reference",
+    );
+
+  return { name, schema: slot.schema, value: slot.current };
+}
+
+/** @internal Read only compiler-recorded mapped props, preserving each declared slot kind. */
+export function snapshotMappedProps(value: unknown): {
+  readonly value: unknown;
+  readonly mapped: boolean;
+} {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function")
+    return { value, mapped: false };
+
+  const origin = mappedProps.get(value);
+
+  if (!origin) return { value, mapped: false };
+
+  if (origin.projection === "slot") {
+    const slot = origin.mapping.slots.get(origin.slotName!);
+
+    if (!slot || slot.schema.kind !== "value") return { value, mapped: false };
+  }
+
+  const entries =
+    origin.projection === "container"
+      ? [...origin.mapping.slots]
+      : [[origin.slotName!, origin.mapping.slots.get(origin.slotName!)!] as const];
+
+  return {
+    value: {
+      type: origin.projection,
+      slots: entries.map(([name, slot]) => snapshotSlot(name, slot)),
+    },
+    mapped: true,
+  };
+}
+
+/** @internal Reconstruct accessors from slot data, rather than serializing their functions. */
+export function restoreMappedProps(owner: Owner, value: unknown): unknown {
+  if (typeof value !== "object" || value === null || !("type" in value) || !("slots" in value))
+    return value;
+
+  const transfer = value as MappedPropsTransfer;
+
+  if ((transfer.type !== "container" && transfer.type !== "slot") || !Array.isArray(transfer.slots))
+    throw new RenderFault("resume-props", "Invalid mapped props transfer");
+
+  const restorations =
+    structuralMappedRestorations.get(owner) ??
+    new WeakMap<
+      object,
+      { readonly props: Record<string, unknown>; readonly slots: ReadonlyMap<string, PropSlot> }
+    >();
+  const existing = restorations.get(value);
+  if (existing)
+    return transfer.type === "container"
+      ? existing.props
+      : existing.slots.values().next().value?.bodyValue;
+  const schema = new Map(transfer.slots.map((slot) => [slot.name, slot.schema]));
+  const values = new Map(transfer.slots.map((slot) => [slot.name, slot.value]));
+  const mapped = mapComponentInputs(owner, schema, values);
+  restorations.set(value, mapped);
+  structuralMappedRestorations.set(owner, restorations);
+  owner.onRelease(() => restorations.delete(value));
+  return transfer.type === "container"
+    ? mapped.props
+    : mapped.slots.values().next().value?.bodyValue;
+}
+
 /** Execute one fresh body from an already-validated input snapshot. */
 export function instantiateComponent(
   owner: Owner,
@@ -224,6 +699,7 @@ export function instantiateComponent(
   awaited = false,
 ): ComponentInstance {
   const entry = definitions.get(prepared.definition)!;
+  bindActualComponentDefinition(owner, entry);
   const values = new Map(prepared.entries);
 
   const checkAsync = () => {
@@ -248,57 +724,7 @@ export function instantiateComponent(
 
   if (entry.options.async || entry.factory.constructor.name === "AsyncFunction") checkAsync();
 
-  const props: Record<string, unknown> = {};
-  const slots = new Map<string, PropSlot>();
-
-  for (const [name, schema] of prepared.schema) {
-    if (name === "key") continue;
-
-    const value = values.get(name);
-    let bodyValue: unknown;
-    let source: WritableSignal<unknown> | undefined;
-    const slot: PropSlot = { schema, current: value, bodyValue: undefined };
-
-    if (schema.kind === "plain") {
-      bodyValue = value;
-    } else if (schema.kind === "binding") {
-      bodyValue =
-        value === undefined ? undefined : attachComponentBinding(value as Binding<unknown>, owner);
-    } else if (schema.kind === "callback") {
-      bodyValue =
-        value === undefined
-          ? undefined
-          : function (this: unknown, ...args: unknown[]) {
-              owner.assertReadable();
-
-              return Reflect.apply(slot.current as Function, this, args);
-            };
-    } else {
-      source = signal(value);
-      const readable = source;
-
-      const read = () => {
-        owner.assertReadable();
-
-        return readable.get();
-      };
-
-      componentValueAccessors.add(read);
-
-      bodyValue = read;
-    }
-
-    Object.assign(slot, { bodyValue, ...(source ? { source } : {}) });
-
-    Object.defineProperty(props, name, {
-      value: bodyValue,
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
-
-    slots.set(name, slot);
-  }
+  const { props, slots } = mapComponentInputs(owner, prepared.schema, values, entry.options.id);
 
   try {
     let output = runRenderContext(owner, () => runComponentBody(() => entry.factory(owner, props)));
@@ -413,6 +839,7 @@ export function publishComponent(instance: ComponentInstance, prepared: Prepared
     }
 
     slot.current = value;
+    slot.present = next.has(name);
 
     slot.source?.set(value);
   }

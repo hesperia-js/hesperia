@@ -29,6 +29,14 @@
       "import": "./dist/runtime/index.js",
       "default": "./dist/runtime/index.js"
     },
+    "./internal/server-intrinsics": {
+      "types": "./dist/runtime/server-intrinsics.native.d.ts",
+      "workerd": "./dist/runtime/server-intrinsics.native.js",
+      "bun": "./dist/runtime/server-intrinsics.native.js",
+      "node": "./dist/runtime/server-intrinsics.native.js",
+      "browser": "./dist/runtime/server-intrinsics.browser.js",
+      "default": "./dist/runtime/server-intrinsics.browser.js"
+    },
     "./client": {
       "types": "./dist/client.d.ts",
       "import": "./dist/client.js",

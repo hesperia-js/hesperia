@@ -1,7 +1,32 @@
-import type { Contract, Graph, OperationDefinition, OperationTree } from "aeolia";
-import { createContractApi, type HesperiaContractApi } from "./contract.ts";
+import type {
+  Contract,
+  Graph,
+  GraphOptions,
+  NativeTransferSource,
+  OperationDefinition,
+  OperationTree,
+} from "aeolia";
+import {
+  createContractApi,
+  resolveOwnerBoundQueryApiMember,
+  type HesperiaContractApi,
+  type OwnerBoundQueryApiMember,
+} from "./contract.ts";
 import type { Owner } from "../runtime/owner.ts";
 import { isObjectLike } from "../utils.ts";
+import {
+  acquirePhysicalExecutionGraphConstruction,
+  acquirePhysicalRequestGraphConstruction,
+  assertPhysicalGraphConstructionUse,
+  beginPhysicalGraphConstruction,
+  completePhysicalGraphConstruction,
+  failPhysicalGraphConstruction,
+  physicalNativeExecutionForOwner,
+  physicalNativeRequestForOwner,
+  type PhysicalGraphConstruction,
+  type PhysicalNativeExecutionLifetime,
+  type PhysicalNativeRequestLifetime,
+} from "../runtime/retirement.ts";
 import type { NativeOperationPolicy } from "../validation/native-operation.ts";
 
 type FiniteOperation = Extract<OperationDefinition, { readonly kind: "query" | "mutation" }>;
@@ -14,11 +39,317 @@ interface AdaptedApiRecord {
   readonly policies?: OperationPolicies;
 }
 
+/** One checked, projector-free Query member from its issuing API. @internal */
+export interface ProjectorFreeImportedApiMember {
+  readonly owner: Owner;
+  readonly checkedUse: object;
+  readonly graph: Graph;
+  readonly sourceGraphUse: CheckedGraphSourceUse;
+  readonly member: Function;
+  readonly receiver: object;
+  readonly definition: object;
+  readonly nativeMember: NativeTransferSource;
+  readonly registration: object | undefined;
+  readonly receipt: object;
+  recheck(): void;
+}
+
+interface ProjectorFreeImportedApiMemberReceipt {
+  readonly capability: ProjectorFreeImportedApiMember;
+  readonly owner: Owner;
+  readonly checkedUse: object;
+  readonly rawImportedMarker: object;
+  readonly adaptedApiRecord: AdaptedApiRecord;
+  readonly boundApi: object;
+  readonly memberName: string;
+  readonly contractMember: OwnerBoundQueryApiMember;
+  readonly graphConstruction: RecordedGraphConstruction;
+  readonly graphRecipe: RecordedGraphRecipe;
+  readonly requestScope: RequestApiScope | undefined;
+  readonly requestScopeRecord: PhysicalRequestApiScopeRecord | undefined;
+}
+
+interface CapturedGraphOptions {
+  readonly prototype: object | null;
+  readonly descriptors: readonly (readonly [PropertyKey, PropertyDescriptor])[];
+}
+
+interface RecordedGraphRecipe {
+  readonly contract: Contract;
+  readonly createRequestGraph: (construction?: PhysicalGraphConstruction) => object;
+}
+
+/** Compiler descriptor retained by identity with its actual graph result. @internal */
+export interface CheckedGraphSourceUse {
+  /** Per-source-use descriptor; the string alone does not authenticate a graph. */
+  readonly id: string;
+  /** Optional containing component descriptor. */
+  readonly component?: string;
+  /** Checked source category. */
+  readonly kind: "graph";
+}
+
+/** Exact graph construction retained for one checked compiler use. @internal */
+export interface RecordedGraphConstruction {
+  /** Graph returned by the captured public constructor. */
+  readonly graph: Graph;
+  /** Contract read from the original options object. */
+  readonly contract: Contract;
+  /** Original public Aeolia constructor. */
+  readonly create: (options: GraphOptions<Contract>) => Graph;
+  /** Original options object passed to that constructor. */
+  readonly options: GraphOptions<Contract>;
+  /** Actual native-owner reservation, when construction used the admission bridge. */
+  readonly construction: PhysicalGraphConstruction | undefined;
+  /** Compiler descriptor supplied with the actual graph call. */
+  readonly checkedUse: CheckedGraphSourceUse;
+}
+
+const recordedGraphConstructions = new WeakMap<object, RecordedGraphConstruction>();
+const recordedGraphConstructionsByGraph = new WeakMap<object, RecordedGraphConstruction>();
+
+interface TypedRecordedGraphRecipe<C extends Contract> extends RecordedGraphRecipe {
+  readonly contract: C;
+  readonly createRequestGraph: (construction?: PhysicalGraphConstruction) => Graph<C>;
+}
+
+/** The server-session-local graph and its unchanged public contract. */
+export interface RequestApiPair<C extends Contract = Contract> {
+  readonly graph: Graph<C>;
+  readonly contract: C;
+}
+
+/** Shared API scope used by all component owners in one server session. */
+export interface RequestApiScope {
+  /**
+   * Select or create the request-local counterpart for an adapted source graph.
+   * The scope reuses one counterpart for each source graph and contract pair.
+   *
+   * @throws {TypeError} If the same source graph and contract are selected
+   * recursively while the counterpart is being constructed.
+   */
+  select<C extends Contract>(sourceGraph: Graph<C>, contract: C): RequestApiPair<C>;
+  /**
+   * Release abort listeners and dispose every request graph after owner cleanup.
+   * @param reason - The owner's release reason; pending work already receives
+   * the root signal's reason when it aborts.
+   * @throws The retained failure, or an AggregateError for several failures,
+   * after attempting every graph release.
+   */
+  dispose(reason?: unknown): void;
+}
+
 /** The shape of an adapted API before a component owner is known. */
 export type ImportedApi<C extends Contract = Contract> = HesperiaContractApi<C>;
 
 const adaptedApis = new WeakMap<object, AdaptedApiRecord>();
+const projectorFreeImportedApiMemberReceipts = new WeakMap<
+  object,
+  ProjectorFreeImportedApiMemberReceipt
+>();
 const adaptedApiGraphs = new WeakMap<object, Graph>();
+const recordedGraphRecipes = new WeakMap<object, RecordedGraphRecipe>();
+const physicalRequestApiScopes = new WeakMap<RequestApiScope, PhysicalRequestApiScopeRecord>();
+
+interface PhysicalRequestApiScopeRecord {
+  readonly rootSignal: AbortSignal;
+  selectionStarted: boolean;
+  ownerBound: boolean;
+  readonly setNativeRequest: (request: PhysicalNativeRequestLifetime) => void;
+  readonly setNativeExecution: (execution: PhysicalNativeExecutionLifetime) => void;
+}
+
+/**
+ * Capture the compiler-qualified public createGraph call for request-local
+ * graph recreation. The original options object reaches the public callee
+ * unchanged; only its own data descriptors are retained for later requests.
+ * @param create - Public Aeolia graph constructor used for the original and request-local graphs.
+ * @param options - The original options object passed unchanged to `create`.
+ * @param checkedUse - Optional compiler descriptor retained with the actual graph result.
+ * @returns The graph created by the original public call.
+ */
+export function createRecordedAeoliaGraph<C extends Contract>(
+  create: (options: GraphOptions<C>) => Graph<C>,
+  options: GraphOptions<C>,
+  checkedUse?: CheckedGraphSourceUse,
+): Graph<C> {
+  return recordAeoliaGraph(create, options, undefined, checkedUse);
+}
+
+/**
+ * Create the graph through one actual native-owner construction reservation.
+ * @param construction - Exact one-use reservation returned by the native graph bridge.
+ * @param create - Original public Aeolia constructor.
+ * @param options - Original options object passed unchanged to `create`.
+ * @param checkedUse - Optional compiler use descriptor retained with the actual graph result.
+ * @returns The graph created by the admitted constructor.
+ * @internal
+ */
+export function createAdmittedAeoliaGraph<C extends Contract>(
+  construction: PhysicalGraphConstruction,
+  create: (options: GraphOptions<C>) => Graph<C>,
+  options: GraphOptions<C>,
+  checkedUse?: CheckedGraphSourceUse,
+): Graph<C> {
+  if (construction === undefined)
+    throw new TypeError("An admitted Aeolia Graph requires its original constructor reservation");
+
+  return recordAeoliaGraph(create, options, construction, checkedUse);
+}
+
+function recordAeoliaGraph<C extends Contract>(
+  create: (options: GraphOptions<C>) => Graph<C>,
+  options: GraphOptions<C>,
+  construction?: PhysicalGraphConstruction,
+  checkedUse?: CheckedGraphSourceUse,
+): Graph<C> {
+  if (construction !== undefined) {
+    if (checkedUse !== undefined) assertPhysicalGraphConstructionUse(construction, checkedUse);
+
+    beginPhysicalGraphConstruction(construction);
+  }
+
+  try {
+    const captured = captureGraphOptions(options);
+    const graph = create(options);
+
+    if (construction !== undefined) completePhysicalGraphConstruction(construction, graph);
+
+    const contract = captured.descriptors.find(([key]) => key === "contract")?.[1].value as
+      | C
+      | undefined;
+
+    if (contract === undefined || contract === null || !isObjectLike(graph))
+      throw new TypeError("Recorded Aeolia graph creation did not produce a valid contract graph");
+
+    const recipe: TypedRecordedGraphRecipe<C> = Object.freeze({
+      contract,
+      createRequestGraph: (requestConstruction?: PhysicalGraphConstruction) => {
+        if (requestConstruction !== undefined) {
+          if (checkedUse !== undefined)
+            assertPhysicalGraphConstructionUse(requestConstruction, checkedUse);
+
+          beginPhysicalGraphConstruction(requestConstruction);
+        }
+
+        try {
+          const requestOptions = restoreGraphOptions(captured, contract);
+          const requestGraph = create(requestOptions);
+
+          if (requestConstruction !== undefined)
+            completePhysicalGraphConstruction(requestConstruction, requestGraph);
+
+          if (checkedUse !== undefined) {
+            const requestRecord: RecordedGraphConstruction = Object.freeze({
+              graph: requestGraph,
+              contract,
+              create: create as (options: GraphOptions<Contract>) => Graph,
+              options: requestOptions as GraphOptions<Contract>,
+              construction: requestConstruction,
+              checkedUse,
+            });
+            recordedGraphConstructionsByGraph.set(requestGraph, requestRecord);
+          }
+
+          return requestGraph;
+        } catch (reason) {
+          if (requestConstruction !== undefined)
+            failPhysicalGraphConstruction(requestConstruction, reason);
+
+          throw reason;
+        }
+      },
+    });
+
+    recordedGraphRecipes.set(graph, recipe);
+
+    if (checkedUse !== undefined) {
+      const useRecord: RecordedGraphConstruction = Object.freeze({
+        graph,
+        contract,
+        create: create as (options: GraphOptions<Contract>) => Graph,
+        options: options as GraphOptions<Contract>,
+        construction,
+        checkedUse,
+      });
+      recordedGraphConstructions.set(checkedUse, useRecord);
+      recordedGraphConstructionsByGraph.set(graph, useRecord);
+    }
+
+    return graph;
+  } catch (reason) {
+    if (construction !== undefined) failPhysicalGraphConstruction(construction, reason);
+
+    throw reason;
+  }
+}
+
+/**
+ * Read the actual graph construction from the graph object itself.
+ * @param graph - Exact graph returned by the recorded public constructor.
+ * @returns Actual construction facts when this graph has a checked source use.
+ * @internal
+ */
+export function readActualGraphConstruction(graph: Graph): RecordedGraphConstruction | undefined {
+  const record = recordedGraphConstructionsByGraph.get(graph);
+
+  return record?.graph === graph ? record : undefined;
+}
+
+/**
+ * Read the graph and native construction retained for one exact checked use.
+ * @param checkedUse - Same object supplied to the original graph constructor.
+ * @returns The actual graph record for this use, or `undefined` when absent.
+ * @internal
+ */
+export function readRecordedAeoliaGraphConstruction(
+  checkedUse: CheckedGraphSourceUse,
+): RecordedGraphConstruction | undefined {
+  const record = recordedGraphConstructions.get(checkedUse);
+
+  return record?.checkedUse === checkedUse ? record : undefined;
+}
+
+function captureGraphOptions<C extends Contract>(options: GraphOptions<C>): CapturedGraphOptions {
+  if (!isObjectLike(options))
+    throw new TypeError("Recorded Aeolia graph options must be a fresh object literal");
+
+  const prototype = Object.getPrototypeOf(options);
+
+  if (prototype !== Object.prototype && prototype !== null)
+    throw new TypeError("Recorded Aeolia graph options must not use a custom prototype");
+
+  const descriptors: (readonly [PropertyKey, PropertyDescriptor])[] = [];
+
+  for (const key of Reflect.ownKeys(options)) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(options, key);
+
+    if (!descriptor || !("value" in descriptor) || descriptor.get || descriptor.set)
+      throw new TypeError("Recorded Aeolia graph options must contain only own data properties");
+
+    descriptors.push([key, Object.freeze({ ...descriptor })]);
+  }
+
+  return {
+    prototype,
+    descriptors: Object.freeze(descriptors),
+  };
+}
+
+function restoreGraphOptions<C extends Contract>(
+  captured: CapturedGraphOptions,
+  contract: C,
+): GraphOptions<C> {
+  const options: GraphOptions<C> = { contract };
+
+  Object.setPrototypeOf(options, captured.prototype);
+  Reflect.deleteProperty(options, "contract");
+  for (const [key, capturedDescriptor] of captured.descriptors) {
+    Object.defineProperty(options, key, { ...capturedDescriptor });
+  }
+
+  return options;
+}
 
 /**
  * Mark a graph and contract pair for direct component imports.
@@ -117,6 +448,237 @@ function snapshotPolicies(
   return captured;
 }
 
+/**
+ * Create one server session's matching graph/contract pair per adapted source graph.
+ * Root abortion cancels pending work while retaining readables through owner
+ * cleanup. Scope disposal releases the graphs and reports retained failures.
+ * @param rootSignal - Shared root lifetime signal for the server session.
+ * @returns The request-local graph selector and cleanup scope.
+ */
+export function createRequestApiScope(rootSignal: AbortSignal): RequestApiScope {
+  return requestApiScope(rootSignal);
+}
+
+/** @internal Bind one issued scope to its actual admitted server request before selection. */
+export function bindPhysicalRequestApiScope(owner: Owner, scope: RequestApiScope): void {
+  const nativeRequest = physicalNativeRequestForOwner(owner);
+
+  if (!nativeRequest)
+    throw new TypeError("A native request API scope requires its admitted original session Owner");
+
+  const record = physicalRequestApiScopes.get(scope);
+
+  if (!record || record.rootSignal !== owner.signal || record.selectionStarted || record.ownerBound)
+    throw new TypeError("A request API scope binds once to its original Owner before selection");
+
+  record.setNativeRequest(nativeRequest);
+  record.ownerBound = true;
+}
+
+/** @internal Bind one issued scope to its actual admitted server execution before selection. */
+export function bindPhysicalExecutionApiScope(owner: Owner, scope: RequestApiScope): void {
+  const nativeExecution = physicalNativeExecutionForOwner(owner);
+
+  if (!nativeExecution)
+    throw new TypeError(
+      "A native execution API scope requires its admitted original session Owner",
+    );
+
+  const record = physicalRequestApiScopes.get(scope);
+
+  if (!record || record.rootSignal !== owner.signal || record.selectionStarted || record.ownerBound)
+    throw new TypeError("An execution API scope binds once to its original Owner before selection");
+
+  record.setNativeExecution(nativeExecution);
+  record.ownerBound = true;
+}
+
+function requestApiScope(rootSignal: AbortSignal): RequestApiScope {
+  const pairs = new WeakMap<object, WeakMap<object, RequestApiPair>>();
+  const selecting = new WeakSet<Graph>();
+  const releases = new Set<() => void>();
+  const cancellationFailures: unknown[] = [];
+  let nativeRequest: PhysicalNativeRequestLifetime | undefined;
+  let nativeExecution: PhysicalNativeExecutionLifetime | undefined;
+  let disposed = false;
+  const record: PhysicalRequestApiScopeRecord = {
+    rootSignal,
+    selectionStarted: false,
+    ownerBound: false,
+    setNativeRequest(request) {
+      nativeRequest = request;
+    },
+    setNativeExecution(execution) {
+      nativeExecution = execution;
+    },
+  };
+
+  const assertOpen = (): void => {
+    if (disposed || rootSignal.aborted)
+      throw new TypeError("Cannot bind an Aeolia API after its request scope has ended");
+  };
+
+  const createPair = <C extends Contract>(
+    sourceGraph: Graph<C>,
+    contract: C,
+    recipe: TypedRecordedGraphRecipe<C>,
+    byContract: WeakMap<object, RequestApiPair>,
+  ): RequestApiPair<C> => {
+    if (selecting.has(sourceGraph))
+      throw new TypeError("An Aeolia graph is already being selected in this request scope");
+
+    selecting.add(sourceGraph);
+
+    try {
+      assertOpen();
+
+      const construction = nativeRequest
+        ? acquirePhysicalRequestGraphConstruction(nativeRequest, sourceGraph)
+        : nativeExecution
+          ? acquirePhysicalExecutionGraphConstruction(nativeExecution, sourceGraph)
+          : undefined;
+      const graph = recipe.createRequestGraph(construction);
+      let released = false;
+
+      const onRootAbort = (): void => {
+        if (released || disposed) return;
+
+        try {
+          graph.cancelPending(rootSignal.reason);
+        } catch (error) {
+          cancellationFailures.push(error);
+        }
+      };
+
+      const release = (): void => {
+        if (released) return;
+
+        released = true;
+        const failures: unknown[] = [];
+
+        try {
+          rootSignal.removeEventListener("abort", onRootAbort);
+        } catch (error) {
+          failures.push(error);
+        }
+
+        try {
+          graph.dispose();
+        } catch (error) {
+          failures.push(error);
+        }
+
+        throwRequestCleanupFailures(failures);
+      };
+
+      try {
+        assertOpen();
+
+        releases.add(release);
+
+        rootSignal.addEventListener("abort", onRootAbort, { once: true });
+
+        assertOpen();
+
+        const pair: RequestApiPair<C> = Object.freeze({ graph, contract });
+
+        byContract.set(contract, pair);
+
+        return pair;
+      } catch (error) {
+        releases.delete(release);
+
+        try {
+          release();
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "Request Aeolia graph setup cleanup failed",
+          );
+        }
+
+        throw error;
+      }
+    } finally {
+      selecting.delete(sourceGraph);
+    }
+  };
+
+  const scope: RequestApiScope = {
+    select<C extends Contract>(sourceGraph: Graph<C>, contract: C): RequestApiPair<C> {
+      record.selectionStarted = true;
+
+      assertOpen();
+
+      const recordedRecipe = recordedGraphRecipes.get(sourceGraph);
+
+      if (!recordedRecipe)
+        throw new TypeError("Server Aeolia API binding requires a compiler-recorded graph recipe");
+
+      if (!isRecordedGraphRecipeFor(recordedRecipe, contract))
+        throw new TypeError("Aeolia API contract does not match its recorded graph creation");
+
+      const recipe = recordedRecipe;
+
+      let byContract = pairs.get(sourceGraph);
+
+      if (!byContract) {
+        byContract = new WeakMap<object, RequestApiPair>();
+        pairs.set(sourceGraph, byContract);
+      }
+
+      const existing = byContract.get(contract);
+
+      if (existing) {
+        assertOpen();
+
+        return existing as RequestApiPair<C>;
+      }
+
+      return createPair(sourceGraph, contract, recipe, byContract);
+    },
+
+    dispose(_reason?: unknown): void {
+      // Cancellation cleanup can dispose the scope before its listener records a failure.
+      const failures = cancellationFailures.splice(0);
+
+      if (!disposed) {
+        disposed = true;
+
+        for (const release of releases) {
+          try {
+            release();
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+
+        releases.clear();
+      }
+
+      throwRequestCleanupFailures(failures);
+    },
+  };
+
+  physicalRequestApiScopes.set(scope, record);
+
+  return scope;
+}
+
+function throwRequestCleanupFailures(failures: readonly unknown[]): void {
+  if (failures.length === 1) throw failures[0];
+
+  if (failures.length > 1)
+    throw new AggregateError(failures, "Request Aeolia graph cleanup failed");
+}
+
+function isRecordedGraphRecipeFor<C extends Contract>(
+  recipe: RecordedGraphRecipe,
+  contract: C,
+): recipe is TypedRecordedGraphRecipe<C> {
+  return recipe.contract === contract;
+}
+
 const ownerCaches = new WeakMap<Owner, WeakMap<object, unknown>>();
 const adaptedNamespaces = new WeakMap<Owner, WeakSet<object>>();
 
@@ -144,6 +706,164 @@ export function bindImported(
   return bindValue(owner, value, cache, namespaces, mode);
 }
 
+/**
+ * Resolve one own-data Query wrapper from a no-project adapted import before any projector or
+ * member lookup can run. The returned object is an opaque per-call issuer capability.
+ * @internal
+ */
+export function resolveProjectorFreeImportedApiMember(
+  owner: Owner,
+  checkedUse: object,
+  rawImportedMarker: unknown,
+  literalMemberName: string,
+): ProjectorFreeImportedApiMember | undefined {
+  owner.assertActive();
+
+  if (
+    checkedUse === null ||
+    (typeof checkedUse !== "object" && typeof checkedUse !== "function") ||
+    rawImportedMarker === null ||
+    (typeof rawImportedMarker !== "object" && typeof rawImportedMarker !== "function") ||
+    typeof literalMemberName !== "string" ||
+    literalMemberName.length === 0
+  )
+    return undefined;
+
+  const marker = rawImportedMarker as object;
+  const adaptedApiRecord = adaptedApis.get(marker);
+
+  if (adaptedApiRecord === undefined || adaptedApiRecord.project !== undefined) return undefined;
+
+  const graphConstruction = readActualGraphConstruction(adaptedApiRecord.graph);
+  const graphRecipe = recordedGraphRecipes.get(adaptedApiRecord.graph);
+
+  if (
+    graphConstruction === undefined ||
+    graphConstruction.graph !== adaptedApiRecord.graph ||
+    graphConstruction.contract !== adaptedApiRecord.contract ||
+    graphConstruction.checkedUse === undefined ||
+    graphRecipe === undefined ||
+    graphRecipe.contract !== adaptedApiRecord.contract
+  )
+    return undefined;
+
+  const context = owner.context;
+  const requestScope = context.target === "server" ? context.requestApiScope : undefined;
+  const requestScopeRecord =
+    requestScope === undefined ? undefined : physicalRequestApiScopes.get(requestScope);
+
+  if (
+    context.target === "server" &&
+    (requestScopeRecord === undefined ||
+      !requestScopeRecord.ownerBound ||
+      requestScopeRecord.rootSignal.aborted)
+  )
+    return undefined;
+
+  const cache = ownerCaches.get(owner) ?? new WeakMap<object, unknown>();
+  ownerCaches.set(owner, cache);
+  const namespaces = adaptedNamespaces.get(owner) ?? new WeakSet<object>();
+  adaptedNamespaces.set(owner, namespaces);
+
+  const boundValue = bindValue(owner, marker, cache, namespaces, "direct");
+
+  if (boundValue === null || typeof boundValue !== "object") return undefined;
+
+  const boundApi = boundValue as object;
+  const contractMember = resolveOwnerBoundQueryApiMember(owner, boundApi, literalMemberName);
+
+  if (contractMember === undefined || adaptedApiGraphs.get(boundApi) !== contractMember.graph)
+    return undefined;
+
+  const receipt = Object.freeze(Object.create(null)) as object;
+  let capability!: ProjectorFreeImportedApiMember;
+
+  const recheck = (): void => {
+    const issued = projectorFreeImportedApiMemberReceipts.get(receipt);
+
+    if (issued === undefined || issued.capability !== capability)
+      throw new TypeError("The projector-free Query member receipt is not authentic");
+
+    owner.assertActive();
+
+    if (
+      issued.owner !== owner ||
+      issued.checkedUse !== checkedUse ||
+      issued.rawImportedMarker !== marker ||
+      issued.adaptedApiRecord !== adaptedApiRecord ||
+      issued.boundApi !== boundApi ||
+      issued.memberName !== literalMemberName ||
+      issued.contractMember !== contractMember ||
+      issued.graphConstruction !== graphConstruction ||
+      issued.graphRecipe !== graphRecipe ||
+      issued.requestScope !== requestScope ||
+      issued.requestScopeRecord !== requestScopeRecord ||
+      adaptedApis.get(marker) !== adaptedApiRecord ||
+      adaptedApiRecord.project !== undefined ||
+      readActualGraphConstruction(adaptedApiRecord.graph) !== graphConstruction ||
+      graphConstruction.graph !== adaptedApiRecord.graph ||
+      graphConstruction.contract !== adaptedApiRecord.contract ||
+      graphConstruction.checkedUse === undefined ||
+      recordedGraphRecipes.get(adaptedApiRecord.graph) !== graphRecipe ||
+      graphRecipe.contract !== adaptedApiRecord.contract ||
+      (requestScope !== undefined &&
+        (owner.context !== context ||
+          context.requestApiScope !== requestScope ||
+          physicalRequestApiScopes.get(requestScope) !== requestScopeRecord ||
+          !requestScopeRecord?.ownerBound ||
+          requestScopeRecord.rootSignal.aborted)) ||
+      ownerCaches.get(owner)?.get(marker) !== boundApi ||
+      adaptedApiGraphs.get(boundApi) !== contractMember.graph ||
+      !Object.isFrozen(boundApi) ||
+      capability.member !== contractMember.apiMember ||
+      capability.receiver !== contractMember.receiver ||
+      capability.definition !== contractMember.definition ||
+      capability.nativeMember !== contractMember.nativeMember ||
+      capability.registration !== contractMember.registration ||
+      capability.graph !== contractMember.graph
+    )
+      throw new TypeError("The projector-free Query member source changed");
+
+    if (resolveOwnerBoundQueryApiMember(owner, boundApi, literalMemberName) !== contractMember)
+      throw new TypeError("The Owner-bound Query member descriptor changed");
+  };
+
+  capability = Object.freeze({
+    owner,
+    checkedUse,
+    graph: contractMember.graph,
+    sourceGraphUse: graphConstruction.checkedUse,
+    member: contractMember.apiMember,
+    receiver: contractMember.receiver,
+    definition: contractMember.definition,
+    nativeMember: contractMember.nativeMember,
+    registration: contractMember.registration,
+    receipt,
+    recheck,
+  });
+
+  projectorFreeImportedApiMemberReceipts.set(
+    receipt,
+    Object.freeze({
+      capability,
+      owner,
+      checkedUse,
+      rawImportedMarker: marker,
+      adaptedApiRecord,
+      boundApi,
+      memberName: literalMemberName,
+      contractMember,
+      graphConstruction,
+      graphRecipe,
+      requestScope,
+      requestScopeRecord,
+    }),
+  );
+  recheck();
+
+  return capability;
+}
+
 function bindValue(
   owner: Owner,
   value: object,
@@ -166,13 +886,28 @@ function bindValue(
   if (record !== undefined) {
     owner.assertActive();
 
-    const bound = createContractApi(owner, record.graph, record.contract, record.policies);
+    let graph = record.graph;
+    let contract = record.contract;
 
-    adaptedApiGraphs.set(bound as object, record.graph);
+    if (owner.context.target === "server") {
+      const requestScope = owner.context.requestApiScope;
+
+      if (!requestScope)
+        throw new TypeError("Server Aeolia API binding requires a request API scope");
+
+      const pair = requestScope.select(record.graph, record.contract);
+
+      graph = pair.graph;
+      contract = pair.contract;
+    }
+
+    const bound = createContractApi(owner, graph, contract, record.policies);
+
+    adaptedApiGraphs.set(bound as object, graph);
 
     const adaptedValue = record.project ? record.project(bound) : bound;
 
-    if (isObjectLike(adaptedValue)) adaptedApiGraphs.set(adaptedValue, record.graph);
+    if (isObjectLike(adaptedValue)) adaptedApiGraphs.set(adaptedValue, graph);
 
     cache.set(value, adaptedValue);
 
