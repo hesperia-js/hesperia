@@ -22,6 +22,13 @@ import {
   registerCheckingSessionTypingState,
   type TypingInputEnvironment,
 } from "./typing-inputs.ts";
+import {
+  captureCheckingModules,
+  checkedSourceOrigin,
+  issueNativeCheckingOrigin,
+  nativePopulation,
+  type CapturedCheckingModules,
+} from "./checking-origin.ts";
 export type { CapturedCheckingInput } from "./checking-inputs.ts";
 
 /** A virtual module in one immutable TypeScript checking snapshot. */
@@ -156,12 +163,14 @@ export function openCheckingProject(
   modules: readonly VirtualModule[],
   options: ProjectCheckingOptions = {},
 ): Promise<CheckingSession> {
-  return createCheckingSession(modules, options);
+  const captured = captureCheckingModules(modules);
+  return createCheckingSession(captured?.modules ?? modules, options, captured);
 }
 
 async function createCheckingSession(
   modules: readonly VirtualModule[],
   options: ProjectCheckingOptions,
+  captured: CapturedCheckingModules | undefined,
 ): Promise<CheckingSession> {
   const captureTypingEvidence = hasRequestedTypingEvidenceCapture(options);
 
@@ -171,6 +180,7 @@ async function createCheckingSession(
   }
 
   const root = resolve(options.root ?? process.cwd());
+  const population = nativePopulation(captured, root);
   const typingHost = captureTypingEvidence ? new TypingHostObservationRecorder() : undefined;
   const files = new Map<string, string>();
   const resolution =
@@ -643,6 +653,10 @@ async function createCheckingSession(
       checkingInputs: checkingInputs.captured,
       snapshotId: snapshot.id,
     };
+    let associateResult: (
+      value: ProjectCheckingResult,
+      capturedInputs: ProjectCheckingResult["checkingInputs"],
+    ) => void = () => {};
     const session: CheckingSession = {
       analyses,
       project,
@@ -650,27 +664,62 @@ async function createCheckingSession(
       dispose,
 
       get result() {
-        return { ...result, checkingInputs: checkingInputs.captured };
+        const capturedInputs = checkingInputs.captured;
+        const value = { ...result, checkingInputs: capturedInputs };
+        associateResult(value, capturedInputs);
+        return value;
       },
     };
+    associateResult = issueNativeCheckingOrigin(
+      project,
+      session,
+      population,
+      analyses,
+      views,
+      files,
+      checkingInputs,
+      result,
+      () => !disposed,
+    );
 
     if (typingHost) {
       let typingEnvironment: TypingInputEnvironment | undefined;
+      const initialResult = session.result;
+      const initialOrigin = checkedSourceOrigin(session, initialResult);
+      const resultGetter = Object.getOwnPropertyDescriptor(session, "result")?.get;
+      const ownsInitialSession = (): boolean => {
+        if (
+          !initialOrigin ||
+          disposed ||
+          session.project !== project ||
+          session.analyses !== analyses ||
+          Object.getOwnPropertyDescriptor(session, "result")?.get !== resultGetter
+        )
+          return false;
+
+        const current = session.result;
+        return (
+          checkedSourceOrigin(session, current) === initialOrigin &&
+          initialOrigin.inputSnapshot === checkingInputs &&
+          checkingInputs.ownsCaptured(current.checkingInputs)
+        );
+      };
       try {
         typingEnvironment = await captureTypingInputEnvironment(
           project,
           snapshot.id,
           root,
           options,
-          result.checkingInputs,
+          checkingInputs,
           typingHost,
           options.resolution ? ["external-resolution-object-unowned"] : [],
+          ownsInitialSession,
         );
       } catch {
         typingHost.close();
       }
       typingHost.close();
-      if (typingEnvironment)
+      if (typingEnvironment && ownsInitialSession())
         registerCheckingSessionTypingState(session, {
           project,
           environment: typingEnvironment,
@@ -689,7 +738,7 @@ async function createCheckingSession(
               : [];
           }),
           analyses,
-          baseline: result,
+          baseline: session.result,
           host: typingHost,
           isDisposed: () => disposed,
         });
