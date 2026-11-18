@@ -1,7 +1,14 @@
-import type { Contract, Graph, OperationDefinition, OperationTree } from "aeolia";
+import type { Contract, Graph, GraphOptions, OperationDefinition, OperationTree } from "aeolia";
 import { createContractApi, type HesperiaContractApi } from "./contract.ts";
 import type { Owner } from "../runtime/owner.ts";
 import { isObjectLike } from "../utils.ts";
+import {
+  assertPhysicalGraphConstructionUse,
+  beginPhysicalGraphConstruction,
+  completePhysicalGraphConstruction,
+  failPhysicalGraphConstruction,
+  type PhysicalGraphConstruction,
+} from "../runtime/retirement.ts";
 import type { NativeOperationPolicy } from "../validation/native-operation.ts";
 
 type FiniteOperation = Extract<OperationDefinition, { readonly kind: "query" | "mutation" }>;
@@ -14,11 +21,248 @@ interface AdaptedApiRecord {
   readonly policies?: OperationPolicies;
 }
 
+interface CapturedGraphOptions {
+  readonly prototype: object | null;
+  readonly descriptors: readonly (readonly [PropertyKey, PropertyDescriptor])[];
+}
+
+interface RecordedGraphRecipe {
+  readonly contract: Contract;
+  readonly createRequestGraph: (construction?: PhysicalGraphConstruction) => object;
+}
+
+/** Compiler descriptor retained by identity with its actual graph result. @internal */
+export interface CheckedGraphSourceUse {
+  /** Per-source-use descriptor; the string alone does not authenticate a graph. */
+  readonly id: string;
+  /** Optional containing component descriptor. */
+  readonly component?: string;
+  /** Checked source category. */
+  readonly kind: "graph";
+}
+
+/** Exact graph construction retained for one checked compiler use. @internal */
+export interface RecordedGraphConstruction {
+  /** Graph returned by the captured public constructor. */
+  readonly graph: Graph;
+  /** Contract read from the original options object. */
+  readonly contract: Contract;
+  /** Original public Aeolia constructor. */
+  readonly create: (options: GraphOptions<Contract>) => Graph;
+  /** Original options object passed to that constructor. */
+  readonly options: GraphOptions<Contract>;
+  /** Actual native-owner reservation, when construction used the admission bridge. */
+  readonly construction: PhysicalGraphConstruction | undefined;
+  /** Compiler descriptor supplied with the actual graph call. */
+  readonly checkedUse: CheckedGraphSourceUse;
+}
+
+const recordedGraphConstructions = new WeakMap<object, RecordedGraphConstruction>();
+const recordedGraphConstructionsByGraph = new WeakMap<object, RecordedGraphConstruction>();
+
+interface TypedRecordedGraphRecipe<C extends Contract> extends RecordedGraphRecipe {
+  readonly contract: C;
+  readonly createRequestGraph: (construction?: PhysicalGraphConstruction) => Graph<C>;
+}
+
 /** The shape of an adapted API before a component owner is known. */
 export type ImportedApi<C extends Contract = Contract> = HesperiaContractApi<C>;
 
 const adaptedApis = new WeakMap<object, AdaptedApiRecord>();
 const adaptedApiGraphs = new WeakMap<object, Graph>();
+const recordedGraphRecipes = new WeakMap<object, RecordedGraphRecipe>();
+
+/**
+ * Capture the compiler-qualified public createGraph call for request-local
+ * graph recreation. The original options object reaches the public callee
+ * unchanged; only its own data descriptors are retained for later requests.
+ * @param create - Public Aeolia graph constructor used for the original and request-local graphs.
+ * @param options - The original options object passed unchanged to `create`.
+ * @param checkedUse - Optional compiler descriptor retained with the actual graph result.
+ * @returns The graph created by the original public call.
+ */
+export function createRecordedAeoliaGraph<C extends Contract>(
+  create: (options: GraphOptions<C>) => Graph<C>,
+  options: GraphOptions<C>,
+  checkedUse?: CheckedGraphSourceUse,
+): Graph<C> {
+  return recordAeoliaGraph(create, options, undefined, checkedUse);
+}
+
+/**
+ * Create the graph through one actual native-owner construction reservation.
+ * @param construction - Exact one-use reservation returned by the native graph bridge.
+ * @param create - Original public Aeolia constructor.
+ * @param options - Original options object passed unchanged to `create`.
+ * @param checkedUse - Optional compiler use descriptor retained with the actual graph result.
+ * @returns The graph created by the admitted constructor.
+ * @internal
+ */
+export function createAdmittedAeoliaGraph<C extends Contract>(
+  construction: PhysicalGraphConstruction,
+  create: (options: GraphOptions<C>) => Graph<C>,
+  options: GraphOptions<C>,
+  checkedUse?: CheckedGraphSourceUse,
+): Graph<C> {
+  if (construction === undefined)
+    throw new TypeError("An admitted Aeolia Graph requires its original constructor reservation");
+
+  return recordAeoliaGraph(create, options, construction, checkedUse);
+}
+
+function recordAeoliaGraph<C extends Contract>(
+  create: (options: GraphOptions<C>) => Graph<C>,
+  options: GraphOptions<C>,
+  construction?: PhysicalGraphConstruction,
+  checkedUse?: CheckedGraphSourceUse,
+): Graph<C> {
+  if (construction !== undefined) {
+    if (checkedUse !== undefined) assertPhysicalGraphConstructionUse(construction, checkedUse);
+
+    beginPhysicalGraphConstruction(construction);
+  }
+
+  try {
+    const captured = captureGraphOptions(options);
+    const graph = create(options);
+
+    if (construction !== undefined) completePhysicalGraphConstruction(construction, graph);
+
+    const contract = captured.descriptors.find(([key]) => key === "contract")?.[1].value as
+      | C
+      | undefined;
+
+    if (contract === undefined || contract === null || !isObjectLike(graph))
+      throw new TypeError("Recorded Aeolia graph creation did not produce a valid contract graph");
+
+    const recipe: TypedRecordedGraphRecipe<C> = Object.freeze({
+      contract,
+      createRequestGraph: (requestConstruction?: PhysicalGraphConstruction) => {
+        if (requestConstruction !== undefined) {
+          if (checkedUse !== undefined)
+            assertPhysicalGraphConstructionUse(requestConstruction, checkedUse);
+
+          beginPhysicalGraphConstruction(requestConstruction);
+        }
+
+        try {
+          const requestOptions = restoreGraphOptions(captured, contract);
+          const requestGraph = create(requestOptions);
+
+          if (requestConstruction !== undefined)
+            completePhysicalGraphConstruction(requestConstruction, requestGraph);
+
+          if (checkedUse !== undefined) {
+            const requestRecord: RecordedGraphConstruction = Object.freeze({
+              graph: requestGraph,
+              contract,
+              create: create as (options: GraphOptions<Contract>) => Graph,
+              options: requestOptions as GraphOptions<Contract>,
+              construction: requestConstruction,
+              checkedUse,
+            });
+            recordedGraphConstructionsByGraph.set(requestGraph, requestRecord);
+          }
+
+          return requestGraph;
+        } catch (reason) {
+          if (requestConstruction !== undefined)
+            failPhysicalGraphConstruction(requestConstruction, reason);
+
+          throw reason;
+        }
+      },
+    });
+
+    recordedGraphRecipes.set(graph, recipe);
+
+    if (checkedUse !== undefined) {
+      const useRecord: RecordedGraphConstruction = Object.freeze({
+        graph,
+        contract,
+        create: create as (options: GraphOptions<Contract>) => Graph,
+        options: options as GraphOptions<Contract>,
+        construction,
+        checkedUse,
+      });
+      recordedGraphConstructions.set(checkedUse, useRecord);
+      recordedGraphConstructionsByGraph.set(graph, useRecord);
+    }
+
+    return graph;
+  } catch (reason) {
+    if (construction !== undefined) failPhysicalGraphConstruction(construction, reason);
+
+    throw reason;
+  }
+}
+
+/**
+ * Read the actual graph construction from the graph object itself.
+ * @param graph - Exact graph returned by the recorded public constructor.
+ * @returns Actual construction facts when this graph has a checked source use.
+ * @internal
+ */
+export function readActualGraphConstruction(graph: Graph): RecordedGraphConstruction | undefined {
+  const record = recordedGraphConstructionsByGraph.get(graph);
+
+  return record?.graph === graph ? record : undefined;
+}
+
+/**
+ * Read the graph and native construction retained for one exact checked use.
+ * @param checkedUse - Same object supplied to the original graph constructor.
+ * @returns The actual graph record for this use, or `undefined` when absent.
+ * @internal
+ */
+export function readRecordedAeoliaGraphConstruction(
+  checkedUse: CheckedGraphSourceUse,
+): RecordedGraphConstruction | undefined {
+  const record = recordedGraphConstructions.get(checkedUse);
+
+  return record?.checkedUse === checkedUse ? record : undefined;
+}
+
+function captureGraphOptions<C extends Contract>(options: GraphOptions<C>): CapturedGraphOptions {
+  if (!isObjectLike(options))
+    throw new TypeError("Recorded Aeolia graph options must be a fresh object literal");
+
+  const prototype = Object.getPrototypeOf(options);
+
+  if (prototype !== Object.prototype && prototype !== null)
+    throw new TypeError("Recorded Aeolia graph options must not use a custom prototype");
+
+  const descriptors: (readonly [PropertyKey, PropertyDescriptor])[] = [];
+
+  for (const key of Reflect.ownKeys(options)) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(options, key);
+
+    if (!descriptor || !("value" in descriptor) || descriptor.get || descriptor.set)
+      throw new TypeError("Recorded Aeolia graph options must contain only own data properties");
+
+    descriptors.push([key, Object.freeze({ ...descriptor })]);
+  }
+
+  return {
+    prototype,
+    descriptors: Object.freeze(descriptors),
+  };
+}
+
+function restoreGraphOptions<C extends Contract>(
+  captured: CapturedGraphOptions,
+  contract: C,
+): GraphOptions<C> {
+  const options: GraphOptions<C> = { contract };
+
+  Object.setPrototypeOf(options, captured.prototype);
+  Reflect.deleteProperty(options, "contract");
+  for (const [key, capturedDescriptor] of captured.descriptors) {
+    Object.defineProperty(options, key, { ...capturedDescriptor });
+  }
+
+  return options;
+}
 
 /**
  * Mark a graph and contract pair for direct component imports.

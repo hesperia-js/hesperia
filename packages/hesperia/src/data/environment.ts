@@ -21,6 +21,26 @@ export type DataSecurity =
   | { readonly kind: "none" }
   | { readonly kind: "partition"; readonly partition: DataSecurityPartition };
 
+/** Logical identifiers for the exact installed static-cache scope. */
+export interface StaticCacheScope {
+  /** Application identifier retained by the installed provider configuration. */
+  readonly applicationId: string;
+  /** Publication identifier retained by the installed provider configuration. */
+  readonly publicationId: string;
+  /** Partition identifier retained by the installed provider configuration. */
+  readonly partitionId: string;
+}
+
+/** Application and security identities explicitly associated with one static-cache scope. */
+export interface StaticCacheAssociation {
+  /** The exact realm-local Data application identity. */
+  readonly application: DataApplication;
+  /** The exact normalized Data security identity selected for this generation. */
+  readonly security: DataSecurity;
+  /** Logical scope identifiers matched against the installed provider configuration. */
+  readonly scope: StaticCacheScope;
+}
+
 /** Root creator's authority to fence security changes before credentials mutate. */
 export interface DataBindingRootControl {
   /** Last published generation, retained during revocation or replacement. */
@@ -358,6 +378,24 @@ export function currentDataBindingEnvironment(runtime: RuntimeContext): DataBind
     );
 
   return root.current;
+}
+
+/** @internal Read the current environment while preserving a genuinely unbound bootstrapped root. */
+export function currentDataBindingEnvironmentOrNone(
+  runtime: RuntimeContext,
+): DataBindingEnvironment | undefined {
+  const root = rootFor(runtime);
+
+  assertEligible(root);
+
+  if (!root.bootstrapped || root.setup || root.transition)
+    throw fault("The data binding root has not completed its current setup");
+
+  if (root.current) return root.current;
+
+  if (root.application === undefined) return undefined;
+
+  throw fault(`No current data environment; configure explicit dataBinding through ${root.route}`);
 }
 
 /**
