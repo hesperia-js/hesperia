@@ -166,7 +166,7 @@ jobs:
         run: "bun run build"
       - name: "Install browser engines and system dependencies"
         if: "runner.os == 'Linux'"
-        timeout-minutes: 15
+        timeout-minutes: 25
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install browser engines"
         if: "runner.os == 'Windows'"
@@ -254,14 +254,14 @@ jobs:
         run: "bun run build"
       - name: "Install ordinary test browser engines and system dependencies"
         if: "matrix.group == 'bun-tests-ordinary' && runner.os == 'Linux'"
-        timeout-minutes: 15
+        timeout-minutes: 25
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install ordinary test browser engines"
         if: "matrix.group == 'bun-tests-ordinary' && runner.os == 'Windows'"
         run: "node node_modules/playwright/cli.js install chromium firefox webkit"
       - name: "Install CSS capture Chromium and system dependencies"
         if: "matrix.group == 'browser-css' && runner.os == 'Linux'"
-        timeout-minutes: 15
+        timeout-minutes: 25
         run: "node node_modules/playwright/cli.js install --with-deps chromium"
       - name: "Install CSS capture Chromium"
         if: "matrix.group == 'browser-css' && runner.os == 'Windows'"
@@ -435,7 +435,7 @@ jobs:
         run: "bun run build"
       - name: "Install all browser engines"
         if: "runner.os == 'Linux'"
-        timeout-minutes: 15
+        timeout-minutes: 25
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install all browser engines"
         if: "runner.os == 'Windows'"
@@ -458,7 +458,7 @@ jobs:
     needs: checks
     if: "needs.checks.outputs.package == 'true'"
     runs-on: ${{ matrix.platform }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.platform == 'ubuntu-24.04' && 40 || 30 }}
     env:
       HESPERIA_REQUIRE_CHROME_EXECUTABLE_PATH: "1"
     strategy:
@@ -503,7 +503,7 @@ jobs:
         run: "bun run build"
       - name: "Install browser engines and system dependencies"
         if: "runner.os == 'Linux'"
-        timeout-minutes: 15
+        timeout-minutes: 25
         run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
       - name: "Install browser engines"
         if: "runner.os == 'Windows'"
@@ -580,13 +580,15 @@ jobs:
       - uses: ./.github/actions/setup
       - name: "Build packages"
         run: "bun run build"
-      - name: "Install all browser engines"
+      - name: "Install the selected browser engine and system dependencies"
         if: "runner.os == 'Linux'"
-        timeout-minutes: 15
-        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
-      - name: "Install all browser engines"
+        timeout-minutes: 25
+        run: 'node node_modules/playwright/cli.js install --with-deps "$GOLDEN_PROJECT"'
+        shell: bash
+      - name: "Install the selected browser engine"
         if: "runner.os == 'Windows'"
-        run: "node node_modules/playwright/cli.js install chromium firefox webkit"
+        run: 'node node_modules/playwright/cli.js install "$GOLDEN_PROJECT"'
+        shell: bash
       - uses: ./.github/actions/setup-chrome
       - name: "Run every selected suite in the matrix browser"
         run: |
