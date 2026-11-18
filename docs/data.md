@@ -81,6 +81,21 @@ Aeolia's semantics and does not return Hesperia's live accessor. Use it when
 interoperating with Aeolia directly; use `await view` for the Hesperia query
 wait described above.
 
+### Query progress
+
+A progress-capable query view exposes `project()` for the latest reported value,
+or `project(policy)` to accumulate or reduce reported values. Each projection
+is read-only and belongs to its creating owner. It does not start, own, or cancel
+the shared request. Its `pending()`, `status()`, and `error()` describe progress;
+the ordinary query value and readiness remain independent.
+
+When input validation is asynchronous, projections created while validation is
+pending join the same native query acquisition before its fetch can report. They
+observe eligible reports in order without starting another request. A projection
+created later receives the current state once and future reports; it does not
+replay earlier reports. Releasing one owner removes its projections without
+cancelling a shared query used by another owner.
+
 Query waits have explicit failure behavior. An initial request failure rejects
 with the backend error. If a view is already in `failed` status, awaiting it
 rejects immediately with `{ status: "failed", error }` and starts one shared

@@ -1,5 +1,12 @@
-import { bindOperation, createBindingContext, subscribe } from "aeolia";
-import type { BindingContext, Graph, QueryBinding, QueryDefinition, StoreOptions } from "aeolia";
+import { bindOperation, callQueryWithProgress, createBindingContext, subscribe } from "aeolia";
+import type {
+  BindingContext,
+  Graph,
+  QueryBinding,
+  QueryDefinition,
+  QueryProgressCohortEntry,
+  StoreOptions,
+} from "aeolia";
 import { RenderFault, type Owner } from "../runtime/owner.ts";
 import { completeProfileQueryValue } from "../validation/native-operation.ts";
 import type { ValidationProfile } from "../validation/profiles.ts";
@@ -277,6 +284,8 @@ export function acquireProfileQuery<P>(
   input: unknown,
   options: StoreOptions<unknown> | undefined,
   environment: DataBindingEnvironment,
+  progressCohort: readonly QueryProgressCohortEntry<unknown, P>[],
+  acquisitionCurrent: () => void,
 ): PreparedQuerySource<unknown, P> {
   const assertEnvironment = (): void => {
     assertQueryEnvironment(owner, environment);
@@ -360,7 +369,9 @@ export function acquireProfileQuery<P>(
   assertCurrent();
 
   const member = binding.member;
-  const store = member(input, options);
+  const store = progressCohort.length
+    ? callQueryWithProgress(member, [input, options], progressCohort, acquisitionCurrent)
+    : member(input, options);
 
   assertCurrent();
 

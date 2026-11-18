@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { Window } from "happy-dom";
 import {
   createGraph,
   createMutation,
@@ -6,13 +7,22 @@ import {
   createStore,
   createStream,
   defineContract,
+  observeQueryProgress,
   subscribe,
+  type QueryStore,
 } from "aeolia";
 import { testBackend } from "aeolia/testing";
 import { bindImported, markImportedApi } from "../../packages/hesperia/src/data/api.ts";
 import { reset, withAeolia } from "../../packages/hesperia/src/aeolia/index.ts";
 import { createContractApi } from "../../packages/hesperia/src/data/contract.ts";
 import { createClient } from "../../packages/hesperia/src/client.ts";
+import {
+  bootstrapDataBindingRoot,
+  createDataApplication,
+} from "../../packages/hesperia/src/data/environment.ts";
+import { registerNativeQueryProfile } from "../../packages/hesperia/src/data/native-observation.ts";
+import { createRuntimeRoot } from "../../packages/hesperia/src/runtime/dom.ts";
+import type { ValidationQueryView } from "../../packages/hesperia/src/data/types.ts";
 import { Owner, type RuntimeContext } from "../../packages/hesperia/src/runtime/owner.ts";
 import { createNativeOperationPolicy } from "../../packages/hesperia/src/validation/native-operation.ts";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
@@ -232,6 +242,171 @@ for (const property of ["then", "constructor"] as const) {
     graph.dispose();
   });
 }
+
+interface QueryProgressEnrollmentInput {
+  readonly id: string;
+  readonly value: string;
+}
+
+async function assertPreAcquisitionQueryProgressEnrollment(
+  route: "generic-policy" | "native-profile",
+): Promise<void> {
+  const window = new Window({ url: "https://query-progress-cohort.test/" });
+  const runtime = createRuntimeRoot(window.document.body as unknown as Element);
+  const inputValidation =
+    Promise.withResolvers<StandardSchemaV1.Result<QueryProgressEnrollmentInput>>();
+  const inputStarted = Promise.withResolvers<void>();
+  const authoredInput = { id: route, value: "authored" };
+  const validatedInput = { id: route, value: "validated" };
+  const input: StandardSchemaV1<QueryProgressEnrollmentInput, QueryProgressEnrollmentInput> = {
+    "~standard": {
+      version: 1,
+      vendor: "query-progress-cohort-test",
+      validate(value) {
+        expect(value).toBe(authoredInput);
+        inputStarted.resolve();
+
+        return inputValidation.promise;
+      },
+    },
+  };
+  let fetchCalls = 0;
+  let fetchedInput: QueryProgressEnrollmentInput | undefined;
+  const definition = createQuery<QueryProgressEnrollmentInput, string, string, number>({
+    name: `adapter.query-progress-cohort.${route}`,
+    key: ({ id, value }) => `query-progress-cohort/${id}/${value}`,
+    fetch: (queryInput, { reportProgress }) => {
+      fetchCalls++;
+      fetchedInput = queryInput;
+      reportProgress(1);
+      reportProgress(2);
+
+      return Promise.resolve("completed");
+    },
+  });
+  const query =
+    route === "native-profile" ? registerNativeQueryProfile(definition, { input }) : definition;
+  const contract = defineContract({
+    namespace: `adapter-query-progress-cohort-${route}`,
+    operations: { query },
+  });
+  const graph = createGraph({ contract });
+
+  try {
+    bootstrapDataBindingRoot(runtime.owner, {
+      application: createDataApplication(),
+      security: () => ({ kind: "none" }),
+    });
+
+    let view: ValidationQueryView<string, number>;
+
+    if (route === "generic-policy") {
+      const policy = createNativeOperationPolicy((rawEnvelope) => ({
+        input: rawEnvelope,
+        schemas: { input },
+        replace: (validatedEnvelope) => validatedEnvelope,
+      }));
+
+      const imported = markImportedApi(
+        graph,
+        contract,
+        (bound) => bound,
+        new Map([[definition, policy]]),
+      );
+      const api = bindImported(runtime.owner, imported) as typeof imported;
+
+      view = api.query(authoredInput);
+    } else {
+      const imported = withAeolia(graph, contract);
+      const api = bindImported(runtime.owner, imported) as typeof imported;
+
+      view = api.query(authoredInput);
+    }
+
+    const ready = view.ready;
+    const accumulated = view.project({ kind: "accumulate", max: 4 });
+    const captured: { readonly reportRevision: number; readonly value: number | undefined }[] = [];
+    let reducerSource: QueryStore<string, number> | undefined;
+    let failedReducerSource: QueryStore<string, number> | undefined;
+    const reduced = view.project({
+      kind: "reduce",
+      initial: [] as readonly number[],
+      step: (previous, value) => {
+        const source = view.source;
+
+        if (!source)
+          throw new Error(
+            "The query source must be available during synchronous progress reduction",
+          );
+
+        reducerSource = source;
+
+        const snapshot = observeQueryProgress(source).capture();
+
+        captured.push({ reportRevision: snapshot.reportRevision, value: snapshot.value });
+
+        return [...previous, value];
+      },
+    });
+    const reducerFailure = new Error("The failing progress reducer stays local");
+    const failedReducer = view.project({
+      kind: "reduce",
+      initial: [] as readonly number[],
+      step: () => {
+        const source = view.source;
+
+        if (!source)
+          throw new Error(
+            "The query source must be available during synchronous progress reduction",
+          );
+
+        failedReducerSource = source;
+
+        throw reducerFailure;
+      },
+    });
+    const isolated = view.project({ kind: "accumulate", max: 1 });
+
+    runtime.owner.commit();
+    await inputStarted.promise;
+
+    expect(fetchCalls).toBe(0);
+    expect(view.source).toBeUndefined();
+
+    inputValidation.resolve({ value: validatedInput });
+
+    await expect(ready).resolves.toBe("completed");
+
+    expect(fetchCalls).toBe(1);
+    expect(fetchedInput).toBe(validatedInput);
+    expect(accumulated.value()).toStrictEqual([1, 2]);
+    expect(reduced.value()).toStrictEqual([1, 2]);
+    expect(reduced.status()).toBe("complete");
+    expect(captured).toStrictEqual([
+      { reportRevision: 1, value: 1 },
+      { reportRevision: 2, value: 2 },
+    ]);
+    expect(failedReducer.status()).toBe("failed");
+    expect(failedReducer.error()).toBe(reducerFailure);
+    expect(reducerSource).toBe(view.source);
+    expect(failedReducerSource).toBe(view.source);
+    expect(isolated.value()).toStrictEqual([1]);
+    expect(isolated.status()).toBe("failed");
+  } finally {
+    inputValidation.resolve({ value: authoredInput });
+    await runtime.owner.dispose();
+    graph.dispose();
+    window.close();
+  }
+}
+
+test("generic async query preparation enrolls existing progress projections before raw fetch", async () => {
+  await assertPreAcquisitionQueryProgressEnrollment("generic-policy");
+});
+
+test("native-profile query preparation enrolls existing projections before bound fetch", async () => {
+  await assertPreAcquisitionQueryProgressEnrollment("native-profile");
+});
 
 test("query progress preserves reentrant reports through completion", async () => {
   let report!: (value: number) => void;
