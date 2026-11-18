@@ -170,3 +170,6 @@ jobs:
       - name: Run native graph custody integration with the preview SDK
         if: github.event.pull_request.head.ref == 'work/m3-native-graph-custody-r1'
         run: bun test --timeout=45000 tests/data/native-graph-custody.integration.test.ts
+      - name: Run request scope integration with the preview SDK
+        if: github.event.pull_request.head.ref == 'work/m3-native-graph-custody-r1'
+        run: bun test --timeout=45000 tests/data/request-scope.integration.test.ts
