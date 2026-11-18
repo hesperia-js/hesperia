@@ -1128,7 +1128,7 @@ print(os.getpid(), flush=True)
 sys.stdin.buffer.read(1)
 libc.pthread_exit(None)
 '''
-        for exit_stage in ("attachment", "retry", "retry-missing"):
+        for exit_stage in ("attachment", "retry", "retry-missing", "second-unverified"):
             with self.subTest(exit_stage=exit_stage), tempfile.TemporaryDirectory() as temporary:
                 directory = pathlib.Path(temporary)
                 script = directory / "fixture.py"
@@ -1156,14 +1156,20 @@ libc.pthread_exit(None)
                     original_readlink = os.readlink
                     original_identity = observer.read_proc_kernel_identity
                     released = False
+                    executable_reads = 0
 
                     def missing_executable(path: object, *args: object, **kwargs: object) -> str:
+                        nonlocal executable_reads
                         if pathlib.Path(path) == exe_path:
-                            raise FileNotFoundError(errno.ENOENT, "fixture incomplete executable", str(path))
+                            executable_reads += 1
+                            if exit_stage != "second-unverified" or executable_reads > 1:
+                                raise FileNotFoundError(errno.ENOENT, "fixture incomplete executable", str(path))
                         return original_readlink(path, *args, **kwargs)
 
                     def identity(target: int, stage: str, **kwargs: object) -> dict[str, int | str]:
                         nonlocal released
+                        if exit_stage == "second-unverified" and stage == "incomplete second /proc sample pidfd recheck":
+                            raise FileNotFoundError(errno.ENOENT, "fixture missing identity")
                         target_stage = (
                             "incomplete argv pidfd attachment" if exit_stage == "attachment"
                             else "pending traced process before full /proc sample"
@@ -1188,6 +1194,16 @@ libc.pthread_exit(None)
                     with mock.patch.object(os, "readlink", side_effect=missing_executable), mock.patch.object(
                         observer, "read_proc_kernel_identity", side_effect=identity
                     ):
+                        if exit_stage == "second-unverified":
+                            with self.assertRaisesRegex(observer.CaptureError, "Could not recheck incomplete"):
+                                observer.open_generation(pid, pending)
+                            self.assertEqual(pending, {})
+                            self.assertFalse(observer.pidfd_ready(cleanup_fd))
+                            process.stdin.write(b"x")
+                            process.stdin.flush()
+                            os.write(worker_write, b"x")
+                            process.wait(timeout=5)
+                            continue
                         self.assertIsNone(observer.open_generation(pid, pending))
                         if exit_stage != "attachment":
                             original_ticks = pending[pid].start_ticks

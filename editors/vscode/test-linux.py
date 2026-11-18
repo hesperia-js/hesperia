@@ -1081,9 +1081,9 @@ def open_generation(
             )
 
             attachment = PendingTraceGeneration(pid, error.proc["ppid"], error.proc["startTicks"], fd, attached_at)
-            pending[pid] = attachment
 
             if pidfd_ready(fd):
+                pending[pid] = attachment
                 return None
 
             try:
@@ -1092,6 +1092,7 @@ def open_generation(
                 )
             except (FileNotFoundError, ProcessLookupError) as identity_error:
                 if pidfd_ready(fd):
+                    pending[pid] = attachment
                     return None
 
                 raise CaptureError(
@@ -1106,6 +1107,7 @@ def open_generation(
                 raise CaptureError(f"Traced process parent changed after incomplete executable sample: {pid}")
 
             attachment.exit_only = retained_identity["state"] in {"Z", "X", "x"}
+            pending[pid] = attachment
 
             if pidfd_ready(fd):
                 return None
