@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { realpathSync } from "node:fs";
+import { createRequire } from "node:module";
 import { isAbsolute } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Code, ConnectError } from "@connectrpc/connect";
+import { Window } from "happy-dom";
+import { withAeolia } from "hesperia/aeolia";
+import { bindImported, defineComponent, mount, text } from "hesperia/runtime";
 import { Http2SessionManager } from "@connectrpc/connect-node";
 import { create, type MessageShape } from "@bufbuild/protobuf";
 import { affects, createGraph, defineContract, storeKey, subscribe, type Readable } from "aeolia";
@@ -275,10 +280,22 @@ async function main(): Promise<void> {
     moduleResolutions = {
       hesperiaGrpc: import.meta.resolve("@hesperia/grpc"),
       hesperiaGrpcNative: import.meta.resolve("@hesperia/grpc/native"),
+      hesperiaRuntime: import.meta.resolve("hesperia/runtime"),
+      hesperiaAeolia: import.meta.resolve("hesperia/aeolia"),
       connectNode: import.meta.resolve("@connectrpc/connect-node"),
       protobuf: import.meta.resolve("@bufbuild/protobuf"),
       aeolia: import.meta.resolve("aeolia"),
     };
+
+    const aeoliaEntry = realpathSync(fileURLToPath(moduleResolutions.aeolia!));
+
+    for (const importer of [
+      moduleResolutions.hesperiaGrpc!,
+      moduleResolutions.hesperiaRuntime!,
+      moduleResolutions.hesperiaAeolia!,
+    ]) {
+      assert.equal(realpathSync(createRequire(importer).resolve("aeolia")), aeoliaEntry);
+    }
 
     process.stdout.write(
       `${JSON.stringify({
@@ -629,6 +646,59 @@ async function main(): Promise<void> {
     }
 
     assert.deepEqual(fixture.observations.serverErrors, []);
+
+    const boundGraph = createGraph({ contract });
+
+    graphs.push(boundGraph);
+
+    const imported = withAeolia(boundGraph, contract);
+    const window = new Window({ url: "https://grpc-bound.test/" });
+    let application: ReturnType<typeof mount> | undefined;
+    const bindings: { query?: ReturnType<typeof imported.query> } = {};
+
+    try {
+      const Consumer = defineComponent((owner) => {
+        const api = bindImported(owner, imported) as typeof imported;
+        const current = api.query(create(ServiceAll.method.unary.input, { value: "Q" }));
+
+        bindings.query = current;
+
+        return text(owner, () => current.value()?.value ?? "pending");
+      });
+      const previousCalls = fixture.observations.calls.length;
+
+      application = mount(window.document.body as unknown as Element, Consumer, {});
+
+      const actualQuery = bindings.query;
+
+      assert.ok(actualQuery, "The mounted component must bind the gRPC query");
+
+      await actualQuery.ready;
+      await application.settled();
+
+      assert.equal(actualQuery.value()?.value, 9);
+      assert.equal(window.document.body.textContent, "9");
+
+      const boundCalls = fixture.observations.calls.slice(previousCalls);
+
+      assert.equal(boundCalls.length, 1);
+      assert.equal(boundCalls[0]!.path, unaryPath);
+      assert.deepEqual(hex(boundCalls[0]!.requestFrames), [frame.q]);
+      assert.deepEqual(hex(boundCalls[0]!.responseFrames), [frame.int32Nine]);
+      assert.equal(readHeader(boundCalls[0]!.responseTrailers, "grpc-status"), "0");
+
+      application.dispose();
+      application = undefined;
+
+      assert.equal(window.document.body.textContent, "");
+      assert.throws(() => actualQuery.value());
+      assert.deepEqual(fixture.observations.serverErrors, []);
+
+      checks.push("hesperia-owned-query");
+    } finally {
+      application?.dispose();
+      window.close();
+    }
   } catch (error) {
     scenarioFailed = true;
     scenarioError = error;
