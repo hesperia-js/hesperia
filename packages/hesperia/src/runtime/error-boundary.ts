@@ -1,6 +1,7 @@
 import type { Accessor } from "../client.ts";
 import { bindNativeChildSourceOwner } from "./components.ts";
 import { prepareTree, type Rendered } from "./dom.ts";
+import { beginNativeMutation, finishNativeMutation } from "./scheduler.ts";
 import {
   disposeOwnerSyncPreservingFailure,
   Owner,
@@ -67,6 +68,19 @@ export function errorBoundary(
     return parentNode && start.parentNode === parentNode ? parentNode : null;
   };
 
+  const runBoundaryMutation = <T>(run: () => T): T => {
+    const scheduler = owner.context.scheduler;
+    const mutation = { owner, start, end };
+
+    beginNativeMutation(scheduler, mutation);
+
+    try {
+      return run();
+    } finally {
+      finishNativeMutation(scheduler, mutation);
+    }
+  };
+
   const fail = (error: unknown) => {
     owner.assertActive();
 
@@ -87,15 +101,17 @@ export function errorBoundary(
         return;
       }
 
-      let node = start.nextSibling;
+      runBoundaryMutation(() => {
+        let node = start.nextSibling;
 
-      while (node && node !== end) {
-        const next = node.nextSibling;
+        while (node && node !== end) {
+          const next = node.nextSibling;
 
-        node.parentNode?.removeChild(node);
+          node.parentNode?.removeChild(node);
 
-        node = next;
-      }
+          node = next;
+        }
+      });
 
       const viewOwner = new Owner(owner.context, owner, `${owner.identity}/error`);
 
@@ -134,7 +150,7 @@ export function errorBoundary(
       }
 
       try {
-        insertionParent.insertBefore(view.fragment, end);
+        runBoundaryMutation(() => insertionParent.insertBefore(view.fragment, end));
 
         if (owner.state === "mounted") {
           viewOwner.commit();
@@ -226,7 +242,7 @@ export function errorBoundary(
         );
 
         disposeAfterForwarding(fault);
-      } else insertionParent.insertBefore(tree.fragment, end);
+      } else runBoundaryMutation(() => insertionParent.insertBefore(tree.fragment, end));
     }
 
     return fragment;
