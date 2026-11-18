@@ -1122,6 +1122,7 @@ test("a failed projection keeps its own failure through the same query's failed 
   const terminalFailure = new Error("query failed");
   const reducerFailure = new Error("projection failed");
   let report!: (value: number) => void;
+  let ordinaryFetchCalls = 0;
   const query = createQuery<string, string, string, number>({
     name: "adapter.progress-terminal-failure",
     key: (input) => input,
@@ -1132,8 +1133,11 @@ test("a failed projection keeps its own failure through the same query's failed 
   });
   const ordinary = createQuery({
     name: "adapter.progress-ordinary",
-    key: (input: string) => input,
-    fetch: async (input: string) => `ordinary ${input}`,
+    key: (input: string) => `ordinary/${input}`,
+    fetch: async (input: string) => {
+      ordinaryFetchCalls++;
+      return `ordinary ${input}`;
+    },
   });
   const contract = defineContract({
     namespace: "adapter-progress-terminal",
@@ -1164,6 +1168,8 @@ test("a failed projection keeps its own failure through the same query's failed 
       },
     });
 
+    expect(finite.key).not.toBe(view.key);
+    expect(ordinaryFetchCalls).toBe(1);
     await expect(finite.ready).resolves.toBe("ordinary one");
     report(1);
     report(2);
@@ -1245,10 +1251,12 @@ test("owner disposal inside a reducer revokes only that query projection", async
   const work = Promise.withResolvers<string>();
   let report!: (value: number) => void;
   let reducerCalls = 0;
+  let fetchCalls = 0;
   const query = createQuery<string, string, string, number>({
     name: "adapter.progress-revoked-reducer",
     key: (input) => input,
     fetch: (_input, options) => {
+      fetchCalls++;
       report = options.reportProgress;
       return work.promise;
     },
@@ -1273,7 +1281,10 @@ test("owner disposal inside a reducer revokes only that query projection", async
       },
     });
 
-    expect(other.source).toBe(view.source);
+    expect(fetchCalls).toBe(1);
+    expect(observeQueryProgress(other.source).capture().execution).toBe(
+      observeQueryProgress(view.source).capture().execution,
+    );
     report(1);
     expect(reducerCalls).toBe(1);
     expect(() => projected.value()).toThrow();
