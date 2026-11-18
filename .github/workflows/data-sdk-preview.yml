@@ -7,8 +7,12 @@ permissions:
 jobs:
   preview:
     if: github.event.pull_request.number == 40 || github.event.pull_request.number == 51
-    name: "Data SDK preview (runner-only override)"
-    runs-on: ubuntu-24.04
+    name: "Data SDK preview (${{ matrix.os }}, runner-only override)"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     defaults:
       run:
@@ -64,12 +68,13 @@ jobs:
                 changed = true;
               }
             }
-            if (file === "package.json") manifest.overrides.aeolia = "file:" + resolve(process.env.AEOLIA_PREVIEW_ARCHIVE);
+            if (file === "package.json") manifest.overrides.aeolia = "file:" + resolve(process.env.AEOLIA_PREVIEW_ARCHIVE).replaceAll("\\", "/");
             if (!changed) throw new Error("Missing expected Aeolia dependency in " + file);
             await Bun.write(file, JSON.stringify(manifest, null, 2) + String.fromCharCode(10));
           }
           JS
           bun install --ignore-scripts
+          echo "Runner-only archive: $AEOLIA_PREVIEW_ARCHIVE"
           echo "Runner-only preview manifests and lock:"
           git status --short
           sha256sum package.json bun.lock "$AEOLIA_PREVIEW_ARCHIVE"
