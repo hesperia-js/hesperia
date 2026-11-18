@@ -11,9 +11,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2022]
+        os: [ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
@@ -140,3 +140,27 @@ jobs:
             ${{ runner.temp }}/graphql-installed-evidence/
             ${{ runner.temp }}/aeolia-data-preview/aeolia.tgz
           if-no-files-found: warn
+      - name: Install browser engines on Linux
+        if: github.event.pull_request.number == 51 && runner.os == 'Linux'
+        timeout-minutes: 15
+        run: node node_modules/playwright/cli.js install --with-deps chromium firefox webkit
+      - name: Install browser engines on Windows
+        if: github.event.pull_request.number == 51 && runner.os == 'Windows'
+        run: node node_modules/playwright/cli.js install chromium firefox webkit
+      - name: Install the selected Chrome Headless Shell
+        if: github.event.pull_request.number == 51
+        uses: ./hesperia/.github/actions/setup-chrome
+      - name: Run the compiled GraphQL browser owner
+        id: graphql_browser
+        if: github.event.pull_request.number == 51
+        env:
+          HESPERIA_REQUIRE_CHROME_EXECUTABLE_PATH: "1"
+        run: node node_modules/@playwright/test/cli.js test tests/browser/graphql.spec.ts
+      - name: Retain failed GraphQL browser traces
+        if: always() && steps.graphql_browser.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "graphql-browser-preview-traces-${{ matrix.os }}-${{ github.run_attempt }}"
+          path: hesperia/test-results/**/trace.zip
+          if-no-files-found: ignore
+          retention-days: 7
