@@ -45,26 +45,27 @@ interface NativePolicyData {
 }
 
 /** Descriptor-correlated native source-selection data; its caller supplies the owned policy. */
-export type NativeResolutionPolicy = NativePolicyData & (
-  | {
-      /** Correlated explicit Node/fetch declaration and descriptor. */
-      readonly binding: NativeBinding<"node", "fetch", "hesperia.target/node-fetch/1">;
-      /** Captured module contract associated with this descriptor. */
-      readonly moduleABI: "node-captured-esm-v1";
-    }
-  | {
-      /** Correlated explicit Bun/Elysia declaration and descriptor. */
-      readonly binding: NativeBinding<"bun", "elysia", "hesperia.target/bun-elysia/1">;
-      /** Captured module contract associated with this descriptor. */
-      readonly moduleABI: "bun-captured-esm-v1";
-    }
-  | {
-      /** Correlated explicit Bun/Hono declaration and descriptor. */
-      readonly binding: NativeBinding<"bun", "hono", "hesperia.target/bun-hono/1">;
-      /** Captured module contract associated with this descriptor. */
-      readonly moduleABI: "bun-captured-esm-v1";
-    }
-);
+export type NativeResolutionPolicy = NativePolicyData &
+  (
+    | {
+        /** Correlated explicit Node/fetch declaration and descriptor. */
+        readonly binding: NativeBinding<"node", "fetch", "hesperia.target/node-fetch/1">;
+        /** Captured module contract associated with this descriptor. */
+        readonly moduleABI: "node-captured-esm-v1";
+      }
+    | {
+        /** Correlated explicit Bun/Elysia declaration and descriptor. */
+        readonly binding: NativeBinding<"bun", "elysia", "hesperia.target/bun-elysia/1">;
+        /** Captured module contract associated with this descriptor. */
+        readonly moduleABI: "bun-captured-esm-v1";
+      }
+    | {
+        /** Correlated explicit Bun/Hono declaration and descriptor. */
+        readonly binding: NativeBinding<"bun", "hono", "hesperia.target/bun-hono/1">;
+        /** Captured module contract associated with this descriptor. */
+        readonly moduleABI: "bun-captured-esm-v1";
+      }
+  );
 
 /** An exact native-policy decision, without fabricated source or filesystem identity. */
 export interface NativeExternalModule {
@@ -145,7 +146,10 @@ export class NativeModuleResolver {
   readonly #importers = new Map<string, string>();
   readonly #requests = new Map<string, NativeModuleResolutionRecord>();
   readonly #missingImporterRequests = new Set<string>();
-  readonly #entryTargets = new Map<string, { readonly filename: string; readonly generated: boolean }>();
+  readonly #entryTargets = new Map<
+    string,
+    { readonly filename: string; readonly generated: boolean }
+  >();
   #resolver: ModuleResolver;
   #conflict: Error | undefined;
 
@@ -272,7 +276,9 @@ export class NativeModuleResolver {
     if (typeof source !== "string") throw new TypeError("Captured module source must be a string");
 
     const canonical = this.canonicalPath(filename);
-    const previous = this.#resolver.capturedSources.find((entry) => pathKey(entry.filename) === pathKey(canonical));
+    const previous = this.#resolver.capturedSources.find(
+      (entry) => pathKey(entry.filename) === pathKey(canonical),
+    );
 
     if (previous && previous.source !== source) {
       const message = `Generated module identity changed after capture: ${canonical}`;
@@ -357,9 +363,12 @@ export class NativeModuleResolver {
     for (const [key, request] of this.#requests) {
       const missingImporter = this.#missingImporterRequests.has(key);
 
-      if (missingImporter
-        ? fork.#importers.has(pathKey(request.observed.from))
-        : additions.has(request.observed.specifier)) continue;
+      if (
+        missingImporter
+          ? fork.#importers.has(pathKey(request.observed.from))
+          : additions.has(request.observed.specifier)
+      )
+        continue;
 
       fork.#requests.set(key, request);
 
@@ -396,7 +405,12 @@ export class NativeModuleResolver {
     return freezeCopy(snapshot);
   }
 
-  private resolveEntry(from: string, specifier: string, filename: string, generated: boolean): NativeModuleResolution {
+  private resolveEntry(
+    from: string,
+    specifier: string,
+    filename: string,
+    generated: boolean,
+  ): NativeModuleResolution {
     const importer = this.canonicalPath(from);
     const canonical = this.canonicalPath(filename);
     const key = requestKey(importer, specifier);
@@ -408,10 +422,17 @@ export class NativeModuleResolver {
       if (entry && pathKey(entry.filename) === pathKey(canonical) && entry.generated === generated)
         return previous.result;
 
-      if (previous.result.kind === "resolved" && pathKey(previous.result.filename) === pathKey(canonical))
+      if (
+        previous.result.kind === "resolved" &&
+        pathKey(previous.result.filename) === pathKey(canonical)
+      )
         return previous.result;
 
-      return this.conflict(importer, specifier, `Selected entry ${specifier} conflicts with its previously captured resolution.`);
+      return this.conflict(
+        importer,
+        specifier,
+        `Selected entry ${specifier} conflicts with its previously captured resolution.`,
+      );
     }
 
     this.#entryTargets.set(key, { filename: canonical, generated });
@@ -424,8 +445,15 @@ export class NativeModuleResolver {
 
     const alias = this.#generatedImports.get(specifier);
 
-    if (this.#externals.has(specifier) || (alias !== undefined && pathKey(alias) !== pathKey(canonical)))
-      return this.conflict(importer, specifier, `Selected entry ${specifier} conflicts with the captured native policy or generated alias.`);
+    if (
+      this.#externals.has(specifier) ||
+      (alias !== undefined && pathKey(alias) !== pathKey(canonical))
+    )
+      return this.conflict(
+        importer,
+        specifier,
+        `Selected entry ${specifier} conflicts with the captured native policy or generated alias.`,
+      );
 
     if (isHostImport(specifier) || specifier === "hesperia/env")
       return this.retain(importer, specifier, this.#resolver.resolve(importer, specifier));
@@ -437,19 +465,34 @@ export class NativeModuleResolver {
     return this.retain(importer, specifier, result);
   }
 
-  private retain(from: string, specifier: string, result: NativeModuleResolution): NativeModuleResolution {
+  private retain(
+    from: string,
+    specifier: string,
+    result: NativeModuleResolution,
+  ): NativeModuleResolution {
     const key = requestKey(from, specifier);
 
     if (this.#requests.has(key))
-      return this.conflict(from, specifier, `Request ${specifier} already has a captured resolution.`);
+      return this.conflict(
+        from,
+        specifier,
+        `Request ${specifier} already has a captured resolution.`,
+      );
 
     if (result.kind === "resolved") this.remember(result);
 
-    const observed: ModuleResolutionEdge | NativeExternalModuleEdge = result.kind === "external"
-      ? { from, specifier, outcome: "external", policyDigest: result.policyDigest }
-      : result.kind === "resolved"
-        ? { from, specifier, outcome: "resolved", resolvedFilename: result.filename, conditionPath: result.provenance.conditionPath }
-        : { from, specifier, outcome: "failed", failureCode: result.code };
+    const observed: ModuleResolutionEdge | NativeExternalModuleEdge =
+      result.kind === "external"
+        ? { from, specifier, outcome: "external", policyDigest: result.policyDigest }
+        : result.kind === "resolved"
+          ? {
+              from,
+              specifier,
+              outcome: "resolved",
+              resolvedFilename: result.filename,
+              conditionPath: result.provenance.conditionPath,
+            }
+          : { from, specifier, outcome: "failed", failureCode: result.code };
     const request = freezeCopy({ observed, result });
 
     this.#requests.set(key, request);
@@ -465,7 +508,9 @@ export class NativeModuleResolver {
 
   private assertConsistent(): void {
     if (this.#conflict)
-      throw new Error("Native module resolution contains conflicting capture decisions", { cause: this.#conflict });
+      throw new Error("Native module resolution contains conflicting capture decisions", {
+        cause: this.#conflict,
+      });
   }
 
   private remember(source: CapturedModuleSource): void {
@@ -493,14 +538,18 @@ export class NativeModuleResolver {
     return canonical;
   }
 
-  private sources(sources: ReadonlyMap<string, string>, paths = this.#paths): ReadonlyMap<string, string> {
+  private sources(
+    sources: ReadonlyMap<string, string>,
+    paths = this.#paths,
+  ): ReadonlyMap<string, string> {
     const captured = new Map<string, string>();
     const keys = new Map<string, string>();
 
     for (const [filename, source] of sources) {
       nonemptyString(filename, "Source filename");
 
-      if (typeof source !== "string") throw new TypeError("Captured module source must be a string");
+      if (typeof source !== "string")
+        throw new TypeError("Captured module source must be a string");
 
       const canonical = this.canonicalPath(filename, paths);
       const previous = keys.get(pathKey(canonical));
@@ -515,7 +564,10 @@ export class NativeModuleResolver {
     return captured;
   }
 
-  private generatedImports(imports: ReadonlyMap<string, string>, paths = this.#paths): ReadonlyMap<string, string> {
+  private generatedImports(
+    imports: ReadonlyMap<string, string>,
+    paths = this.#paths,
+  ): ReadonlyMap<string, string> {
     const captured = new Map<string, string>();
 
     for (const [specifier, filename] of imports) {
@@ -556,30 +608,64 @@ function missingImporter(from: string, specifier: string): ModuleResolutionFailu
 }
 
 function snapshotPolicy(value: unknown): NativeResolutionPolicy {
-  const fields = dataFields(value, ["version", "binding", "moduleABI", "runtimeVersion", "conditions", "externalModules", "provenance"], "Native resolution policy");
-  const binding = dataFields(fields.get("binding"), ["version", "declaration", "descriptorIdentity", "descriptorRevision"], "Native target binding");
-  const declaration = dataFields(binding.get("declaration"), ["version", "runtime", "profile"], "Native target declaration");
+  const fields = dataFields(
+    value,
+    [
+      "version",
+      "binding",
+      "moduleABI",
+      "runtimeVersion",
+      "conditions",
+      "externalModules",
+      "provenance",
+    ],
+    "Native resolution policy",
+  );
+  const binding = dataFields(
+    fields.get("binding"),
+    ["version", "declaration", "descriptorIdentity", "descriptorRevision"],
+    "Native target binding",
+  );
+  const declaration = dataFields(
+    binding.get("declaration"),
+    ["version", "runtime", "profile"],
+    "Native target declaration",
+  );
 
-  if (fields.get("version") !== 1 || binding.get("version") !== 1 ||
-      binding.get("descriptorRevision") !== 1 || declaration.get("version") !== 1)
+  if (
+    fields.get("version") !== 1 ||
+    binding.get("version") !== 1 ||
+    binding.get("descriptorRevision") !== 1 ||
+    declaration.get("version") !== 1
+  )
     throw new TypeError("Unsupported native policy, binding, declaration or descriptor version");
 
   const runtime = declaration.get("runtime");
   const profile = declaration.get("profile");
   const identity = binding.get("descriptorIdentity");
   const abi = fields.get("moduleABI");
-  const node = runtime === "node" && profile === "fetch" &&
-    identity === "hesperia.target/node-fetch/1" && abi === "node-captured-esm-v1";
-  const bun = runtime === "bun" && abi === "bun-captured-esm-v1" && (
-    (profile === "elysia" && identity === "hesperia.target/bun-elysia/1") ||
-    (profile === "hono" && identity === "hesperia.target/bun-hono/1")
-  );
+  const node =
+    runtime === "node" &&
+    profile === "fetch" &&
+    identity === "hesperia.target/node-fetch/1" &&
+    abi === "node-captured-esm-v1";
+  const bun =
+    runtime === "bun" &&
+    abi === "bun-captured-esm-v1" &&
+    ((profile === "elysia" && identity === "hesperia.target/bun-elysia/1") ||
+      (profile === "hono" && identity === "hesperia.target/bun-hono/1"));
 
-  if (!node && !bun) throw new TypeError("Native declaration, descriptor and module ABI do not match");
+  if (!node && !bun)
+    throw new TypeError("Native declaration, descriptor and module ABI do not match");
 
   return freezeCopy({
     version: 1,
-    binding: { version: 1, declaration: { version: 1, runtime, profile }, descriptorIdentity: identity, descriptorRevision: 1 },
+    binding: {
+      version: 1,
+      declaration: { version: 1, runtime, profile },
+      descriptorIdentity: identity,
+      descriptorRevision: 1,
+    },
     moduleABI: abi,
     runtimeVersion: nonemptyString(fields.get("runtimeVersion"), "Native runtime version"),
     conditions: stringArray(fields.get("conditions"), "Native conditions", true),
@@ -588,13 +674,20 @@ function snapshotPolicy(value: unknown): NativeResolutionPolicy {
   }) as NativeResolutionPolicy;
 }
 
-function dataFields(value: unknown, expected: readonly string[], label: string): ReadonlyMap<string, unknown> {
+function dataFields(
+  value: unknown,
+  expected: readonly string[],
+  label: string,
+): ReadonlyMap<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     throw new TypeError(`${label} must be an object`);
 
   const keys = Reflect.ownKeys(value);
 
-  if (keys.length !== expected.length || keys.some((key) => typeof key !== "string" || !expected.includes(key)))
+  if (
+    keys.length !== expected.length ||
+    keys.some((key) => typeof key !== "string" || !expected.includes(key))
+  )
     throw new TypeError(`${label} has unexpected or missing fields`);
 
   const fields = new Map<string, unknown>();
@@ -624,9 +717,13 @@ function stringArray(value: unknown, label: string, required: boolean): readonly
   const descriptors = Object.getOwnPropertyDescriptors(value) as Record<string, PropertyDescriptor>;
   const length = descriptors.length?.value as unknown;
 
-  if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0 ||
-      (required && length === 0) ||
-      Reflect.ownKeys(descriptors).length !== length + 1)
+  if (
+    typeof length !== "number" ||
+    !Number.isSafeInteger(length) ||
+    length < 0 ||
+    (required && length === 0) ||
+    Reflect.ownKeys(descriptors).length !== length + 1
+  )
     throw new TypeError(`${label} must be a dense array of unique strings`);
 
   const result: string[] = [];
@@ -650,12 +747,13 @@ function stringArray(value: unknown, label: string, required: boolean): readonly
 }
 
 function freezeCopy<T>(value: T): T {
-  if (Array.isArray(value)) return Object.freeze(value.map((entry) => freezeCopy(entry))) as unknown as T;
+  if (Array.isArray(value))
+    return Object.freeze(value.map((entry) => freezeCopy(entry))) as unknown as T;
 
   if (value !== null && typeof value === "object")
-    return Object.freeze(Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, freezeCopy(entry)]),
-    )) as unknown as T;
+    return Object.freeze(
+      Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, freezeCopy(entry)])),
+    ) as unknown as T;
 
   return value;
 }

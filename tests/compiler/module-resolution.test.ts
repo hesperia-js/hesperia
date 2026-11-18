@@ -2,6 +2,10 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { ModuleResolver } from "../../packages/compiler/src/module-resolution.ts";
+import {
+  NativeModuleResolver,
+  type NativeResolutionPolicy,
+} from "../../packages/compiler/src/native-module-resolution.ts";
 
 function temporaryProject(): string {
   const parent = resolve(import.meta.dir, "../../.hesperia");
@@ -43,6 +47,62 @@ function writePackage(
     writeFileSync(path, source);
   }
 }
+
+test("native resolution uses the caller's conditions and admits only declared externals", () => {
+  const root = temporaryProject();
+
+  try {
+    const source = 'import "native-conditions";';
+    const app = write(root, "app.ts", source);
+    const policy: NativeResolutionPolicy = {
+      version: 1,
+      binding: {
+        version: 1,
+        declaration: { version: 1, runtime: "node", profile: "fetch" },
+        descriptorIdentity: "hesperia.target/node-fetch/1",
+        descriptorRevision: 1,
+      },
+      moduleABI: "node-captured-esm-v1",
+      runtimeVersion: "22.23.2",
+      conditions: ["node", "import", "default"],
+      externalModules: ["node:fs"],
+      provenance: "test caller",
+    };
+
+    writePackage(
+      root,
+      "native-conditions",
+      { exports: { ".": { browser: "./browser.js", node: "./node.js" } } },
+      {
+        "browser.js": "export const target = 'browser';",
+        "node.js": "export const target = 'node';",
+      },
+    );
+
+    const resolver = new NativeModuleResolver(root, new Map([[app, source]]), "production", policy);
+
+    expect(resolver.resolve(app, "native-conditions")).toMatchObject({
+      kind: "resolved",
+      source: "export const target = 'node';",
+      provenance: { conditionPath: [".", "node"] },
+    });
+    expect(resolver.resolve(app, "node:fs")).toMatchObject({
+      kind: "external",
+      specifier: "node:fs",
+      conditions: policy.conditions,
+    });
+    expect(resolver.resolve(app, "node:crypto")).toMatchObject({
+      kind: "failure",
+      code: "HOST_IMPORT",
+    });
+    expect(resolver.resolve(join(root, "missing.ts"), "node:fs")).toMatchObject({
+      kind: "failure",
+      code: "MODULE_NOT_FOUND",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("the browser resolver never remaps the host-only env entry", () => {
   const root = temporaryProject();
