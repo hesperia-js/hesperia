@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { defineCommand, runCommand } from "citty";
+import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import {
   executeCreator,
@@ -10,6 +11,34 @@ import {
 } from "./creator.ts";
 
 const usage = "Usage: bun create hesperia <destination> [--no-install] [--host <elysia|none>]";
+
+function printCreatorHelp(): void {
+  console.log(
+    [
+      usage,
+      "",
+      "Options:",
+      "  --no-install          Skip dependency installation after creating the application",
+      "  --host <elysia|none>  Choose the host integration",
+      "  -h, --help            Show available options",
+      "  --version             Show the package version",
+    ].join("\n"),
+  );
+}
+
+function readCreatorVersion(): string {
+  const manifest = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  ) as {
+    version?: unknown;
+  };
+
+  if (typeof manifest.version !== "string" || manifest.version.length === 0) {
+    throw new Error("Unable to read the create-hesperia package version.");
+  }
+
+  return manifest.version;
+}
 
 function validateRawCreatorArguments(args: readonly string[]): void {
   let destinationSeen = false;
@@ -111,6 +140,17 @@ async function main(): Promise<void> {
 
   try {
     const rawArgs = process.argv.slice(2);
+
+    if (rawArgs.length === 1 && (rawArgs[0] === "--help" || rawArgs[0] === "-h")) {
+      printCreatorHelp();
+      return;
+    }
+
+    if (rawArgs.length === 1 && rawArgs[0] === "--version") {
+      console.log(readCreatorVersion());
+      return;
+    }
+
     validateRawCreatorArguments(rawArgs);
 
     const command = defineCommand({

@@ -19,6 +19,10 @@ which host integration to use: Enter selects Elysia, and option 2 selects no hos
 Without an interactive terminal, it defaults to Elysia. Dependencies install
 automatically unless you pass `--no-install`.
 
+Run `bunx create-hesperia@alpha --help` to see the available options, or use
+`--version` to print the installed creator version. These options run on their
+own and do not create an application.
+
 Choose the frontend-only starter explicitly and install its dependencies later:
 
 ```sh
