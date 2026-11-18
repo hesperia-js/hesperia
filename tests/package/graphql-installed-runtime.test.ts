@@ -10,7 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { expect, test } from "bun:test";
 import { archiveIntegrity } from "../../scripts/ci/release-candidate.ts";
 import { readPinnedAeoliaVersion, writePackageManifest } from "./package-manifest.ts";
@@ -412,6 +412,13 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
     const rootManifest = JSON.parse(rootManifestText) as PackageManifest;
     const graphqlManifest = JSON.parse(graphqlManifestText) as PackageManifest;
     const rootAeolia = await readPinnedAeoliaVersion(packageRoot);
+    const previewArchiveInput = process.env.AEOLIA_PREVIEW_ARCHIVE;
+    if (previewArchiveInput && !isAbsolute(previewArchiveInput))
+      throw new Error("AEOLIA_PREVIEW_ARCHIVE must be an absolute path");
+    const previewArchive = previewArchiveInput ? await realpath(previewArchiveInput) : undefined;
+    const sdkDependency = previewArchive
+      ? `file:${previewArchive.replaceAll("\\", "/")}`
+      : rootAeolia;
     const packageDependencies = graphqlManifest.dependencies ?? {};
     const packagePeers = graphqlManifest.peerDependencies ?? {};
     const packageName = graphqlManifest.name;
@@ -451,6 +458,7 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
     };
     const nativeOverrides = {
       ...nativeVersions,
+      aeolia: sdkDependency,
       "@graphql-typed-document-node/core": "3.2.0",
       "@wry/caches": "1.0.1",
       "@wry/context": "0.7.4",
@@ -541,6 +549,7 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
       type: "module",
       dependencies: {
         ...nativeVersions,
+        aeolia: sdkDependency,
         ...subscriptionVersions,
         "happy-dom": versions["happy-dom"],
         hesperia: hesperiaArchive,
@@ -574,6 +583,29 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
       nativeInstallEnv,
     );
     evidence.install = install;
+
+    if (previewArchive) {
+      const packedSdk = await runCommand(
+        ["tar", "-xOf", basename(previewArchive), "package/dist/index.js"],
+        dirname(previewArchive),
+        boundedTimeout(5_000, deadlineAt),
+      );
+      const packedIntegrity = archiveIntegrity(new TextEncoder().encode(packedSdk.stdout));
+      const installedIntegrity = archiveIntegrity(
+        await readFile(join(application, "node_modules", "aeolia", "dist", "index.js")),
+      );
+      assert.equal(
+        installedIntegrity,
+        packedIntegrity,
+        "Installed Aeolia differs from preview archive",
+      );
+      evidence.previewAeolia = {
+        archive: previewArchive,
+        archiveIntegrity: archiveIntegrity(await readFile(previewArchive)),
+        packedDistIntegrity: packedIntegrity,
+        installedDistIntegrity: installedIntegrity,
+      };
+    }
 
     const generatedLock = await readFile(join(application, "bun.lock"), "utf8");
     const generatedLockIntegrity = archiveIntegrity(new TextEncoder().encode(generatedLock));
@@ -617,6 +649,14 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
       readonly fixtureInstanceId: string;
       readonly entrypoints: Record<string, string>;
       readonly installedVersions: Record<string, string>;
+      readonly incremental: {
+        readonly caller: string;
+        readonly streamingBeforeCompletion: boolean;
+        readonly finalData: unknown;
+        readonly finalStatus: string;
+        readonly queryCalls: number;
+        readonly deferredCalls: number;
+      };
       readonly hesperiaRoots: {
         readonly package: string;
         readonly runtime: string;
@@ -678,6 +718,14 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
     expect(receipt.nodeVersion).toBe("22.23.2");
     expect(receipt.fixtureInstanceId).toBe(runningFixture.instanceId);
     expect(receipt.installedVersions).toEqual(versions);
+    expect(receipt.incremental).toEqual({
+      caller: "hesperia-bound",
+      streamingBeforeCompletion: true,
+      finalData: { board: { __typename: "Board", id: "installed", detail: "resolved" } },
+      finalStatus: "complete",
+      queryCalls: 1,
+      deferredCalls: 1,
+    });
     expect(receipt.hesperiaRoots.runtime).toBe(receipt.hesperiaRoots.package);
     expect(receipt.hesperiaRoots.aeolia).toBe(receipt.hesperiaRoots.package);
     expect(receipt.nativeSubscription).toMatchObject({

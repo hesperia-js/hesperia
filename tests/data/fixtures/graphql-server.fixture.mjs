@@ -1,6 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { buildSchema } from "graphql";
+import {
+  buildSchema,
+  experimentalExecuteIncrementally,
+  GraphQLDeferDirective,
+  GraphQLSchema,
+  GraphQLStreamDirective,
+  parse,
+  validate,
+  visit,
+} from "graphql";
+
 import { useServer } from "graphql-ws/use/ws";
 import { createYoga } from "graphql-yoga";
 import { WebSocketServer } from "ws";
@@ -21,6 +31,7 @@ const host = "127.0.0.1";
 const instanceId = randomUUID();
 const sessions = new Map();
 const controlWaitControllers = new Set();
+const incrementalRequests = new Set();
 let shuttingDown = false;
 let disposeGraphQLWebSocketServer = async () => undefined;
 let graphqlWsUrl = "";
@@ -28,7 +39,8 @@ let graphqlWsUrl = "";
 function createSession() {
   return {
     state: { revision: 0, writes: [] },
-    resolverCalls: { echo: 0, contextEcho: 0, state: 0 },
+    resolverCalls: { echo: 0, contextEcho: 0, state: 0, incrementalBoard: 0 },
+    incrementalTransport: { started: 0, terminalFrames: 0, finished: 0, closedEarly: 0 },
     gates: new Map(),
     subscriptions: new Map(),
     socketClose: 0,
@@ -71,6 +83,16 @@ const schema = buildSchema(`
     failure: String
   }
 
+  type IncrementalItem {
+    id: String!
+    title: String!
+    details: String!
+  }
+
+  type IncrementalBoard {
+    items: [IncrementalItem!]!
+  }
+
   type Query {
     echo(value: String!): String!
     contextEcho(value: String!): ContextEcho!
@@ -79,6 +101,8 @@ const schema = buildSchema(`
     rootFailure: String!
     state: MutationState!
     gate(id: ID!): String!
+    incrementalBoard: IncrementalBoard!
+    incrementalFailureItems: [String]
   }
 
   type Mutation {
@@ -97,6 +121,11 @@ const schema = buildSchema(`
     events(id: ID!): NativeEvent!
   }
 `);
+
+const incrementalSchema = new GraphQLSchema({
+  ...schema.toConfig(),
+  directives: [...schema.getDirectives(), GraphQLDeferDirective, GraphQLStreamDirective],
+});
 
 function createGate(id) {
   return {
@@ -415,6 +444,7 @@ const gateResolver = async (_root, { id }, context) => {
 
   if (gate.release) throw new Error(`fixture gate ${id} already has a pending resolver`);
 
+  context.fixtureOwnedGates?.add(id);
   gate.started += 1;
   notifyGate(gate);
 
@@ -428,20 +458,45 @@ const gateResolver = async (_root, { id }, context) => {
   else signal.addEventListener("abort", observeAbort, { once: true });
 
   // Keep the resolver held after client cancellation so a test can observe a late completion.
-  const value = await new Promise((resolve) => {
-    gate.release = resolve;
-  });
+  try {
+    const value = await new Promise((resolve) => {
+      gate.release = resolve;
+    });
 
-  signal.removeEventListener("abort", observeAbort);
-  gate.completed += 1;
-
-  if (signal.aborted) gate.lateCompletions += 1;
-
-  notifyGate(gate);
-
-  return value;
+    gate.completed += 1;
+    if (signal.aborted) gate.lateCompletions += 1;
+    notifyGate(gate);
+    return value;
+  } finally {
+    signal.removeEventListener("abort", observeAbort);
+    context.fixtureOwnedGates?.delete(id);
+  }
 };
 queryFields.gate.resolve = gateResolver;
+
+const incrementalQueryFields = incrementalSchema.getQueryType().getFields();
+incrementalQueryFields.incrementalBoard.resolve = (_root, _args, context) => {
+  context.session.resolverCalls.incrementalBoard += 1;
+
+  return {
+    items: [
+      { id: "initial", title: "Initial item", details: "Initial details" },
+      {
+        id: "streamed",
+        title: "Streamed item",
+        gateId: "incremental-streamed-details",
+      },
+    ],
+  };
+};
+incrementalQueryFields.incrementalFailureItems.resolve = () =>
+  (async function* () {
+    yield "initial failure item";
+    throw new Error("fixture incremental stream failure");
+  })();
+const incrementalItemFields = incrementalSchema.getType("IncrementalItem").getFields();
+incrementalItemFields.details.resolve = (item, _args, context) =>
+  item.gateId === undefined ? item.details : gateResolver(item, { id: item.gateId }, context);
 
 const mutationFields = schema.getMutationType().getFields();
 mutationFields.writeThenFail.resolve = (_root, { value }, context) => {
@@ -494,6 +549,16 @@ function withFixtureExtension(result) {
   };
 }
 
+function withIncrementalFixtureExtension(result, phase) {
+  return {
+    ...result,
+    extensions: {
+      ...result.extensions,
+      fixture: { instanceId, phase },
+    },
+  };
+}
+
 const yoga = createYoga({
   context: ({ request }) => ({
     request,
@@ -526,6 +591,143 @@ async function readJsonRequest(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+function releaseIncrementalGates(operation) {
+  for (const id of operation.ownedGates) resolveGate(operation.session.gates, id, `released:${id}`);
+}
+
+function writeIncrementalPart(response, boundary, value) {
+  response.write(
+    `--${boundary}\r\nContent-Type: application/json; charset=utf-8\r\n\r\n${JSON.stringify(value)}\r\n`,
+  );
+}
+
+async function handleIncrementalRequest(request, response, url) {
+  if (request.method !== "POST" || url.pathname !== "/graphql-incremental") return false;
+
+  const controller = new AbortController();
+  const body = await readJsonRequest(request);
+  const document = parse(body.query);
+  const accept = request.headers.accept ?? "";
+  let selectsIncrementalDirective = false;
+
+  visit(document, {
+    Directive(node) {
+      if (node.name.value === "defer" || node.name.value === "stream")
+        selectsIncrementalDirective = true;
+    },
+  });
+
+  if (selectsIncrementalDirective && !accept.includes("incrementalSpec=v0.2")) {
+    sendJson(response, 406, { error: "expected Apollo's GraphQL v0.2 incremental Accept header" });
+
+    return true;
+  }
+
+  const session = getSession(request.headers["x-fixture-session"] ?? "");
+  const operation = {
+    controller,
+    iterator: undefined,
+    ownedGates: new Set(),
+    response,
+    session,
+    finished: Promise.withResolvers(),
+  };
+  const onResponseClose = () => {
+    if (response.writableFinished) return;
+
+    session.incrementalTransport.closedEarly += 1;
+    controller.abort(new DOMException("Fixture response closed", "AbortError"));
+    releaseIncrementalGates(operation);
+  };
+  const graphqlRequest = new Request(`http://${host}${url.pathname}`, {
+    method: "POST",
+    headers: {
+      "x-fixture-identity": request.headers["x-fixture-identity"] ?? "",
+      "x-fixture-session": request.headers["x-fixture-session"] ?? "",
+    },
+    signal: controller.signal,
+  });
+  const validationErrors = validate(incrementalSchema, document);
+
+  if (validationErrors.length > 0) {
+    sendJson(response, 400, { errors: validationErrors });
+
+    return true;
+  }
+
+  incrementalRequests.add(operation);
+  session.incrementalTransport.started += 1;
+  response.once("finish", () => {
+    session.incrementalTransport.finished += 1;
+  });
+  response.once("close", onResponseClose);
+
+  try {
+    const result = await experimentalExecuteIncrementally({
+      schema: incrementalSchema,
+      document,
+      operationName: body.operationName,
+      variableValues: body.variables,
+      contextValue: {
+        request: graphqlRequest,
+        identity: graphqlRequest.headers.get("x-fixture-identity"),
+        session,
+        fixtureOwnedGates: operation.ownedGates,
+      },
+      externalAbortSignal: controller.signal,
+    });
+
+    if (!("initialResult" in result)) {
+      sendJson(response, 200, withIncrementalFixtureExtension(result, "complete"));
+
+      return true;
+    }
+
+    operation.iterator = result.subsequentResults;
+    const boundary = `hesperia-${randomUUID()}`;
+
+    response.writeHead(200, {
+      "content-type": `multipart/mixed; boundary="${boundary}"; incrementalSpec=v0.2`,
+      "cache-control": "no-store",
+    });
+    writeIncrementalPart(
+      response,
+      boundary,
+      withIncrementalFixtureExtension(result.initialResult, "initial"),
+    );
+
+    while (true) {
+      const next = await result.subsequentResults.next();
+
+      if (next.done) break;
+      if (controller.signal.aborted || response.destroyed) break;
+
+      writeIncrementalPart(
+        response,
+        boundary,
+        withIncrementalFixtureExtension(next.value, "subsequent"),
+      );
+      if (next.value.hasNext === false) session.incrementalTransport.terminalFrames += 1;
+    }
+
+    if (!response.destroyed && !response.writableEnded) response.end(`--${boundary}--\r\n`);
+
+    return true;
+  } finally {
+    if (!response.writableEnded && !controller.signal.aborted)
+      controller.abort(new DOMException("Fixture incremental request finished", "AbortError"));
+
+    releaseIncrementalGates(operation);
+
+    try {
+      if (operation.iterator) await operation.iterator.return();
+    } finally {
+      incrementalRequests.delete(operation);
+      operation.finished.resolve();
+    }
+  }
+}
+
 function readSubscriptionIncarnation(url) {
   const value = url.searchParams.get("incarnation");
 
@@ -552,6 +754,7 @@ async function handleControlRequest(request, response, url) {
       revision: session.state.revision,
       writes: [...session.state.writes],
       resolverCalls: { ...session.resolverCalls },
+      incrementalTransport: { ...session.incrementalTransport },
       gates: [...session.gates.values()].map(gateSnapshot),
     });
 
@@ -570,6 +773,8 @@ async function handleControlRequest(request, response, url) {
     session.resolverCalls.echo = 0;
     session.resolverCalls.contextEcho = 0;
     session.resolverCalls.state = 0;
+    session.resolverCalls.incrementalBoard = 0;
+    session.incrementalTransport = { started: 0, terminalFrames: 0, finished: 0, closedEarly: 0 };
     session.gates.clear();
     sendJson(response, 200, { reset: true, instanceId });
 
@@ -842,6 +1047,14 @@ async function shutdown() {
     for (const gate of session.gates.values())
       resolveGate(session.gates, gate.id, `released:${gate.id}`);
 
+  const activeIncrementalRequests = [...incrementalRequests];
+  for (const operation of activeIncrementalRequests) {
+    operation.controller.abort(new Error("Fixture is shutting down"));
+    releaseIncrementalGates(operation);
+    if (!operation.response.destroyed) operation.response.destroy();
+  }
+  await Promise.all(activeIncrementalRequests.map(({ finished }) => finished.promise));
+
   const sessionsToClose = [...sessions.values()].filter((session) =>
     [...session.subscriptions.values()].some((subscription) =>
       [...subscription.incarnations.values()].some((incarnation) => incarnation.active),
@@ -882,6 +1095,7 @@ const server = createServer((request, response) => {
   const url = new URL(request.url ?? "/", `http://${host}`);
   const routeControl = async () => {
     if (await handleControlRequest(request, response, url)) return;
+    if (await handleIncrementalRequest(request, response, url)) return;
 
     if (request.method === "POST" && url.pathname === "/__fixture/decode-error") {
       response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
