@@ -156,7 +156,7 @@ test("coverage runner separates Creator child fragments from ordinary parent tem
     name.startsWith(`${summary.runId}-bun-tests-creator-cli-`),
   );
 
-  expect(creatorFragments).toHaveLength(13);
+  expect(creatorFragments).toHaveLength(15);
 
   const creatorImplementationPath = resolve(repoPath, "packages/create-hesperia/src/creator.ts");
 
@@ -176,9 +176,9 @@ test("coverage runner separates Creator child fragments from ordinary parent tem
 
   expect(
     childIdentities.map((identity) => Number(identity![1])).sort((left, right) => left - right),
-  ).toStrictEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+  ).toStrictEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
 
-  expect(new Set(childIdentities.map((identity) => identity![2])).size).toBe(13);
+  expect(new Set(childIdentities.map((identity) => identity![2])).size).toBe(15);
 
   const parentFragments = namedArtifacts.filter(({ name }) =>
     name.startsWith(`${summary.runId}-bun-tests-coverage-runner-hits-`),
