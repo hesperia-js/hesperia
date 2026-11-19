@@ -118,6 +118,59 @@ test("typing evidence stays tied to the actual emitted module population", async
   }
 });
 
+test("typing evidence rejects inconsistent mapped checking diagnostics", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-typing-diagnostics-"));
+  const filename = join(root, "entry.ts");
+  let session: Awaited<ReturnType<typeof openCheckingProject>> | undefined;
+
+  try {
+    session = await openCheckingProject(
+      [{ filename, source: "export const value: string = 42;" }],
+      requestTypingEvidenceCapture({ root }),
+    );
+    const compilation = emitCheckingSession(session);
+    const evidence = issuedProjectTypingEvidence(compilation);
+
+    expect(compilation.checking.diagnostics.some((item) => item.code === "TS2322")).toBe(true);
+    expect(compilation.modules.size).toBe(0);
+    expect(evidence).toMatchObject({ checkingHasErrors: true });
+
+    const checked = compilation.checking.modules.map((module) => ({
+      ...module,
+      diagnostics: module.diagnostics.map((item) => ({ ...item })),
+    }));
+    const mapped = {
+      ...compilation,
+      checking: {
+        ...compilation.checking,
+        modules: checked,
+        diagnostics: checked.flatMap((module) => module.diagnostics.map((item) => ({ ...item }))),
+      },
+      modules: new Map(compilation.modules),
+    };
+
+    expect(registerMappedProjectCompilation(compilation, mapped)).toBe(true);
+    expect(issuedProjectTypingEvidence(mapped)).toBe(evidence);
+
+    const inconsistent = {
+      ...mapped,
+      checking: {
+        ...mapped.checking,
+        diagnostics: mapped.checking.diagnostics.map((item, index) =>
+          index === 0 ? { ...item, message: `${item.message} (altered)` } : item,
+        ),
+      },
+    };
+
+    expect(registerMappedProjectCompilation(compilation, inconsistent)).toBe(false);
+    expect(issuedProjectTypingEvidence(inconsistent)).toBeUndefined();
+    expect(issuedProjectTypingEvidence(mapped)).toBe(evidence);
+  } finally {
+    await session?.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("captures a declaration on first existence check and keeps its bytes immutable", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-checking-inputs-"));
   const physicalRoot = join(root, "physical");
