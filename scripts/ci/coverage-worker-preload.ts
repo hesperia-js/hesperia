@@ -582,6 +582,7 @@ function supportInvocationDetails(
     ![
       "--callbacks=readFile,fileExists",
       "--callbacks=readFile,fileExists,directoryExists",
+      "--callbacks=readFile,fileExists,directoryExists,getAccessibleEntries,realpath",
     ].includes(argv[4]!)
   ) {
     return;
