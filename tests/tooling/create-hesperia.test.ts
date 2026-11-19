@@ -1,9 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import { existsSync, mkdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { prepareProject, writeProject } from "../../packages/create-hesperia/src/creator.ts";
+import { executeCreator, resolveCreator } from "../../packages/create-hesperia/src/creator.ts";
 
 const creator = resolve(import.meta.dir, "../../packages/create-hesperia/src/cli.ts");
 
@@ -57,6 +58,41 @@ async function runCreator(
   return { exitCode, stdout, stderr };
 }
 
+test("prints standalone help and version without creating a project", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-create-metadata-"));
+
+  try {
+    const help = await runCreator(root, ["--help"]);
+    const version = await runCreator(root, ["--version"]);
+    const manifest = JSON.parse(
+      await readFile(
+        new URL("../../packages/create-hesperia/package.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { version: string };
+
+    expect(help.exitCode).toBe(0);
+
+    expect(help.stderr).toBe("");
+
+    expect(help.stdout).toContain("Usage: bun create hesperia <destination>");
+
+    expect(help.stdout).toContain("--host <elysia|none>");
+
+    expect(help.stdout).toContain("--version");
+
+    expect(version.exitCode).toBe(0);
+
+    expect(version.stderr).toBe("");
+
+    expect(version.stdout).toBe(manifest.version + "\n");
+
+    expect(await readdir(root)).toStrictEqual([]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("requires an explicit destination and creates nothing when it is missing", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-create-no-destination-"));
 
@@ -67,6 +103,25 @@ test("requires an explicit destination and creates nothing when it is missing", 
 
     expect(result.stderr).toContain("Usage: bun create hesperia <destination> [--no-install]");
 
+    expect(await readdir(root)).toStrictEqual([]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resolves a creator plan without creating its destination", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-create-resolve-"));
+  const destination = join(root, "deferred-app");
+
+  try {
+    const plan = resolveCreator({
+      destination,
+      hostIntegration: "none",
+      install: false,
+    });
+
+    expect(plan.projectRoot).toBe(destination);
+    expect(plan.packageName).toBe("deferred-app");
     expect(await readdir(root)).toStrictEqual([]);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -266,6 +321,30 @@ test("--host none creates the frontend-only starter without installing", async (
   }
 });
 
+test("preserves creator flag ordering and last host selection", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-create-flag-order-"));
+  const destination = join(root, "ordered-app");
+
+  try {
+    const result = await runCreator(root, [
+      "--host",
+      "none",
+      "--no-install",
+      destination,
+      "--host",
+      "elysia",
+      "--no-install",
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Dependencies were not installed");
+    expect(await readdir(join(destination, "src"))).toContain("server.ts");
+    expect(await readdir(destination)).not.toContain("node_modules");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("rejects an unknown host before creating the destination", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-create-host-invalid-"));
   const destination = join(root, "invalid-app");
@@ -297,6 +376,30 @@ test("rejects a missing host value before creating the destination", async () =>
     expect(await readdir(root)).toStrictEqual([]);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects Citty-only creator spellings and extra destinations", async () => {
+  const cases = [
+    { args: ["--host=none", "--no-install"], error: "Unknown option: --host=none" },
+    { args: ["--install", "--no-install"], error: "Unknown option: --install" },
+    { args: ["--no-install=false"], error: "Unknown option: --no-install=false" },
+    { args: ["second-app", "--no-install"], error: "Expected one destination." },
+  ] as const;
+
+  for (const [index, testCase] of cases.entries()) {
+    const root = await mkdtemp(join(tmpdir(), `hesperia-create-citty-compat-${index}-`));
+    const destination = join(root, "first-app");
+
+    try {
+      const result = await runCreator(root, [destination, ...testCase.args]);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain(testCase.error);
+      expect(await readdir(root)).toStrictEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 });
 
@@ -339,9 +442,203 @@ Bun.spawn = (command, options = {}) => {
   }
 });
 
-test("refuses to overwrite existing files before or after preparation", async () => {
+test("retains the completed scaffold when a real installer fails", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-create-installer-failure-"));
+  const destination = join(root, "application");
+  const script = join(root, "postinstall.mjs");
+  const marker = join(root, "postinstall-ran");
+  const progress: string[] = [];
+
+  try {
+    await writeFile(
+      script,
+      `await Bun.write(${JSON.stringify(marker)}, "ran");\nprocess.exit(23);\n`,
+    );
+
+    const result = await executeCreator(
+      resolveCreator({ destination, hostIntegration: "none", install: true }),
+      {
+        signal: new AbortController().signal,
+        installerOutput: { stdout: process.stdout.fd, stderr: process.stderr.fd },
+        onProgress(event) {
+          if (event.kind === "created") {
+            writeFileSync(
+              join(event.projectRoot, "package.json"),
+              JSON.stringify({
+                name: event.packageName,
+                private: true,
+                scripts: { postinstall: `"${process.execPath}" "${script}"` },
+              }),
+            );
+          }
+
+          if (event.kind === "install") progress.push(event.status);
+        },
+      },
+    );
+
+    expect(result.status).toBe("failed");
+
+    if (result.status !== "failed") throw new Error("Expected the installer to fail");
+
+    expect(result.message).toContain("Dependency installation failed with exit code");
+    expect(result.projectRoot).toBe(destination);
+    expect(result.cleanup).toStrictEqual({ status: "not-needed", retainedPaths: [] });
+    expect(progress).toStrictEqual(["started"]);
+    expect(await readFile(marker, "utf8")).toBe("ran");
+    expect(await readFile(join(destination, "app.tsx"), "utf8")).toContain("application");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}, 45_000);
+
+test("does not start an installer cancelled by its progress callback", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-create-installer-cancel-"));
+  const destination = join(root, "application");
+  const controller = new AbortController();
+  const progress: string[] = [];
+  const spawnSpy = spyOn(Bun, "spawn");
+
+  const installerStarted = (): boolean =>
+    spawnSpy.mock.calls.some(
+      (args) =>
+        Array.isArray(args[0]) && args[0][0] === process.execPath && args[0][1] === "install",
+    );
+
+  try {
+    const result = await executeCreator(
+      resolveCreator({ destination, hostIntegration: "none", install: true }),
+      {
+        signal: controller.signal,
+        installerOutput: { stdout: process.stdout.fd, stderr: process.stderr.fd },
+        onProgress(event) {
+          if (event.kind === "created") {
+            progress.push("created");
+          }
+
+          if (event.kind === "install") {
+            progress.push(event.status);
+
+            if (event.status === "started") controller.abort();
+          }
+        },
+      },
+    );
+
+    expect(result.status).toBe("cancelled");
+
+    if (result.status !== "cancelled") throw new Error("Expected installation to cancel");
+
+    expect(progress).toStrictEqual(["created", "started"]);
+    expect(result.projectRoot).toBe(destination);
+    expect(result.cleanup.status).toBe("retained");
+    expect(result.cleanup.retainedPaths).toContain(destination);
+    expect(result.installer).toBeUndefined();
+    expect(installerStarted()).toBe(false);
+    expect(await readFile(join(destination, "app.tsx"), "utf8")).toContain("application");
+  } finally {
+    const started = installerStarted();
+    spawnSpy.mockRestore();
+    if (!started) await rm(root, { recursive: true, force: true });
+  }
+}, 45_000);
+
+test("reaps a running installer after cancellation and retains the scaffold", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-create-running-installer-"));
+  const destination = join(root, "application");
+  const script = join(root, "postinstall.mjs");
+  const marker = join(root, "postinstall-started");
+  const controller = new AbortController();
+  const originalSpawn = Bun.spawn;
+  let observedInstaller: Bun.Subprocess | undefined;
+  const spawnSpy = spyOn(Bun, "spawn").mockImplementation(((...args: unknown[]) => {
+    const child = Reflect.apply(originalSpawn, Bun, args) as Bun.Subprocess;
+    const [command, options] = args;
+
+    if (
+      Array.isArray(command) &&
+      command[0] === process.execPath &&
+      command[1] === "install" &&
+      typeof options === "object" &&
+      options !== null &&
+      "cwd" in options &&
+      options.cwd === destination
+    ) {
+      observedInstaller = child;
+    }
+
+    return child;
+  }) as typeof Bun.spawn);
+  let execution: ReturnType<typeof executeCreator> | undefined;
+
+  try {
+    await writeFile(
+      script,
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "started");\nsetTimeout(() => {}, 5000);\n`,
+    );
+
+    execution = executeCreator(
+      resolveCreator({ destination, hostIntegration: "none", install: true }),
+      {
+        signal: controller.signal,
+        installerOutput: { stdout: process.stdout.fd, stderr: process.stderr.fd },
+        onProgress(event) {
+          if (event.kind === "created") {
+            writeFileSync(
+              join(event.projectRoot, "package.json"),
+              JSON.stringify({
+                name: event.packageName,
+                private: true,
+                scripts: { postinstall: `"${process.execPath}" "${script}"` },
+              }),
+            );
+          }
+        },
+      },
+    );
+
+    const deadline = Date.now() + 15_000;
+    while (!existsSync(marker) && Date.now() < deadline) await Bun.sleep(25);
+    expect(existsSync(marker)).toBe(true);
+    controller.abort();
+
+    const result = await execution;
+    expect(result.status).toBe("cancelled");
+    if (result.status !== "cancelled") throw new Error("Expected installation to cancel");
+
+    expect(result.projectRoot).toBe(destination);
+    expect(result.cleanup.status).toBe("retained");
+    expect(result.cleanup.retainedPaths).toContain(destination);
+    expect(observedInstaller).toBeDefined();
+    expect(result.installer?.pid).toBeGreaterThan(0);
+    expect(result.installer?.pid).toBe(observedInstaller?.pid);
+    expect(result.installer?.reaped).toBe(true);
+    expect(result.installer?.pendingResource).toBe(false);
+    expect(await readFile(join(destination, "app.tsx"), "utf8")).toContain("application");
+  } finally {
+    controller.abort();
+    let result: Awaited<ReturnType<typeof executeCreator>> | undefined;
+    try {
+      result = await execution;
+    } finally {
+      spawnSpy.mockRestore();
+    }
+    await Bun.sleep(5_100);
+    if (
+      observedInstaller === undefined ||
+      (result?.status === "cancelled" &&
+        result.installer?.reaped === true &&
+        result.installer.pendingResource === false)
+    ) {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+}, 45_000);
+
+test("refuses to overwrite existing files before execution or after resolution", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-create-existing-"));
   const destination = join(root, "existing");
+  const resolvedDestination = join(root, "resolved-existing");
 
   try {
     await mkdir(destination);
@@ -356,16 +653,158 @@ test("refuses to overwrite existing files before or after preparation", async ()
 
     expect(await readFile(join(destination, "keep.txt"), "utf8")).toBe("keep this file");
 
-    for (const filename of ["package.json", "app.config.ts"]) {
-      const project = await prepareProject(join(root, filename));
-      const authoredFile = join(project.projectRoot, filename);
+    const plan = resolveCreator({
+      destination: resolvedDestination,
+      hostIntegration: "none",
+      install: false,
+    });
 
-      await writeFile(authoredFile, "author-owned contents");
+    await mkdir(resolvedDestination);
+    await writeFile(join(resolvedDestination, "keep.txt"), "author-owned contents");
 
-      await expect(writeProject(project, "none")).rejects.toMatchObject({ code: "EEXIST" });
+    const execution = await executeCreator(plan, { signal: new AbortController().signal });
 
-      expect(await readFile(authoredFile, "utf8")).toBe("author-owned contents");
-    }
+    expect(execution.status).toBe("failed");
+
+    if (execution.status !== "failed") throw new Error("Expected destination validation to fail");
+
+    expect(execution.message).toContain("Destination must be empty");
+
+    expect(await readFile(join(resolvedDestination, "keep.txt"), "utf8")).toBe(
+      "author-owned contents",
+    );
+
+    expect(await readdir(resolvedDestination)).toStrictEqual(["keep.txt"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cancels a partial scaffold and preserves replaced and concurrent files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-create-cancel-"));
+  const destination = join(root, "cancelled-app");
+  const plan = resolveCreator({
+    destination,
+    hostIntegration: "none",
+    install: false,
+  });
+  const controller = new AbortController();
+  let observedFirstWrite = false;
+  let replacedPath: string | undefined;
+
+  try {
+    const result = await executeCreator(plan, {
+      signal: controller.signal,
+      onProgress(progress) {
+        if (progress.kind !== "scaffold" || progress.completedFiles !== 1) return;
+
+        observedFirstWrite = true;
+        replacedPath = join(destination, progress.relativePath);
+
+        unlinkSync(replacedPath);
+        writeFileSync(replacedPath, "keep this replacement");
+        writeFileSync(join(destination, "user-note.txt"), "keep this concurrent file");
+        controller.abort();
+      },
+    });
+
+    expect(observedFirstWrite).toBe(true);
+    expect(result.status).toBe("cancelled");
+
+    if (result.status !== "cancelled") throw new Error("Expected creator execution to cancel");
+
+    if (replacedPath === undefined) throw new Error("Expected a scaffold path to be replaced");
+
+    expect(result.cleanup.status).toBe("retained");
+    expect(result.cleanup.retainedPaths).toContain(replacedPath);
+    expect(result.cleanup.retainedPaths).toContain(destination);
+    expect(await readFile(replacedPath, "utf8")).toBe("keep this replacement");
+    expect(await readFile(join(destination, "user-note.txt"), "utf8")).toBe(
+      "keep this concurrent file",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cleans a partial scaffold when its progress consumer fails", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-create-progress-failure-"));
+  const destination = join(root, "failed-app");
+  const plan = resolveCreator({
+    destination,
+    hostIntegration: "none",
+    install: false,
+  });
+
+  try {
+    const result = await executeCreator(plan, {
+      signal: new AbortController().signal,
+      onProgress(progress) {
+        if (progress.kind === "scaffold" && progress.completedFiles === 1) {
+          throw new Error("Progress consumer failed.");
+        }
+      },
+    });
+
+    expect(result.status).toBe("failed");
+
+    if (result.status !== "failed") throw new Error("Expected progress failure to fail execution");
+
+    expect(result.message).toBe("Progress consumer failed.");
+    expect(result.cleanup.status).toBe("complete");
+    expect(await readdir(root)).toStrictEqual([]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("does not remove a destination directory replaced during cancellation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-create-replaced-directory-"));
+  const destination = join(root, "replaced-app");
+  const plan = resolveCreator({
+    destination,
+    hostIntegration: "none",
+    install: false,
+  });
+  const controller = new AbortController();
+  let observedFirstWrite = false;
+
+  try {
+    const result = await executeCreator(plan, {
+      signal: controller.signal,
+      onProgress(progress) {
+        if (progress.kind !== "scaffold" || progress.completedFiles !== 1) return;
+
+        observedFirstWrite = true;
+        const createdPath = join(destination, progress.relativePath);
+
+        unlinkSync(createdPath);
+
+        let parentDirectory = dirname(createdPath);
+
+        while (parentDirectory !== destination) {
+          rmdirSync(parentDirectory);
+          parentDirectory = dirname(parentDirectory);
+        }
+
+        rmdirSync(destination);
+        mkdirSync(destination);
+        writeFileSync(join(destination, "user-note.txt"), "keep this replacement directory");
+        controller.abort();
+      },
+    });
+
+    expect(observedFirstWrite).toBe(true);
+    expect(result.status).toBe("cancelled");
+
+    if (result.status !== "cancelled") throw new Error("Expected creator execution to cancel");
+
+    expect(result.cleanup.status).toBe("retained");
+    expect(result.cleanup.retainedPaths).toContain(destination);
+    expect(await readdir(destination)).toStrictEqual(["user-note.txt"]);
+    expect(await readFile(join(destination, "user-note.txt"), "utf8")).toBe(
+      "keep this replacement directory",
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

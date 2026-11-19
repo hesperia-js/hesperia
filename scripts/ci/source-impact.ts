@@ -381,6 +381,10 @@ function readWorkspaceSnapshot(repoPath: string): SourceSnapshot {
 interface WorkspacePackageIndex {
   readonly names: ReadonlySet<string>;
   readonly sourceBySpecifier: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly ownersByName: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly ownersBySpecifier: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly safeConditionalSpecifiers: ReadonlySet<string>;
+  readonly incompleteConditionalSpecifiers: ReadonlySet<string>;
   readonly issues: readonly string[];
 }
 
@@ -463,6 +467,23 @@ function targetStrings(value: unknown): string[] {
   return [];
 }
 
+function conditionalTargetStrings(value: unknown): string[] | undefined {
+  if (typeof value === "string") return [value];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+
+  const entries = Object.values(value as Record<string, unknown>);
+  if (entries.length === 0) return undefined;
+  const targets: string[] = [];
+
+  for (const entry of entries) {
+    const nested = conditionalTargetStrings(entry);
+    if (!nested) return undefined;
+    targets.push(...nested);
+  }
+
+  return targets;
+}
+
 function packageSpecifier(packageName: string, exportName: string): string | undefined {
   if (exportName === ".") return packageName;
 
@@ -477,6 +498,10 @@ function workspacePackageIndex(
 ): WorkspacePackageIndex {
   const names = new Set<string>();
   const sourceBySpecifier = new Map<string, Set<string>>();
+  const ownersByName = new Map<string, Set<string>>();
+  const ownersBySpecifier = new Map<string, Set<string>>();
+  const safeConditionalSpecifiers = new Set<string>();
+  const incompleteConditionalSpecifiers = new Set<string>();
   const issues: string[] = [];
 
   for (const [manifestPath, contents] of packageJsons) {
@@ -500,6 +525,9 @@ function workspacePackageIndex(
     if (!packageName) continue;
 
     names.add(packageName);
+    const nameOwners = ownersByName.get(packageName) ?? new Set<string>();
+    nameOwners.add(manifestPath);
+    ownersByName.set(packageName, nameOwners);
 
     const packageRoot = posix.dirname(manifestPath) === "." ? "" : posix.dirname(manifestPath);
 
@@ -508,6 +536,9 @@ function workspacePackageIndex(
 
       if (!specifier) continue;
 
+      const specifierOwners = ownersBySpecifier.get(specifier) ?? new Set<string>();
+      specifierOwners.add(manifestPath);
+      ownersBySpecifier.set(specifier, specifierOwners);
       const sources = sourceBySpecifier.get(specifier) ?? new Set<string>();
 
       for (const target of targetStrings(rawTarget)) {
@@ -517,10 +548,30 @@ function workspacePackageIndex(
       }
 
       if (sources.size > 0) sourceBySpecifier.set(specifier, sources);
+      if (typeof rawTarget === "object" && rawTarget !== null && !Array.isArray(rawTarget)) {
+        const targets = conditionalTargetStrings(rawTarget);
+        const complete =
+          targets !== undefined &&
+          targets.every(
+            (target) =>
+              new Set(exportSourceCandidates(packageRoot, target).filter((path) => paths.has(path)))
+                .size === 1,
+          );
+        if (complete) safeConditionalSpecifiers.add(specifier);
+        else incompleteConditionalSpecifiers.add(specifier);
+      }
     }
   }
 
-  return { names, sourceBySpecifier, issues };
+  return {
+    names,
+    sourceBySpecifier,
+    ownersByName,
+    ownersBySpecifier,
+    safeConditionalSpecifiers,
+    incompleteConditionalSpecifiers,
+    issues,
+  };
 }
 
 function matchingWorkspaceNames(specifier: string, packages: WorkspacePackageIndex): string[] {
@@ -1172,20 +1223,36 @@ function acquireSourceGraph(snapshot: SourceSnapshot, label: string): SourceGrap
     }
 
     for (const specifier of parsed.specifiers) {
-      let dependency = resolveRelativeImport(consumer, specifier, snapshot.paths, emittedSources);
+      const relative = resolveRelativeImport(consumer, specifier, snapshot.paths, emittedSources);
+      let dependencies = relative ? [relative] : [];
       let unresolvedWorkspaceImport = false;
 
-      if (!dependency && isWorkspaceImport(specifier, packages)) {
+      if (dependencies.length === 0 && isWorkspaceImport(specifier, packages)) {
         const sources = packages.sourceBySpecifier.get(specifier);
+        const ownerName = matchingWorkspaceNames(specifier, packages)[0];
+        const uniqueOwner =
+          ownerName !== undefined &&
+          packages.ownersByName.get(ownerName)?.size === 1 &&
+          packages.ownersBySpecifier.get(specifier)?.size === 1;
 
-        if (sources?.size === 1) dependency = [...sources][0];
+        if (
+          uniqueOwner &&
+          !packages.incompleteConditionalSpecifiers.has(specifier) &&
+          (sources?.size === 1 ||
+            (sources !== undefined &&
+              sources.size > 1 &&
+              packages.safeConditionalSpecifiers.has(specifier)))
+        )
+          dependencies = [...sources];
         else unresolvedWorkspaceImport = true;
       }
 
-      if (dependency) {
-        nodes.add(dependency);
+      if (dependencies.length > 0) {
+        for (const dependency of dependencies) {
+          nodes.add(dependency);
 
-        edges.push({ consumer, dependency, revisions: [] });
+          edges.push({ consumer, dependency, revisions: [] });
+        }
       } else if (
         specifier.startsWith(".") ||
         specifier.startsWith("@/") ||

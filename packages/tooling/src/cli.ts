@@ -43,12 +43,15 @@ try {
 
       break;
     }
-    case "build":
-      console.log(
-        `Built browser application in ${await writeBuild(root, await prepareBuild(root))}`,
-      );
+    case "build": {
+      const prepared = await prepareBuild(root);
+
+      reportDiagnostics(prepared.diagnostics);
+
+      console.log(`Built browser application in ${await writeBuild(root, prepared)}`);
 
       break;
+    }
     case "init":
       serve(command.name, await previewProject(root));
 

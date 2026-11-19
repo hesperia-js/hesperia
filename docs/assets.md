@@ -82,4 +82,13 @@ stylesheet statically from the dynamically loaded component instead.
 
 The compiler consumes import attributes before producing browser modules. Each import view shares the captured file bytes within one project revision, even when the same file is imported as both text and JSON.
 
-HTML and SVG component imports use a distinct import type. Importing `.html` or `.svg` without a component type returns source text.
+HTML and SVG component imports use a distinct import type:
+
+```tsx
+import Panel from "./panel.html" with { type: "html" };
+import Icon from "./icon.svg" with { type: "svg" };
+```
+
+Hesperia parses and checks these files before compiling them as components. It rejects executable scripts, inline event handlers, embedded documents, unsafe URLs, and malformed SVG. These checked imports do not require `allowUnsafeHTML`. Importing `.html` or `.svg` without a component type returns source text.
+
+Raw markup insertion through `unsafeHTML(...)` remains separate and requires `allowUnsafeHTML: true` in the project configuration.

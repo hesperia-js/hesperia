@@ -66,6 +66,73 @@ export function App() {
   expect(result.code).toContain("_$.bindImported(owner, tools");
 });
 
+test("a directly imported form operation binds validation to each compiled component owner", async () => {
+  const result = await compile(
+    `import { form as createForm } from "hesperia/client";
+export const inputs: unknown[] = [];
+export const controllers: { run(input: string): PromiseLike<unknown> }[] = [];
+const schema = {
+  "~standard": {
+    version: 1 as const,
+    vendor: "hesperia-compiler-test",
+    validate(input: unknown) {
+      inputs.push(input);
+      return { value: String(input).toUpperCase() };
+    },
+  },
+};
+export function Form() {
+  controllers.push(createForm(schema));
+  return <output>ready</output>;
+}`,
+    { filename: "form-operation.tsx" },
+  );
+
+  expect(result.diagnostics).toStrictEqual([]);
+
+  const generated = await importGenerated<{
+    Form: Component;
+    inputs: unknown[];
+    controllers: { run(input: string): PromiseLike<unknown> }[];
+  }>(result.code);
+  const window = new Window();
+  const firstTarget = window.document.createElement("section");
+  const secondTarget = window.document.createElement("section");
+
+  window.document.body.append(firstTarget, secondTarget);
+
+  const first = mount(firstTarget as unknown as Element, generated.Form, {});
+  const second = mount(secondTarget as unknown as Element, generated.Form, {});
+
+  try {
+    await first.settled();
+
+    await second.settled();
+
+    expect(generated.controllers).toHaveLength(2);
+
+    await generated.controllers[0]!.run("ada");
+
+    first.dispose();
+
+    await expect(
+      Promise.resolve().then(() => generated.controllers[0]!.run("disposed")),
+    ).rejects.toThrow();
+
+    await generated.controllers[1]!.run("grace");
+
+    expect(generated.inputs).toStrictEqual(["ada", "grace"]);
+
+    expect(secondTarget.textContent).toBe("ready");
+  } finally {
+    first.dispose();
+
+    second.dispose();
+
+    await window.happyDOM.close();
+  }
+});
+
 test("a compiled component consumes a public adapted API while ordinary namespace values stay live", async () => {
   const apiFile = await writeFixture(
     "api",

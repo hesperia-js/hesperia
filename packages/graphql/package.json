@@ -1,0 +1,41 @@
+{
+  "name": "@hesperia/graphql",
+  "version": "1.0.0-alpha.3",
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hesperia-js/hesperia.git",
+    "directory": "packages/graphql"
+  },
+  "files": [
+    "dist",
+    "docs"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js",
+      "default": "./dist/client.js"
+    }
+  },
+  "scripts": {
+    "build": "bunx tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@apollo/client": "4.3.5"
+  },
+  "peerDependencies": {
+    "aeolia": "1.0.0-alpha.1",
+    "graphql": "17.0.2",
+    "rxjs": "7.8.2"
+  }
+}

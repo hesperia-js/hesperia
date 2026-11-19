@@ -24,6 +24,7 @@ export type { PageDeclarationOptions, PageDeclarations } from "./page-types.ts";
 export type {
   RouteAnalysisOptions,
   RouteAnalysisResult,
+  RouteTagProjectionV1,
   RouteGuardArtifact,
   RouteGuardModule,
   RouteDiagnostic,

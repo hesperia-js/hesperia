@@ -14,6 +14,8 @@ type StartupPhase =
   | "host-create-begin"
   | "host-create-end"
   | "serve-begin"
+  | "native-graphql-ready-begin"
+  | "native-graphql-ready-end"
   | "serve-return"
   | "first-health-request";
 type Detail = Readonly<Record<string, string | number | boolean | undefined>>;

@@ -64,6 +64,126 @@ test("full coverage runs four independent groups per OS before platform and comb
   }
 });
 
+test("browser-bearing jobs require the selected Chrome before running tests", () => {
+  const jobs = workflow.jobs as unknown as Record<
+    string,
+    {
+      env?: Record<string, string>;
+      steps: { name?: string; uses?: string; if?: string; run?: string }[];
+    }
+  >;
+  const setup = "./.github/actions/setup-chrome";
+
+  for (const [name, command] of [
+    ["source-quality", "bun test --timeout=45000 tests/tooling"],
+    ["browser", "bun run test:browser"],
+    ["package", "bun test --timeout=60000 tests/package"],
+    ["golden", "node ../node_modules/@playwright/test/cli.js test"],
+  ] as const) {
+    const job = jobs[name]!;
+    const setupIndex = job.steps.findIndex((step) => step.uses === setup);
+    const testIndex = job.steps.findIndex((step) => step.run?.includes(command));
+
+    expect(job.env?.HESPERIA_REQUIRE_CHROME_EXECUTABLE_PATH).toBe("1");
+    expect(setupIndex).toBeGreaterThanOrEqual(0);
+    expect(job.steps[setupIndex]!.if).toBeUndefined();
+    expect(testIndex).toBeGreaterThan(setupIndex);
+  }
+
+  const coverage = jobs["coverage-groups"]!;
+  const setupIndex = coverage.steps.findIndex((step) => step.uses === setup);
+  const testIndex = coverage.steps.findIndex(
+    (step) => step.name === "Run the original coverage group",
+  );
+
+  expect(setupIndex).toBeGreaterThanOrEqual(0);
+  expect(testIndex).toBeGreaterThan(setupIndex);
+
+  const setupCondition = coverage.steps[setupIndex]!.if!;
+  const requiredExpression = coverage.env!.HESPERIA_REQUIRE_CHROME_EXECUTABLE_PATH!;
+  const evaluate = (expression: string, group: string) =>
+    new Function("matrix", `return (${expression.replace(/^\$\{\{\s*|\s*\}\}$/g, "")});`)({
+      group,
+    });
+
+  for (const group of [
+    "bun-tests-ordinary",
+    "project-worker-owner",
+    "browser-css",
+    "native-editor",
+  ]) {
+    const hasBrowser = group === "bun-tests-ordinary" || group === "browser-css";
+
+    expect(Boolean(evaluate(setupCondition, group))).toBe(hasBrowser);
+    expect(evaluate(requiredExpression, group)).toBe(hasBrowser ? "1" : "0");
+  }
+});
+
+test("full coverage retains Saxe evidence after running the original group", () => {
+  const steps = workflow.jobs["coverage-groups"]!.steps as {
+    name?: string;
+    if?: string;
+    run?: string;
+    uses?: string;
+    "continue-on-error"?: boolean;
+    with?: { path?: string; "include-hidden-files"?: boolean };
+  }[];
+  const evidenceIndex = steps.findIndex((step) => step.name === "Retain Saxe coverage evidence");
+  const ordinaryIndex = steps.findIndex((step) => step.name === "Run the original coverage group");
+
+  expect(ordinaryIndex).toBeGreaterThanOrEqual(0);
+
+  expect(steps[ordinaryIndex]?.run).toContain("scripts/ci/run-final-coverage.ts");
+
+  expect(steps[ordinaryIndex]?.["continue-on-error"]).not.toBe(true);
+
+  expect(evidenceIndex).toBeGreaterThan(ordinaryIndex);
+
+  expect(steps[evidenceIndex]?.if).toBe("always() && matrix.group == 'bun-tests-ordinary'");
+
+  expect(steps[evidenceIndex]?.uses).toBe(
+    "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+  );
+
+  expect(steps[evidenceIndex]?.with?.["include-hidden-files"]).toBe(true);
+
+  expect(steps[evidenceIndex]?.with?.path).toContain(".hesperia/saxe-integration-coverage/");
+
+  expect(steps[evidenceIndex]?.with?.path).toContain(".hesperia/coverage/runs/");
+});
+
+test("selected tooling verification runs the Saxe gate and retains its evidence", () => {
+  const steps = workflow.jobs["source-quality"]!.steps as {
+    name?: string;
+    if?: string;
+    run?: string;
+    uses?: string;
+    "continue-on-error"?: boolean;
+    with?: { path?: string; "include-hidden-files"?: boolean };
+  }[];
+  const gateIndex = steps.findIndex((step) => step.name === "Check Saxe supported-mode coverage");
+  const evidenceIndex = steps.findIndex((step) => step.name === "Retain Saxe coverage evidence");
+
+  expect(gateIndex).toBeGreaterThanOrEqual(0);
+  expect(steps[gateIndex]?.if).toBe(
+    "needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'",
+  );
+  expect(steps[gateIndex]?.run).toBe(
+    "bun run scripts/ci/check-saxe-integration-coverage.ts --capture",
+  );
+  expect(steps[gateIndex]?.["continue-on-error"]).not.toBe(true);
+  expect(evidenceIndex).toBeGreaterThan(gateIndex);
+  expect(steps[evidenceIndex]?.if).toBe(
+    "always() && needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'",
+  );
+  expect(steps[evidenceIndex]?.uses).toBe(
+    "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+  );
+  expect(steps[evidenceIndex]?.with?.["include-hidden-files"]).toBe(true);
+  expect(steps[evidenceIndex]?.with?.path).toContain(".hesperia/saxe-integration-coverage/");
+  expect(steps[evidenceIndex]?.with?.path).toContain(".hesperia/coverage/runs/");
+});
+
 function requestsFull(outcome: string, outputs: Record<string, string>, full = false) {
   const expression = scopeExpression
     .slice("${{ ".length, -" }}".length)
@@ -116,11 +236,14 @@ function execute(script: string, env: Record<string, string>) {
 const { version } = await Bun.file(new URL("../../package.json", import.meta.url)).json();
 
 describe("repository branch gate", () => {
-  test("accepts feature, fix, and the authored release version", () => {
+  test("accepts feature, fix, work, and the authored release version", () => {
     for (const branch of [
       "feature/compiler",
       "feature/compiler/scopes",
       "fix/hotfix",
+      "work/x",
+      "work/cli-checks",
+      "work/cli/checks",
       `release/${version}`,
     ]) {
       expect(execute(branchScript, { HESPERIA_HEAD_BRANCH: branch }).exitCode).toBe(0);
@@ -133,6 +256,8 @@ describe("repository branch gate", () => {
       "feature/",
       "fix/",
       "hotfix/parser",
+      "work/",
+      "workspace/cli",
       "release/v1.0.0",
       "release/01.0.0",
       "release/1.0.0+build",

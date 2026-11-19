@@ -22,6 +22,7 @@ import type {
   CanonicalChild,
   CanonicalExpression,
   CanonicalImportSpecifier,
+  CanonicalKeyedProperty,
   CanonicalModule,
   CanonicalPattern,
   CanonicalStatement,
@@ -69,6 +70,12 @@ export interface RouteGuardArtifact {
   readonly modules: readonly RouteGuardModule[];
 }
 
+/** The literal tag values proved from one route declaration. */
+export type RouteTagProjectionV1 =
+  | { readonly version: 1; readonly kind: "none" }
+  | { readonly version: 1; readonly kind: "literal"; readonly tags: readonly string[] }
+  | { readonly version: 1; readonly kind: "unproved" };
+
 /** Route analysis result shared by manifest/build integration and diagnostics consumers. */
 export interface RouteAnalysisResult {
   /** Route source identity used for the result and the scanner's route node. */
@@ -79,6 +86,8 @@ export interface RouteAnalysisResult {
   readonly debug: CanonicalDebugSidecar;
   /** Build errors and refusal diagnostics. A route without a guard has no artifact and no error. */
   readonly diagnostics: readonly RouteDiagnostic[];
+  /** Literal tag projection; absent when the route shape itself was not proved. */
+  readonly tagProjection?: RouteTagProjectionV1;
   /** Present only when route shape and the complete guard closure pass fail-closed analysis. */
   readonly artifact?: RouteGuardArtifact;
 }
@@ -268,12 +277,13 @@ export function analyzeRouteModule(
     return resultWithDiagnostics(root, diagnostics);
   }
 
+  const tagProjection = extractRouteTagProjection(root, configuration);
   const guardProperty = configuration.properties.find(
     (property) => property.kind === "property" && !property.computed && property.key === "guard",
   );
 
   if (!guardProperty || guardProperty.kind !== "property")
-    return resultWithDiagnostics(root, diagnostics);
+    return resultWithDiagnostics(root, diagnostics, tagProjection);
 
   if (!isIdentifier(guardProperty.value)) {
     diagnostics.push(
@@ -285,7 +295,7 @@ export function analyzeRouteModule(
       ),
     );
 
-    return resultWithDiagnostics(root, diagnostics);
+    return resultWithDiagnostics(root, diagnostics, tagProjection);
   }
 
   const guardId = guardProperty.value.referenceId;
@@ -300,7 +310,7 @@ export function analyzeRouteModule(
       ),
     );
 
-    return resultWithDiagnostics(root, diagnostics);
+    return resultWithDiagnostics(root, diagnostics, tagProjection);
   }
 
   const analysis = new ClosureAnalysis(sources, diagnostics);
@@ -309,13 +319,67 @@ export function analyzeRouteModule(
   diagnostics.push(...analysis.relevantDiagnostics());
 
   if (!entry || diagnostics.some((item) => item.severity === "error"))
-    return resultWithDiagnostics(root, diagnostics);
+    return resultWithDiagnostics(root, diagnostics, tagProjection);
 
   const artifact = analysis.artifact(entry);
   return {
-    ...resultWithDiagnostics(root, diagnostics),
+    ...resultWithDiagnostics(root, diagnostics, tagProjection),
     artifact,
   };
+}
+
+function extractRouteTagProjection(
+  root: ModuleInfo,
+  configuration: Extract<CanonicalExpression, { kind: "object" }>,
+): RouteTagProjectionV1 {
+  const unproved = () => Object.freeze({ version: 1 as const, kind: "unproved" as const });
+  if (
+    root.module.diagnostics.some(
+      (diagnostic) =>
+        diagnostic.span !== undefined && overlaps(diagnostic.span, configuration.span),
+    ) ||
+    configuration.properties.some(
+      (property) =>
+        property.kind === "property" &&
+        !property.computed &&
+        property.key === "__proto__" &&
+        property.propertyKind === undefined &&
+        property.method !== true &&
+        !property.shorthand,
+    )
+  )
+    return unproved();
+
+  const declarations = configuration.properties.filter(
+    (property): property is CanonicalKeyedProperty =>
+      property.kind === "property" && !property.computed && property.key === "tags",
+  );
+  if (declarations.length === 0) return Object.freeze({ version: 1, kind: "none" });
+
+  const declaration = declarations[0];
+  if (
+    declarations.length !== 1 ||
+    !declaration ||
+    declaration.propertyKind !== undefined ||
+    declaration.method === true ||
+    declaration.shorthand ||
+    declaration.value.kind !== "array"
+  )
+    return unproved();
+
+  const tags = new Set<string>();
+  for (const element of declaration.value.elements) {
+    if (
+      !element ||
+      element.kind !== "literal" ||
+      typeof element.value !== "string" ||
+      !element.value
+    )
+      return unproved();
+    tags.add(element.value);
+  }
+
+  return Object.freeze({ version: 1, kind: "literal", tags: Object.freeze([...tags]) });
 }
 
 /**
@@ -1958,8 +2022,15 @@ function overlaps(a: SourceSpan, b: SourceSpan): boolean {
 function resultWithDiagnostics(
   root: ModuleInfo,
   diagnostics: readonly RouteDiagnostic[],
+  tagProjection?: RouteTagProjectionV1,
 ): RouteAnalysisResult {
-  return { filename: root.filename, ir: root.module, debug: root.debug, diagnostics };
+  return {
+    filename: root.filename,
+    ir: root.module,
+    debug: root.debug,
+    diagnostics,
+    ...(tagProjection === undefined ? {} : { tagProjection }),
+  };
 }
 
 function failedRouteResult(

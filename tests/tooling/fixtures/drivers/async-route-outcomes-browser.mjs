@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../../../support/browser-launch.mjs";
 import assert from "node:assert/strict";
 
 /** @typedef {import("playwright").BrowserType} BrowserType */
@@ -10,7 +11,7 @@ const { chromium, firefox, webkit } = /** @type {typeof import("playwright")} */
 );
 
 for (const engine of [chromium, firefox, webkit]) {
-  const browser = await engine.launch();
+  const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
   try {
     const page = await browser.newPage();

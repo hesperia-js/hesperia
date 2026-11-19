@@ -270,6 +270,20 @@ test("compiled imported markup keeps native root behavior, ownership, and cleanu
   await expect(page.locator("#fragment-two")).toHaveText("two");
 
   expect(
+    await page.locator("#checked-svg-no-namespace").evaluate((element) => ({
+      namespaceURI: element.namespaceURI,
+      localName: element.localName,
+    })),
+  ).toEqual({ namespaceURI: null, localName: "span" });
+
+  expect(
+    await page.locator("#checked-svg-restored").evaluate((element) => ({
+      namespaceURI: element.namespaceURI,
+      localName: element.localName,
+    })),
+  ).toEqual({ namespaceURI: "http://www.w3.org/2000/svg", localName: "path" });
+
+  expect(
     await page.locator("#fragment-svg-use").evaluate((element) => {
       const attribute = element.getAttributeNode("xlink:href");
       const svg = element.closest("svg");
