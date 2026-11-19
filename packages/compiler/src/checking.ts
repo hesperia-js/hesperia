@@ -18,6 +18,7 @@ import { normalizeFilename as normalize } from "./utils.ts";
 import {
   TypingHostObservationRecorder,
   captureTypingInputEnvironment,
+  fingerprintCheckingResult,
   hasRequestedTypingEvidenceCapture,
   registerCheckingSessionTypingState,
   type TypingInputEnvironment,
@@ -687,22 +688,50 @@ async function createCheckingSession(
       const initialResult = session.result;
       const initialOrigin = checkedSourceOrigin(session, initialResult);
       const resultGetter = Object.getOwnPropertyDescriptor(session, "result")?.get;
-      const ownsInitialSession = (): boolean => {
-        if (
-          !initialOrigin ||
-          disposed ||
-          session.project !== project ||
-          session.analyses !== analyses ||
-          Object.getOwnPropertyDescriptor(session, "result")?.get !== resultGetter
-        )
-          return false;
+      let diagnosticFingerprint: string | undefined;
 
-        const current = session.result;
-        return (
-          checkedSourceOrigin(session, current) === initialOrigin &&
-          initialOrigin.inputSnapshot === checkingInputs &&
-          checkingInputs.ownsCaptured(current.checkingInputs)
-        );
+      // Checking inputs can grow during capture and are checked by their snapshot owner.
+      try {
+        if (!initialOrigin && initialResult.diagnostics.some((item) => item.severity === "error"))
+          diagnosticFingerprint = fingerprintCheckingResult({
+            ...initialResult,
+            checkingInputs: [],
+          });
+      } catch {
+        // An unencodable diagnostic result cannot own typing evidence.
+      }
+
+      const ownsInitialSession = (): boolean => {
+        try {
+          if (
+            disposed ||
+            session.project !== project ||
+            session.analyses !== analyses ||
+            session.views !== views ||
+            session.dispose !== dispose ||
+            Object.getOwnPropertyDescriptor(session, "result")?.get !== resultGetter
+          )
+            return false;
+
+          const current = session.result;
+
+          if (!checkingInputs.ownsCaptured(current.checkingInputs)) return false;
+
+          if (initialOrigin)
+            return (
+              checkedSourceOrigin(session, current) === initialOrigin &&
+              initialOrigin.inputSnapshot === checkingInputs
+            );
+
+          return (
+            diagnosticFingerprint !== undefined &&
+            current.diagnostics === initialResult.diagnostics &&
+            current.modules === initialResult.modules &&
+            fingerprintCheckingResult({ ...current, checkingInputs: [] }) === diagnosticFingerprint
+          );
+        } catch {
+          return false;
+        }
       };
       try {
         typingEnvironment = await captureTypingInputEnvironment(

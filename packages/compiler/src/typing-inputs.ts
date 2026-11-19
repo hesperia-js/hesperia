@@ -2295,7 +2295,8 @@ function sealProjectTypingEvidenceUnchecked(
       [...compilation.modules.keys()],
       state.analysisEntries.map((entry) => entry.filename),
     );
-  const cohortMatches = checkingMatches && analysesMatch && modulePopulationMatches;
+  const cohortMatches =
+    !state.baselineHasErrors && checkingMatches && analysesMatch && modulePopulationMatches;
   const modules = state.modules.map((module) => {
     const analysis = session.analyses.get(module.filename);
     const emitted = compilation.modules.get(module.filename);
@@ -2769,7 +2770,7 @@ function canonicalComponents(
   return Object.freeze(found);
 }
 
-function fingerprintCheckingResult(result: ProjectCheckingResult): string {
+export function fingerprintCheckingResult(result: ProjectCheckingResult): string {
   return JSON.stringify(
     canonicalCaptureValue({
       snapshotId: result.snapshotId,
