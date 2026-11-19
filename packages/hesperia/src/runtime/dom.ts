@@ -1,5 +1,11 @@
 import { attachElementBinding, type Binding } from "./binding.ts";
-import { Owner, RenderFault, reportFault, type RuntimeContext } from "./owner.ts";
+import {
+  disposeOwnerSyncPreservingFailure,
+  Owner,
+  RenderFault,
+  reportFault,
+  type RuntimeContext,
+} from "./owner.ts";
 import { Scheduler } from "./scheduler.ts";
 import { installRootProjectPolicy } from "./project-policy.ts";
 import {
@@ -600,8 +606,19 @@ export interface MountOptions {
 
 /** Mounted application lifetime and deterministic effect completion barrier. */
 export interface MountedApplication {
-  /** Remove the application and revoke its owned work. Idempotent. */
-  dispose(reason?: unknown): void;
+  /**
+   * Revoke immediately and join the same owned cleanup operation on every call.
+   * If this method starts disposal, its Promise rejects with the original cleanup failures
+   * in invocation order and does not also report them through `onError`.
+   */
+  dispose(reason?: unknown): Promise<void>;
+
+  /**
+   * Revoke immediately and report synchronous failures through `onError`.
+   * If this method starts disposal, later asynchronous failures are reported once through
+   * the same route. A later `dispose()` joins the retained outcome without rerunning cleanup.
+   */
+  disposeSync(reason?: unknown): void;
 
   /** Resolve when pending DOM and effect passes have settled. */
   settled(): Promise<void>;
@@ -679,7 +696,7 @@ export function prepareTree(owner: Owner, render: () => Rendered): PreparedTree 
   try {
     append(fragment, render(), owner.context.document, owner);
   } catch (error) {
-    owner.dispose(error);
+    disposeOwnerSyncPreservingFailure(owner, error);
 
     throw error;
   }
@@ -719,14 +736,14 @@ export function prepareTree(owner: Owner, render: () => Rendered): PreparedTree 
 
         owner.context.scheduler.requestEffects();
       } catch (error) {
-        owner.dispose(error);
+        disposeOwnerSyncPreservingFailure(owner, error);
 
         throw error;
       }
     },
 
     dispose(reason) {
-      owner.dispose(reason);
+      owner.disposeSync(reason);
     },
   };
 }
@@ -740,6 +757,7 @@ function mountedHandle(
 
   return {
     dispose: (reason) => owner.dispose(reason),
+    disposeSync: (reason) => owner.disposeSync(reason),
     settled: () => startup.then(() => context.scheduler.settled()),
   };
 }
@@ -1249,7 +1267,7 @@ export function mount<P>(
       ),
     );
   } catch (error) {
-    owner.dispose(error);
+    disposeOwnerSyncPreservingFailure(owner, error);
 
     reportFault(owner, error);
   }

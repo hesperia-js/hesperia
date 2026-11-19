@@ -11,7 +11,11 @@ import {
   type MountedApplication,
   type Rendered,
 } from "./dom.ts";
-import { RenderFault } from "./owner.ts";
+import {
+  disposeOwnerWithAdmissionClose,
+  registerOwnerDisposalPromiseAlias,
+  RenderFault,
+} from "./owner.ts";
 import { installRootProjectPolicy } from "./project-policy.ts";
 import { internalStyleBindingFor } from "./style.ts";
 import { reserveNavigation } from "../routing/navigation-api.ts";
@@ -116,40 +120,117 @@ export async function bootstrapApplication(
 
     const mountedRuntime = runtime;
     const mountedRouter = router;
-    let disposed = false;
+    let disposal: Promise<void> | undefined;
+    let synchronousFailures: unknown[] = [];
+    let reporterFailure: { readonly cause: unknown } | undefined;
+
+    const beginDisposal = (reason: unknown, mode: "join" | "sync"): Promise<void> => {
+      if (disposal) return disposal;
+
+      let resolve!: () => void;
+      let reject!: (cause: unknown) => void;
+      disposal = new Promise<void>((accept, fail) => {
+        resolve = accept;
+        reject = fail;
+      });
+      registerOwnerDisposalPromiseAlias(mountedRuntime.owner, disposal);
+
+      if (mode === "sync") void disposal.catch(() => undefined);
+
+      let ownerRetirement: Promise<void> | undefined;
+
+      try {
+        ownerRetirement = disposeOwnerWithAdmissionClose(mountedRuntime.owner, mode, reason, () => {
+          for (const release of [
+            () => navigationReservation.release(reason),
+            () => mountedRouter.dispose(reason),
+          ]) {
+            try {
+              release();
+            } catch (cause) {
+              synchronousFailures.push(cause);
+            }
+          }
+        });
+      } catch (cause) {
+        if (mode === "sync") {
+          reporterFailure = { cause };
+          try {
+            ownerRetirement = mountedRuntime.owner.dispose(reason);
+          } catch (failure) {
+            synchronousFailures.push(failure);
+          }
+        } else {
+          synchronousFailures.push(cause);
+        }
+      }
+
+      for (const release of [() => history?.release()]) {
+        try {
+          release();
+        } catch (cause) {
+          synchronousFailures.push(cause);
+        }
+      }
+
+      void Promise.allSettled(ownerRetirement ? [ownerRetirement] : []).then((outcomes) => {
+        const failures = outcomes.flatMap((outcome) => {
+          if (outcome.status === "fulfilled") return [];
+
+          const cause: unknown = outcome.reason;
+          return cause instanceof AggregateError && cause.message === "Component cleanup failed"
+            ? [...cause.errors]
+            : [cause];
+        });
+        failures.push(...synchronousFailures);
+
+        if (failures.length) reject(new AggregateError(failures, "Application disposal failed"));
+        else resolve();
+      }, reject);
+
+      return disposal;
+    };
+
     return {
       dispose(reason) {
-        if (disposed) return;
+        return beginDisposal(reason, "join");
+      },
 
-        disposed = true;
+      disposeSync(reason) {
+        if (disposal) return;
 
-        try {
-          navigationReservation.release(reason);
+        beginDisposal(reason, "sync");
+        const failures = reporterFailure
+          ? [reporterFailure.cause, ...synchronousFailures]
+          : synchronousFailures;
 
-          mountedRouter.dispose(reason);
-        } finally {
-          try {
-            mountedRuntime.owner.dispose(reason);
-          } finally {
-            history?.release();
-          }
-        }
+        if (failures.length === 1) throw failures[0];
+        if (failures.length > 1)
+          throw new AggregateError(failures, "Application synchronous disposal failed");
       },
 
       settled: () => mountedRuntime.context.scheduler.settled(),
     };
   } catch (error) {
-    try {
-      navigationReservation.release(error);
+    const failures: unknown[] = [];
 
-      router?.dispose(error);
-    } finally {
+    for (const release of [
+      () => navigationReservation.release(error),
+      () => router?.dispose(error),
+      () => runtime?.owner.disposeSync(error),
+      () => history?.release(),
+    ]) {
       try {
-        runtime?.owner.dispose(error);
-      } finally {
-        history?.release();
+        release();
+      } catch (cause) {
+        failures.push(cause);
       }
     }
+
+    if (failures.length)
+      throw new AggregateError([error, ...failures], "Application startup and cleanup failed", {
+        cause: error,
+      });
 
     throw error;
   }
