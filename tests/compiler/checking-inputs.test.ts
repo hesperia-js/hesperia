@@ -9,6 +9,7 @@ import { ModuleResolver } from "../../packages/compiler/src/module-resolution.ts
 import { emitCheckingSession } from "../../packages/compiler/src/project-compilation.ts";
 import {
   issuedProjectTypingEvidence,
+  registerMappedProjectCompilation,
   requestTypingEvidenceCapture,
 } from "../../packages/compiler/src/typing-inputs.ts";
 import { normalizeFilename } from "../../packages/compiler/src/utils.ts";
@@ -45,6 +46,72 @@ test("typing evidence stays tied to the actual emitted module population", async
     expect(issuedProjectTypingEvidence(compilation)).toBeUndefined();
     modules.set(filename, emitted!);
     expect(issuedProjectTypingEvidence(compilation)).toBe(evidence);
+
+    const originalCode = emitted!.code;
+
+    try {
+      expect(Reflect.set(emitted!, "code", originalCode + "\n// changed output")).toBe(true);
+      expect(issuedProjectTypingEvidence(compilation)).toBeUndefined();
+    } finally {
+      Reflect.set(emitted!, "code", originalCode);
+    }
+
+    expect(issuedProjectTypingEvidence(compilation)).toBe(evidence);
+
+    const mapped = {
+      ...compilation,
+      checking: {
+        ...compilation.checking,
+        modules: compilation.checking.modules.map((module) => ({
+          ...module,
+          diagnostics: [...module.diagnostics],
+        })),
+      },
+      modules: new Map(
+        [...compilation.modules].map(
+          ([name, result]) => [name, { ...result, diagnostics: [...result.diagnostics] }] as const,
+        ),
+      ),
+    };
+
+    expect(registerMappedProjectCompilation(compilation, mapped)).toBe(true);
+    expect(issuedProjectTypingEvidence(mapped)).toBe(evidence);
+
+    const forgedCode = {
+      ...mapped,
+      modules: new Map([[filename, { ...emitted!, code: originalCode + "\n// changed output" }]]),
+    };
+
+    expect(registerMappedProjectCompilation(compilation, forgedCode)).toBe(false);
+    expect(issuedProjectTypingEvidence(forgedCode)).toBeUndefined();
+
+    const injectedDiagnostic = {
+      code: "HES-TEST",
+      severity: "error" as const,
+      message: "A projection cannot invent a diagnostic.",
+    };
+    const forgedOutputDiagnostics = {
+      ...mapped,
+      modules: new Map([[filename, { ...emitted!, diagnostics: [injectedDiagnostic] }]]),
+    };
+
+    expect(registerMappedProjectCompilation(compilation, forgedOutputDiagnostics)).toBe(false);
+    expect(issuedProjectTypingEvidence(forgedOutputDiagnostics)).toBeUndefined();
+
+    const forgedCheckingDiagnostics = {
+      ...mapped,
+      checking: {
+        ...mapped.checking,
+        diagnostics: [injectedDiagnostic],
+        modules: mapped.checking.modules.map((module) => ({
+          ...module,
+          diagnostics: [injectedDiagnostic],
+        })),
+      },
+    };
+
+    expect(registerMappedProjectCompilation(compilation, forgedCheckingDiagnostics)).toBe(false);
+    expect(issuedProjectTypingEvidence(forgedCheckingDiagnostics)).toBeUndefined();
   } finally {
     await session?.dispose();
     await rm(root, { recursive: true, force: true });
