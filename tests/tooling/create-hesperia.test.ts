@@ -58,6 +58,41 @@ async function runCreator(
   return { exitCode, stdout, stderr };
 }
 
+test("prints standalone help and version without creating a project", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-create-metadata-"));
+
+  try {
+    const help = await runCreator(root, ["--help"]);
+    const version = await runCreator(root, ["--version"]);
+    const manifest = JSON.parse(
+      await readFile(
+        new URL("../../packages/create-hesperia/package.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { version: string };
+
+    expect(help.exitCode).toBe(0);
+
+    expect(help.stderr).toBe("");
+
+    expect(help.stdout).toContain("Usage: bun create hesperia <destination>");
+
+    expect(help.stdout).toContain("--host <elysia|none>");
+
+    expect(help.stdout).toContain("--version");
+
+    expect(version.exitCode).toBe(0);
+
+    expect(version.stderr).toBe("");
+
+    expect(version.stdout).toBe(manifest.version + "\n");
+
+    expect(await readdir(root)).toStrictEqual([]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("requires an explicit destination and creates nothing when it is missing", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-create-no-destination-"));
 
