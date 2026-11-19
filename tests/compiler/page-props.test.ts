@@ -1,9 +1,52 @@
 import { expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { checkProjectModules } from "../../packages/compiler/src/checking.ts";
+import {
+  checkingView,
+  checkingViewRouteLoadCapture,
+} from "../../packages/compiler/src/checking-view.ts";
 import { compileProjectModules } from "../../packages/compiler/src/project-compilation.ts";
 
 const root = resolve(import.meta.dir, "../..");
+
+test("explicit route loader checking retains the authored configuration and pattern", () => {
+  const source =
+    "import { route } from 'hesperia/routing'; export default route<'/users/[id]'>({ load: async ({ request }) => ({ item: 'own' as const, path: new URL(request.url).pathname }) });";
+  const view = checkingView(source, "src/routes/users/[id]/+route.ts", false);
+  const capture = checkingViewRouteLoadCapture(view);
+  const projection = capture?.projections[0];
+
+  expect(capture?.complete).toBe(true);
+  expect(capture?.projections).toHaveLength(1);
+  expect(projection?.authoredPatternText).toBe("'/users/[id]'");
+  expect(
+    view.source.slice(
+      projection!.generatedConfigurationSpan.start,
+      projection!.generatedConfigurationSpan.end,
+    ),
+  ).toContain("load:");
+  expect(
+    view.source.slice(
+      projection!.generatedTypeArgumentsSpan.start,
+      projection!.generatedTypeArgumentsSpan.end,
+    ),
+  ).toContain(`typeof ${projection!.identifier}`);
+
+  const position = source.indexOf("request.url");
+  const generated = view.generatedOffset(position);
+
+  expect(view.source.slice(generated, generated + "request.url".length)).toBe("request.url");
+  expect(view.mapOffset(generated)).toBe(position);
+});
+
+test("explicit tag type arguments are not rewritten as route patterns", () => {
+  const source =
+    "import { route } from 'hesperia/routing'; type Tags = readonly ['news']; export default route<Tags>({ tags: ['news'] });";
+  const view = checkingView(source, "src/routes/+route.ts", false);
+
+  expect(view.source).toBe(source);
+  expect(checkingViewRouteLoadCapture(view)?.projections).toHaveLength(0);
+});
 
 test("page checking supports imported aliases and named query interfaces", async () => {
   const result = await checkProjectModules(
@@ -176,4 +219,102 @@ test("page prop metadata keeps params and query views plain while ordinary props
   expect(code).toContain('ordinaryProp: {\n\t\tkind: "value"');
 
   expect(code).toContain("optional: true");
+});
+
+test("Page.Props checks selected own and ancestor route loader values", async () => {
+  const modules = [
+    {
+      filename: "src/routes/+route.ts",
+      source:
+        "import { route } from 'hesperia/routing'; export default route({ tags: ['root'], load: () => ({ root: 'root' as const }) });",
+    },
+    {
+      filename: "src/routes/users/+route.ts",
+      source:
+        "import { route } from 'hesperia/routing'; export default route({ load: async ({ request }) => ({ count: 7 as const, missing: undefined, path: new URL(request.url).pathname }) });",
+    },
+    {
+      filename: "src/routes/users/[id]/+route.ts",
+      source:
+        "import { route } from 'hesperia/routing'; export default route<'/users/[id]'>({ load: async ({ request }) => ({ item: 'own' as const, path: new URL(request.url).pathname }) });",
+    },
+    {
+      filename: "src/routes/users/+layout.tsx",
+      source:
+        "import type { Page } from 'hesperia'; export default function UsersLayout(props: Page.Props) { const root: 'root' = props.routeData['/']().root; const count: 7 = props.routeData['/users']().count; return <section>{root}{count}</section>; }",
+    },
+    {
+      filename: "src/routes/users/[id]/+page.tsx",
+      source:
+        "import type { Page } from 'hesperia'; export default function UserPage(props: Page.Props) { const root: 'root' = props.routeData['/']().root; const count: 7 = props.routeData['/users']().count; const missing: undefined = props.routeData['/users']().missing; const own: 'own' = props.routeData['/users/[id]']().item; return <span>{root}{count}{String(missing)}{own}</span>; }",
+    },
+  ];
+  const result = await checkProjectModules(modules, { root });
+
+  expect(result.diagnostics).toStrictEqual([]);
+});
+
+test("Page.Props retains an authored routeData prop when no route loader supplies one", async () => {
+  const source =
+    'import type { Page } from "hesperia"; export default function Example(props: Page.Props<{ queryParams: {}; routeData?: { label: string } }>) { const label: string | undefined = props.routeData()?.label; return <span>{label}</span>; }';
+  const result = await compileProjectModules(
+    [{ filename: "src/routes/example/+page.tsx", source }],
+    { root },
+  );
+
+  expect(result.checking.diagnostics).toStrictEqual([]);
+  expect(result.modules.get("src/routes/example/+page.tsx")?.code).toMatch(
+    /routeData:\s*\{\s*kind: "value",\s*optional: true/,
+  );
+});
+
+test("Page.Props rejects route data from sibling and terminal-response loaders", async () => {
+  const modules = [
+    {
+      filename: "src/routes/users/[id]/+route.ts",
+      source:
+        "import { route } from 'hesperia/routing'; export default route({ load: () => ({ own: true as const }) });",
+    },
+    {
+      filename: "src/routes/admin/+route.ts",
+      source:
+        "import { route } from 'hesperia/routing'; export default route({ load: () => ({ admin: true as const }) });",
+    },
+    {
+      filename: "src/routes/users/[id]/+page.tsx",
+      source:
+        "import type { Page } from 'hesperia'; export default function User(props: Page.Props) { props.routeData['/admin'](); return <span />; }",
+    },
+    {
+      filename: "src/routes/terminal/+route.ts",
+      source:
+        "import { route } from 'hesperia/routing'; export default route({ load: () => new Response() });",
+    },
+    {
+      filename: "src/routes/terminal/+page.tsx",
+      source:
+        "import type { Page } from 'hesperia'; export default function Terminal(props: Page.Props) { props.routeData['/terminal'](); return <span />; }",
+    },
+  ];
+  const result = await checkProjectModules(modules, { root });
+
+  for (const item of [
+    { filename: "src/routes/users/[id]/+page.tsx", expression: "props.routeData['/admin']" },
+    { filename: "src/routes/terminal/+page.tsx", expression: "props.routeData['/terminal']" },
+  ]) {
+    const checked = result.modules.find((module) => module.filename.endsWith(item.filename));
+    const source = modules.find((module) => module.filename === item.filename)!.source;
+    const start = source.indexOf(item.expression);
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(
+      checked?.diagnostics.some(
+        (diagnostic) =>
+          diagnostic.severity === "error" &&
+          diagnostic.span !== undefined &&
+          diagnostic.span.start < start + item.expression.length &&
+          diagnostic.span.end > start,
+      ),
+    ).toBe(true);
+  }
 });
