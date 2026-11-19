@@ -640,9 +640,9 @@ function assertCreatorCliCapture(
       Object.keys(artifact.coverage).some((path) => canonicalPath(path) === creatorEntryPath),
   );
 
-  if (creatorHits.length !== 13) {
+  if (creatorHits.length !== 15) {
     throw new Error(
-      `Creator CLI coverage expected thirteen genuine child fragments; found ${creatorHits.length}`,
+      `Creator CLI coverage expected fifteen genuine child fragments; found ${creatorHits.length}`,
     );
   }
 
