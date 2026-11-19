@@ -5,7 +5,7 @@ import { suppliedReleaseArchive } from "./release-candidate.ts";
 import { chromium } from "playwright";
 import { createRequire } from "node:module";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { arch, release, tmpdir, version } from "node:os";
 import { join, resolve } from "node:path";
 
 const packageRoot = resolve(import.meta.dir, "../..");
@@ -413,89 +413,99 @@ async function cancelInstalledCreatorJson(
   }
 }
 
-async function compareWrappedCreatorCancellation(
+async function observeTerminalSignalControl(
   cwd: string,
-  wrapper: string,
   entry: string,
-  destination: string,
-  preload: string,
   env: Record<string, string | undefined>,
-  installerStarted: Promise<void>,
-): Promise<string> {
-  const decoder = new TextDecoder();
+  input: "string" | "bytes",
+): Promise<void> {
   let output = "";
-  let registryReady = false;
-  let interruptBytes: number | undefined;
+  let ready = false;
+  let accepted: number | undefined;
+  let writeError: string | undefined;
+  let processExitObserved = false;
   let terminalExitObserved = false;
-  let childFinished = false;
+  let terminalExitCode: number | undefined;
+  let terminalExitSignal: string | null | undefined;
   let finishOutput!: () => void;
   const outputClosed = new Promise<void>((resolve) => {
     finishOutput = resolve;
   });
-  const child = Bun.spawn([process.execPath, wrapper, entry, destination, preload], {
+  const decoder = new TextDecoder();
+  let child: ReturnType<typeof Bun.spawn> | undefined;
+
+  function sendInterrupt(): void {
+    if (!ready || accepted !== undefined || writeError !== undefined || !child?.terminal) return;
+    try {
+      accepted = child.terminal.write(input === "string" ? "\u0003" : Uint8Array.of(0x03));
+    } catch (error) {
+      writeError = String(error);
+    }
+  }
+
+  child = Bun.spawn([process.execPath, entry], {
     cwd,
     env,
     terminal: {
       cols: 100,
       rows: 30,
-      data(_terminal, data) {
-        output = (output + decoder.decode(data, { stream: true })).slice(-8192);
+      data(_terminal, bytes) {
+        output = (output + decoder.decode(bytes, { stream: true })).slice(-4096);
+        if (output.includes("__CONTROL_READY__")) ready = true;
+        sendInterrupt();
       },
-      exit() {
+      exit(_terminal, code, signal) {
         terminalExitObserved = true;
-        output = (output + decoder.decode()).slice(-8192);
+        terminalExitCode = code;
+        terminalExitSignal = signal;
+        output = (output + decoder.decode()).slice(-4096);
         finishOutput();
       },
     },
   });
+  sendInterrupt();
   const childExit = child.exited.then((code) => {
-    childFinished = true;
+    processExitObserved = true;
     return code;
   });
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error("Wrapped Creator cancellation timed out")), 30_000);
+    timeout = setTimeout(() => reject(new Error("Terminal signal control timed out")), 10_000);
   });
 
   try {
-    await Promise.race([
-      installerStarted,
-      childExit.then((code) => {
-        throw new Error(
-          `Creator wrapper exited before the installer reached the registry: ${code}`,
-        );
-      }),
-      timedOut,
-    ]);
-    registryReady = true;
-    if (!child.terminal) throw new Error("Creator wrapper terminal was not acquired");
-    interruptBytes = child.terminal.write("\u0003");
     const exitCode = await Promise.race([
       Promise.all([childExit, outputClosed]).then(([code]) => code),
       timedOut,
     ]);
-    const observation = normalizeTerminalOutput(output);
-
-    expect(exitCode, observation).toBe(0);
-    expect(interruptBytes, observation).toBe(1);
-    expect(terminalExitObserved, observation).toBe(true);
-    return observation;
-  } catch (error) {
-    console.error(
-      `Wrapped Creator cancellation observation: ${JSON.stringify({
-        registryReady,
-        interruptBytes,
-        childFinished,
-        childSignalCode: child.signalCode,
-        terminalExitObserved,
-        terminalHandleClosed: child.terminal?.closed,
-        outputTail: normalizeTerminalOutput(output).slice(-4096),
-      })}`,
-    );
-    throw error;
+    expect(exitCode).toBe(0);
+    expect(child.signalCode).toBeNull();
+    expect(terminalExitCode).toBe(0);
+    expect(terminalExitSignal).toBeNull();
+    expect(ready).toBe(true);
+    expect(accepted).toBe(1);
+    expect(output).toContain("__CONTROL_SIGINT__");
   } finally {
+    console.error(
+      "Terminal signal control: " +
+        JSON.stringify({
+          input,
+          ready,
+          accepted,
+          writeError,
+          signalObserved: output.includes("__CONTROL_SIGINT__"),
+          processExitObserved,
+          processExitCode: child.exitCode,
+          processSignalCode: child.signalCode,
+          terminalExitObserved,
+          terminalExitCode,
+          terminalExitSignal,
+          terminalHandleClosed: child.terminal?.closed,
+          outputTail: normalizeTerminalOutput(output).slice(-2048),
+        }),
+    );
     if (timeout) clearTimeout(timeout);
-    if (!childFinished) await terminateIntegratedServerProcess(child);
+    if (!processExitObserved) await terminateIntegratedServerProcess(child);
     if (child.terminal && !child.terminal.closed) child.terminal.close();
   }
 }
@@ -640,7 +650,7 @@ test("packed creator defaults to Elysia and builds a selectable no-host applicat
     let blockRegistry = false;
     let activeRegistryPath = "/";
     let notifyInstallerStarted!: () => void;
-    let installerStarted = new Promise<void>((resolve) => {
+    const installerStarted = new Promise<void>((resolve) => {
       notifyInstallerStarted = resolve;
     });
     const blockedRequests: ((response: Response) => void)[] = [];
@@ -768,9 +778,44 @@ AbortSignal.prototype.addEventListener = function (type, ...args) {
       let signalPreload: string | undefined;
 
       if (process.platform === "win32") {
-        activeRegistryPath = "/wrapped/";
+        activeRegistryPath = "/direct/";
         signalPreload = join(workspace, "creator-signal-observation.mjs");
-        const wrapper = join(workspace, "creator-terminal-wrapper.mjs");
+        const control = join(workspace, "creator-terminal-control.mjs");
+        await writeFile(
+          control,
+          [
+            'import { writeSync } from "node:fs";',
+            "const keepAlive = setInterval(() => {}, 1000);",
+            'process.once("SIGINT", () => { writeSync(1, "__CONTROL_SIGINT__\\n"); clearInterval(keepAlive); });',
+            'writeSync(1, "__CONTROL_READY__\\n");',
+          ].join("\n"),
+        );
+        console.error(
+          "Terminal control host: " +
+            JSON.stringify({
+              platform: process.platform,
+              architecture: arch(),
+              release: release(),
+              version: version(),
+              imageOS: process.env.ImageOS,
+              imageVersion: process.env.ImageVersion,
+              bunVersion: Bun.version,
+              bunRevision: Bun.revision,
+              executable: process.execPath,
+            }),
+        );
+        const controlEnv = {
+          ...process.env,
+          BUN_CONFIG_REGISTRY: new URL("direct/", registry.url).href,
+          BUN_INSTALL_CACHE_DIR: join(workspace, "json-cancel-cache"),
+        };
+        for (const input of ["string", "bytes"] as const) {
+          try {
+            await observeTerminalSignalControl(driver, control, controlEnv, input);
+          } catch (error) {
+            comparisonFailures.push(error);
+          }
+        }
         await writeFile(
           signalPreload,
           [
@@ -778,64 +823,6 @@ AbortSignal.prototype.addEventListener = function (type, ...args) {
             'process.on("SIGINT", () => writeSync(2, "__CREATOR_CLI_SIGINT__\\n"));',
           ].join("\n"),
         );
-        await writeFile(
-          wrapper,
-          [
-            'import { writeSync } from "node:fs";',
-            "const [entry, destination, preload] = process.argv.slice(2);",
-            'process.on("SIGINT", () => writeSync(2, "__CREATOR_WRAPPER_SIGINT__\\n"));',
-            'const child = Bun.spawn([process.execPath, "--preload", preload, entry, destination, "--json", "--host", "none"], { stdin: "inherit", stdout: "pipe", stderr: "pipe" });',
-            "const stderrTask = (async () => {",
-            "  const decoder = new TextDecoder();",
-            '  let output = "";',
-            "  for await (const chunk of child.stderr) {",
-            "    const text = decoder.decode(chunk, { stream: true });",
-            "    output += text;",
-            "    writeSync(2, text);",
-            "  }",
-            "  return output + decoder.decode();",
-            "})();",
-            "const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), stderrTask]);",
-            'writeSync(1, "__CREATOR_WRAPPED_RESULT__" + JSON.stringify({ exitCode, signalCode: child.signalCode, stdout, stderr }) + "\\n");',
-          ].join("\n"),
-        );
-
-        try {
-          const wrapped = await compareWrappedCreatorCancellation(
-            driver,
-            wrapper,
-            creatorEntry,
-            join(workspace, "Wrapped Cancelled JSON Frontend"),
-            signalPreload,
-            {
-              ...process.env,
-              BUN_CONFIG_REGISTRY: new URL("wrapped/", registry.url).href,
-              BUN_INSTALL_CACHE_DIR: join(workspace, "json-wrapped-cancel-cache"),
-            },
-            installerStarted,
-          );
-          console.error("Wrapped Creator cancellation completed: " + wrapped.slice(-4096));
-          expect(wrapped).toContain("__CREATOR_WRAPPER_SIGINT__");
-          expect(wrapped).toContain("__CREATOR_CLI_SIGINT__");
-          const receiptStart = wrapped.lastIndexOf("__CREATOR_WRAPPED_RESULT__");
-          expect(receiptStart).toBeGreaterThanOrEqual(0);
-          const receipt = JSON.parse(
-            wrapped.slice(receiptStart + "__CREATOR_WRAPPED_RESULT__".length).trim(),
-          ) as { exitCode: number; signalCode: string | null; stdout: string; stderr: string };
-          const wrappedResult = parseCreatorJson(receipt.stdout);
-          expect(receipt.exitCode).toBe(130);
-          expect(receipt.signalCode).toBeNull();
-          expect(receipt.stderr).toContain("Creation cancelled.");
-          expect(wrappedResult.status).toBe("cancelled");
-          expect(wrappedResult.retirement).toBe("complete");
-        } catch (error) {
-          comparisonFailures.push(error);
-        }
-
-        installerStarted = new Promise<void>((resolve) => {
-          notifyInstallerStarted = resolve;
-        });
-        activeRegistryPath = "/direct/";
       }
 
       let cancelled: Awaited<ReturnType<typeof cancelInstalledCreatorJson>> | undefined;
