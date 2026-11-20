@@ -9,6 +9,12 @@ import {
 import { SyntaxKind, type Node, type SourceFile } from "typescript/unstable/ast";
 import type { PropSchema } from "hesperia/runtime";
 import type { CompilerDiagnostic } from "./ir.ts";
+import {
+  captureStructuralEvidence,
+  retainComponentPropsTypeEvidence,
+  type CheckedTypeEvidence,
+  type ComponentPropTypeEvidence,
+} from "./typing-inputs.ts";
 
 /** Prop metadata for one authored component parameter. */
 export interface ComponentPropsMetadata {
@@ -67,6 +73,7 @@ export async function analyzeComponentProps(
   project: Project,
   filename: string,
   mapOffset: (offset: number) => number = (offset) => offset,
+  includeStructuralEvidence = false,
 ): Promise<ComponentPropsAnalysis> {
   const source = await project.program.getSourceFile(filename);
 
@@ -88,6 +95,8 @@ export async function analyzeComponentProps(
   collectFunctions(source);
 
   const byParameterStart: Record<string, ComponentPropsMetadata> = {};
+  const typeEvidenceByParameterStart: Record<string, ComponentPropTypeEvidence> =
+    Object.create(null);
   const diagnostics: CompilerDiagnostic[] = [];
   const trusted = await findTrustedBrands(project);
 
@@ -98,11 +107,18 @@ export async function analyzeComponentProps(
       project,
       trusted,
       byParameterStart,
+      typeEvidenceByParameterStart,
+      includeStructuralEvidence,
       diagnostics,
       mapOffset,
     );
 
-  return { byParameterStart, diagnostics };
+  const result = { byParameterStart, diagnostics };
+  if (includeStructuralEvidence)
+    retainComponentPropsTypeEvidence(result, {
+      byParameterStart: typeEvidenceByParameterStart,
+    });
+  return result;
 }
 
 async function analyzeFunction(
@@ -111,6 +127,8 @@ async function analyzeFunction(
   project: Project,
   trusted: { readonly component: ReadonlySet<number>; readonly pageProps: ReadonlySet<number> },
   byParameterStart: Record<string, ComponentPropsMetadata>,
+  typeEvidenceByParameterStart: Record<string, ComponentPropTypeEvidence>,
+  includeStructuralEvidence: boolean,
   diagnostics: CompilerDiagnostic[],
   mapOffset: (offset: number) => number,
 ): Promise<void> {
@@ -135,6 +153,8 @@ async function analyzeFunction(
       source,
       project,
       byParameterStart,
+      typeEvidenceByParameterStart,
+      includeStructuralEvidence,
       diagnostics,
       mapOffset,
     );
@@ -178,10 +198,16 @@ async function analyzeFunction(
   }
 
   const props: Record<string, PropSchema> = {};
+  const mappedEvidence: Record<string, CheckedTypeEvidence> = Object.create(null);
 
   for (const property of properties) {
     const name = String(property.name);
     const type = await project.checker.getTypeOfSymbol(property);
+
+    if (includeStructuralEvidence)
+      mappedEvidence[name] = type
+        ? await captureStructuralEvidence(project, type)
+        : { kind: "unproved", reason: "checker-error" };
 
     Object.defineProperty(props, name, {
       configurable: true,
@@ -205,6 +231,8 @@ async function analyzeFunction(
     parameterEnd: mapOffset(parameter.end),
     props,
   };
+  if (includeStructuralEvidence)
+    typeEvidenceByParameterStart[String(parameterStart)] = { mapped: mappedEvidence };
 }
 
 async function analyzePageFunction(
@@ -214,6 +242,8 @@ async function analyzePageFunction(
   sourceFile: SourceFile,
   project: Project,
   byParameterStart: Record<string, ComponentPropsMetadata>,
+  typeEvidenceByParameterStart: Record<string, ComponentPropTypeEvidence>,
+  includeStructuralEvidence: boolean,
   diagnostics: CompilerDiagnostic[],
   mapOffset: (offset: number) => number,
 ): Promise<void> {
@@ -272,15 +302,32 @@ async function analyzePageFunction(
 
   const mappedProperties = await project.checker.getPropertiesOfType(mapped);
   const props: Record<string, PropSchema> = {};
+  const mappedEvidence: Record<string, CheckedTypeEvidence> = Object.create(null);
+  const authoredEvidence: Record<string, CheckedTypeEvidence> = Object.create(null);
 
   for (const property of mappedProperties) {
     const name = String(property.name);
 
     if (name.startsWith("__@")) continue;
 
+    if (includeStructuralEvidence) {
+      const mappedType = await project.checker.getTypeOfSymbol(property);
+      mappedEvidence[name] = mappedType
+        ? await captureStructuralEvidence(project, mappedType)
+        : { kind: "unproved", reason: "checker-error" };
+    }
+
     const authoredProperty = authoredProperties.find(
       (candidate) => String(candidate.name) === name,
     );
+
+    if (includeStructuralEvidence && authoredProperty) {
+      const authoredPropType = await project.checker.getTypeOfSymbol(authoredProperty);
+      authoredEvidence[name] = authoredPropType
+        ? await captureStructuralEvidence(project, authoredPropType)
+        : { kind: "unproved", reason: "checker-error" };
+    }
+
     const plain = name === "params" || name === "queryParams";
     let callback = false;
 
@@ -308,6 +355,11 @@ async function analyzePageFunction(
     parameterEnd: mapOffset(parameter.end),
     props,
   };
+  if (includeStructuralEvidence)
+    typeEvidenceByParameterStart[String(parameterStart)] = {
+      mapped: mappedEvidence,
+      ...(Object.keys(authoredEvidence).length ? { authored: authoredEvidence } : {}),
+    };
 }
 
 async function findBrandProperty(
