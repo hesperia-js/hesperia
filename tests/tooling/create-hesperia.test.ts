@@ -247,11 +247,28 @@ test("--host none creates the frontend-only starter without installing", async (
   const destination = join(root, "frontend-app");
 
   try {
-    const result = await runCreator(root, [destination, "--host", "none", "--no-install"]);
+    const result = await runCreator(root, [
+      destination,
+      "--host",
+      "none",
+      "--no-install",
+      "--json",
+    ]);
 
     expect(result.exitCode).toBe(0);
 
-    expect(result.stdout).toContain("Dependencies were not installed");
+    expect(result.stdout).toMatch(/^[^\r\n]+\r?\n$/u);
+    expect(JSON.parse(result.stdout)).toStrictEqual({
+      schemaVersion: 1,
+      status: "created",
+      projectRoot: destination,
+      packageName: "frontend-app",
+      installation: "skipped",
+      cleanup: { status: "not-needed", retainedPaths: [] },
+      retirement: "complete",
+    });
+    expect(result.stderr).toContain("Created frontend-app");
+    expect(result.stderr).toContain("Dependencies were not installed");
 
     expect(await readdir(destination)).not.toContain("node_modules");
 
@@ -315,10 +332,24 @@ test("rejects an unknown host before creating the destination", async () => {
   const destination = join(root, "invalid-app");
 
   try {
-    const result = await runCreator(root, [destination, "--host", "express", "--no-install"]);
+    const result = await runCreator(root, [
+      destination,
+      "--host",
+      "express",
+      "--no-install",
+      "--json",
+    ]);
 
     expect(result.exitCode).not.toBe(0);
 
+    expect(result.stdout).toMatch(/^[^\r\n]+\r?\n$/u);
+    expect(JSON.parse(result.stdout)).toStrictEqual({
+      schemaVersion: 1,
+      status: "failed",
+      message:
+        'Unknown host integration "express". Choose "elysia" or "none".\nUsage: bun create hesperia <destination> [--no-install] [--host <elysia|none>] [--json]',
+      retirement: "not-started",
+    });
     expect(result.stderr).toContain('Unknown host integration "express"');
 
     expect(await readdir(root)).toStrictEqual([]);
