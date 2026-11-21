@@ -190,6 +190,21 @@ export function admitCreatorWindowsConsole(onInterrupt) {
       };
     }
 
+    function observeMember(member) {
+      const retained = openMembers.get(member.handle);
+      if (
+        !retained ||
+        retained.pid !== member.pid ||
+        retained.creationFiletime !== member.creationFiletime
+      ) {
+        throw new Error("Unknown or changed retained member identity.");
+      }
+      const state = api.WaitForSingleObject(member.handle, 0);
+      if (state === 0x102) return { state: "live", ...recheckMember(member) };
+      if (state === 0) return { state: "exited", ...verifyExitedMember(member) };
+      throw new Error("Could not observe retained member state: " + state + ".");
+    }
+
     function verifyParent(child, parent) {
       if (child.pid === parent.pid) throw new Error("A process cannot be its own parent.");
       recheckMember(parent);
@@ -267,6 +282,7 @@ export function admitCreatorWindowsConsole(onInterrupt) {
       openVerifiedLiveMember,
       recheckMember,
       verifyExitedMember,
+      observeMember,
       verifyParent,
       closeMember(handle) {
         if (!openMembers.has(handle)) throw new Error("Unknown member handle.");

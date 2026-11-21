@@ -2,9 +2,11 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  fstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -48,6 +50,124 @@ let primaryFailed = false;
 let primaryError;
 const cleanupErrors = [];
 const retained = [];
+const progress = {
+  witness: { state: "not-created" },
+  cli: { state: "not-created" },
+  stdout: { state: "not-created" },
+  stderr: { state: "not-created" },
+};
+let phase = "admission";
+let dispatchAttempted = false;
+let dispatchReturn = null;
+const describeError = (error) => {
+  try {
+    return String(error).slice(0, 512);
+  } catch {
+    return "unprintable error";
+  }
+};
+const observePromise = (name, promise) => {
+  progress[name] = { state: "pending" };
+  void promise.then(
+    (value) => {
+      progress[name] =
+        typeof value === "string"
+          ? { state: "fulfilled", characters: value.length }
+          : { state: "fulfilled", value };
+    },
+    (error) => {
+      progress[name] = { state: "rejected", error: describeError(error) };
+    },
+  );
+};
+const observeHandle = (member) => {
+  if (!admission || !member) return { state: "not-retained" };
+  try {
+    return admission.observeMember(member);
+  } catch (error) {
+    return { state: "unavailable", error: describeError(error) };
+  }
+};
+const observeMarker = (path, jsonLines = false) => {
+  let fd;
+  let result;
+  try {
+    fd = openSync(path, "r");
+    const buffer = Buffer.alloc(8193);
+    const bytes = readSync(fd, buffer, 0, buffer.length, 0);
+    const truncated = bytes > 8192 || fstatSync(fd).size > bytes;
+    const text = buffer.subarray(0, Math.min(bytes, 8192)).toString("utf8");
+    const records = [];
+    let badRecords = 0;
+    let incompleteFinalLine = false;
+    const summarize = (item) => {
+      try {
+        const record = JSON.parse(item);
+        if (!record || typeof record !== "object" || Array.isArray(record)) {
+          badRecords++;
+          return;
+        }
+        const event = ["spawned", "exited", "kill-invoked", "kill-returned", "kill-threw"].includes(
+          record.event,
+        )
+          ? record.event
+          : "other";
+        const summary = {
+          event,
+          identityMatches:
+            record.nonce === nonce &&
+            record.cliPid === cliChild?.pid &&
+            installer !== undefined &&
+            record.installerPid === installer.pid,
+        };
+        if (jsonLines) {
+          summary.signal =
+            Array.isArray(record.args) && record.args.length === 1 && record.args[0] === "SIGINT"
+              ? "SIGINT"
+              : "different";
+          summary.sameReceiver =
+            typeof record.sameReceiver === "boolean" ? record.sameReceiver : null;
+        } else if (path === exitedPath) {
+          summary.exitCode =
+            typeof record.exitCode === "number" && Number.isFinite(record.exitCode)
+              ? record.exitCode
+              : null;
+          summary.signal =
+            record.signalCode === null
+              ? null
+              : record.signalCode === "SIGINT"
+                ? "SIGINT"
+                : "different";
+        }
+        records.push(summary);
+      } catch {
+        badRecords++;
+      }
+    };
+    if (jsonLines) {
+      const lines = text.split("\n");
+      incompleteFinalLine = lines.pop().length > 0;
+      for (const line of lines) summarize(line);
+    } else if (!truncated) {
+      summarize(text);
+    }
+    result = { state: truncated ? "truncated" : "read", badRecords, incompleteFinalLine, records };
+  } catch (error) {
+    result =
+      error?.code === "ENOENT"
+        ? { state: "absent-at-snapshot" }
+        : { state: "unavailable", error: describeError(error) };
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch (error) {
+        result = { ...result, closeError: describeError(error) };
+      }
+    }
+  }
+  return result;
+};
 try {
   admission = admitCreatorWindowsConsole(() => {
     throw new Error("Controller received Ctrl+C.");
@@ -63,7 +183,8 @@ try {
     },
   );
   witnessExit = witnessChild.exited;
-  void witnessExit.catch(() => {});
+  observePromise("witness", witnessExit);
+  phase = "witness-readiness";
   const witnessDeadline = Date.now() + 10000;
   while (!existsSync(witnessReady) && Date.now() < witnessDeadline) await wait(20);
   requireValue(existsSync(witnessReady), "Witness did not start.");
@@ -95,6 +216,7 @@ try {
     registry.protocol === "http:" && registry.hostname === "127.0.0.1",
     "Registry is not loopback.",
   );
+  phase = "cli-start";
   cliChild = Bun.spawn(
     [process.execPath, "--preload", observer, entry, destination, "--json", "--host", "none"],
     {
@@ -106,11 +228,12 @@ try {
   );
   const deadline = Date.now() + 30000;
   cliExit = cliChild.exited;
-  void cliExit.catch(() => {});
+  observePromise("cli", cliExit);
   let stdout = new Response(cliChild.stdout).text();
-  void stdout.catch(() => {});
+  observePromise("stdout", stdout);
   let stderr = new Response(cliChild.stderr).text();
-  void stderr.catch(() => {});
+  observePromise("stderr", stderr);
+  phase = "installer-and-registry";
   let started;
   let held;
   while (Date.now() < deadline) {
@@ -146,6 +269,7 @@ try {
     await wait(50);
   }
   requireValue(Date.now() - holdStart <= 2500, "Installer hold exceeded its ceiling.");
+  phase = "census-and-dispatch";
   const expected = new Set(retained.map((member) => member.pid));
   const census = () => {
     const ids = admission.census();
@@ -172,7 +296,10 @@ try {
   requireValue(finalProof.live && finalProof.ageMs < 9000, "Registry request ended before Ctrl+C.");
   census();
   requireValue(Date.now() < deadline, "Creator cancellation deadline expired before Ctrl+C.");
-  requireValue(apiLibrary.symbols.GenerateConsoleCtrlEvent(0, 0) !== 0, "Ctrl+C was not accepted.");
+  dispatchAttempted = true;
+  dispatchReturn = apiLibrary.symbols.GenerateConsoleCtrlEvent(0, 0);
+  requireValue(dispatchReturn !== 0, "Ctrl+C was not accepted.");
+  phase = "terminal-promises";
   const remaining = () => Math.max(0, deadline - Date.now());
   let timer;
   const timeout = new Promise((_, reject) => {
@@ -182,6 +309,7 @@ try {
     Promise.all([witnessExit, cliExit, stdout, stderr]),
     timeout,
   ]).finally(() => clearTimeout(timer));
+  phase = "terminal-assertions";
   requireValue(/^[^\r\n]+\r?\n$/u.test(out), "Creator stdout was not one JSON record.");
   const witnessNativeExit = admission.verifyExitedMember(witness);
   const cliNativeExit = admission.verifyExitedMember(cli);
@@ -288,6 +416,32 @@ try {
 } catch (error) {
   primaryFailed = true;
   primaryError = error;
+  try {
+    const snapshot = {
+      phase,
+      dispatch: { attempted: dispatchAttempted, returnValue: dispatchReturn },
+      progress,
+      handles: {
+        witness: observeHandle(witness),
+        cli: observeHandle(cli),
+        installer: observeHandle(installer),
+      },
+      installer: {
+        started: observeMarker(startedPath),
+        kill: observeMarker(killPath, true),
+        exited: observeMarker(exitedPath),
+      },
+    };
+    process.stderr.write(`Creator failure snapshot: ${JSON.stringify(snapshot)}\n`);
+  } catch (snapshotError) {
+    try {
+      process.stderr.write(
+        `Creator failure snapshot unavailable: ${describeError(snapshotError)}\n`,
+      );
+    } catch (reportError) {
+      cleanupErrors.push(reportError);
+    }
+  }
   try {
     process.stderr.write(
       `Creator fixture failed; terminal receipt ${existsSync(join(outputRoot, "terminal-receipt.json")) ? "retained" : "unavailable"}: ${outputRoot}\n`,
