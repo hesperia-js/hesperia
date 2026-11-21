@@ -5,7 +5,7 @@ import { suppliedReleaseArchive } from "./release-candidate.ts";
 import { chromium } from "playwright";
 import { createRequire } from "node:module";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { arch, release, tmpdir, version } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const packageRoot = resolve(import.meta.dir, "../..");
@@ -413,101 +413,94 @@ async function cancelInstalledCreatorJson(
   }
 }
 
-async function observeTerminalSignalControl(
-  cwd: string,
-  entry: string,
-  env: Record<string, string | undefined>,
-  input: "string" | "bytes",
-): Promise<void> {
-  let output = "";
-  let ready = false;
-  let accepted: number | undefined;
-  let writeError: string | undefined;
-  let processExitObserved = false;
-  let terminalExitObserved = false;
-  let terminalExitCode: number | undefined;
-  let terminalExitSignal: string | null | undefined;
-  let finishOutput!: () => void;
-  const outputClosed = new Promise<void>((resolve) => {
-    finishOutput = resolve;
-  });
-  const decoder = new TextDecoder();
-  let child: ReturnType<typeof Bun.spawn> | undefined;
+interface WindowsCancellationResult {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly job: {
+    readonly remainingMembers: number;
+    readonly limitTerminations: number;
+    readonly disarmed: boolean;
+  };
+}
 
-  function sendInterrupt(): void {
-    if (!ready || accepted !== undefined || writeError !== undefined || !child?.terminal) return;
-    try {
-      accepted = child.terminal.write(input === "string" ? "\u0003" : Uint8Array.of(0x03));
-    } catch (error) {
-      writeError = String(error);
+async function cancelWindowsInstalledCreator(
+  driver: string,
+  entry: string,
+  destination: string,
+  registryUrl: string,
+  proofUrl: string,
+  cache: string,
+  outputRoot: string,
+): Promise<WindowsCancellationResult> {
+  const helper = Bun.spawn(
+    [
+      process.execPath,
+      join(import.meta.dir, "creator-windows-signal.mjs"),
+      driver,
+      entry,
+      destination,
+      registryUrl,
+      proofUrl,
+      cache,
+      outputRoot,
+    ],
+    { cwd: driver, stdout: "pipe", stderr: "pipe" },
+  );
+  const exit = helper.exited;
+  const stdout = new Response(helper.stdout).text();
+  const stderr = new Response(helper.stderr).text();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("Windows Creator fixture timed out")), 60_000);
+  });
+  let result: WindowsCancellationResult | undefined;
+  let fixtureFailed = false;
+  let fixtureError: unknown;
+  const cleanupErrors: unknown[] = [];
+  try {
+    const [code, out, err] = await Promise.race([Promise.all([exit, stdout, stderr]), timeout]);
+    if (code !== 0) throw new Error(`Windows Creator fixture failed (${code})\n${err}\n${out}`);
+    result = JSON.parse(out) as WindowsCancellationResult;
+    expect(result.job).toStrictEqual({ remainingMembers: 1, limitTerminations: 0, disarmed: true });
+    console.error(
+      "Windows Creator signal evidence: " +
+        JSON.stringify({ ...result, stdout: undefined, stderr: undefined }),
+    );
+  } catch (error) {
+    fixtureFailed = true;
+    fixtureError = error;
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (helper.exitCode === null) {
+      try {
+        helper.kill();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      try {
+        const retired = await Promise.race([
+          exit.then(() => true),
+          Bun.sleep(5000).then(() => false),
+        ]);
+        if (!retired)
+          cleanupErrors.push(new Error("Windows Creator fixture retirement is unconfirmed"));
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
     }
   }
-
-  child = Bun.spawn([process.execPath, entry], {
-    cwd,
-    env,
-    terminal: {
-      cols: 100,
-      rows: 30,
-      data(_terminal, bytes) {
-        output = (output + decoder.decode(bytes, { stream: true })).slice(-4096);
-        if (output.includes("__CONTROL_READY__")) ready = true;
-        sendInterrupt();
-      },
-      exit(_terminal, code, signal) {
-        terminalExitObserved = true;
-        terminalExitCode = code;
-        terminalExitSignal = signal;
-        output = (output + decoder.decode()).slice(-4096);
-        finishOutput();
-      },
-    },
-  });
-  sendInterrupt();
-  const childExit = child.exited.then((code) => {
-    processExitObserved = true;
-    return code;
-  });
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timedOut = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error("Terminal signal control timed out")), 10_000);
-  });
-
-  try {
-    const exitCode = await Promise.race([
-      Promise.all([childExit, outputClosed]).then(([code]) => code),
-      timedOut,
-    ]);
-    expect(exitCode).toBe(0);
-    expect(child.signalCode).toBeNull();
-    expect(terminalExitCode).toBe(0);
-    expect(terminalExitSignal).toBeNull();
-    expect(ready).toBe(true);
-    expect(accepted).toBe(1);
-    expect(output).toContain("__CONTROL_SIGINT__");
-  } finally {
-    console.error(
-      "Terminal signal control: " +
-        JSON.stringify({
-          input,
-          ready,
-          accepted,
-          writeError,
-          signalObserved: output.includes("__CONTROL_SIGINT__"),
-          processExitObserved,
-          processExitCode: child.exitCode,
-          processSignalCode: child.signalCode,
-          terminalExitObserved,
-          terminalExitCode,
-          terminalExitSignal,
-          terminalHandleClosed: child.terminal?.closed,
-          outputTail: normalizeTerminalOutput(output).slice(-2048),
-        }),
+  if (fixtureFailed && cleanupErrors.length > 0) {
+    throw new AggregateError(
+      [fixtureError, ...cleanupErrors],
+      "Windows Creator fixture and cleanup failed",
     );
-    if (timeout) clearTimeout(timeout);
-    if (!processExitObserved) await terminateIntegratedServerProcess(child);
-    if (child.terminal && !child.terminal.closed) child.terminal.close();
   }
+  if (fixtureFailed) throw fixtureError;
+  if (cleanupErrors.length > 0)
+    throw new AggregateError(cleanupErrors, "Windows Creator fixture cleanup failed");
+  if (!result) throw new Error("Windows Creator fixture produced no result");
+  return result;
 }
 
 test("packed creator defaults to Elysia and builds a selectable no-host application", async () => {
@@ -649,6 +642,9 @@ test("packed creator defaults to Elysia and builds a selectable no-host applicat
     let registryRequests = 0;
     let blockRegistry = false;
     let activeRegistryPath = "/";
+    let heldRequest: Request | undefined;
+    let heldAt = 0;
+    const proofPath = `/creator-signal-proof-${crypto.randomUUID()}`;
     let notifyInstallerStarted!: () => void;
     const installerStarted = new Promise<void>((resolve) => {
       notifyInstallerStarted = resolve;
@@ -658,9 +654,20 @@ test("packed creator defaults to Elysia and builds a selectable no-host applicat
       hostname: "127.0.0.1",
       port: 0,
       fetch(request) {
+        const pathname = new URL(request.url).pathname;
+        if (pathname === proofPath) {
+          return Response.json({
+            live: Boolean(heldRequest && !heldRequest.signal.aborted),
+            ageMs: heldAt ? Date.now() - heldAt : null,
+          });
+        }
         registryRequests++;
         if (blockRegistry) {
-          if (new URL(request.url).pathname.startsWith(activeRegistryPath)) {
+          if (pathname.startsWith(activeRegistryPath)) {
+            if (!heldRequest) {
+              heldRequest = request;
+              heldAt = Date.now();
+            }
             notifyInstallerStarted();
           }
           return new Promise<Response>((resolve) => blockedRequests.push(resolve));
@@ -774,89 +781,35 @@ AbortSignal.prototype.addEventListener = function (type, ...args) {
       blockRegistry = true;
       workspaceRemovable = false;
       const creatorEntry = join(driver, "node_modules/create-hesperia/dist/cli.js");
-      const comparisonFailures: unknown[] = [];
-      let signalPreload: string | undefined;
-
+      let cancelled: { readonly exitCode: number; readonly output: string };
       if (process.platform === "win32") {
         activeRegistryPath = "/direct/";
-        signalPreload = join(workspace, "creator-signal-observation.mjs");
-        const control = join(workspace, "creator-terminal-control.mjs");
-        await writeFile(
-          control,
-          [
-            'import { writeSync } from "node:fs";',
-            "const keepAlive = setInterval(() => {}, 1000);",
-            'process.once("SIGINT", () => { writeSync(1, "__CONTROL_SIGINT__\\n"); clearInterval(keepAlive); });',
-            'writeSync(1, "__CONTROL_READY__\\n");',
-          ].join("\n"),
+        const windows = await cancelWindowsInstalledCreator(
+          driver,
+          creatorEntry,
+          cancelledApplication,
+          new URL("direct/", registry.url).href,
+          new URL(proofPath, registry.url).href,
+          join(workspace, "json-cancel-cache"),
+          join(workspace, "windows-cancellation-observation"),
         );
-        console.error(
-          "Terminal control host: " +
-            JSON.stringify({
-              platform: process.platform,
-              architecture: arch(),
-              release: release(),
-              version: version(),
-              imageOS: process.env.ImageOS,
-              imageVersion: process.env.ImageVersion,
-              bunVersion: Bun.version,
-              bunRevision: Bun.revision,
-              executable: process.execPath,
-            }),
-        );
-        const controlEnv = {
-          ...process.env,
-          BUN_CONFIG_REGISTRY: new URL("direct/", registry.url).href,
-          BUN_INSTALL_CACHE_DIR: join(workspace, "json-cancel-cache"),
-        };
-        for (const input of ["string", "bytes"] as const) {
-          try {
-            await observeTerminalSignalControl(driver, control, controlEnv, input);
-          } catch (error) {
-            comparisonFailures.push(error);
-          }
-        }
-        await writeFile(
-          signalPreload,
-          [
-            'import { writeSync } from "node:fs";',
-            'process.on("SIGINT", () => writeSync(2, "__CREATOR_CLI_SIGINT__\\n"));',
-          ].join("\n"),
-        );
-      }
-
-      let cancelled: Awaited<ReturnType<typeof cancelInstalledCreatorJson>> | undefined;
-      try {
-        cancelled = await cancelInstalledCreatorJson(
+        cancelled = { exitCode: windows.exitCode, output: windows.stderr + windows.stdout };
+      } else {
+        const terminal = await cancelInstalledCreatorJson(
           driver,
           creatorEntry,
           cancelledApplication,
           {
             ...process.env,
-            BUN_CONFIG_REGISTRY:
-              process.platform === "win32"
-                ? new URL("direct/", registry.url).href
-                : registry.url.href,
+            BUN_CONFIG_REGISTRY: registry.url.href,
             BUN_INSTALL_CACHE_DIR: join(workspace, "json-cancel-cache"),
           },
           installerStarted,
-          signalPreload,
         );
-        if (signalPreload) {
-          console.error("Direct Creator cancellation completed: " + cancelled.output.slice(-4096));
-          expect(cancelled.output).toContain("__CREATOR_CLI_SIGINT__");
-        }
-      } catch (error) {
-        comparisonFailures.push(error);
+        expect(terminal.interruptBytes).toBe(1);
+        expect(terminal.terminalExitObserved).toBe(true);
+        cancelled = terminal;
       }
-
-      if (comparisonFailures.length) {
-        throw new AggregateError(
-          comparisonFailures,
-          "Creator terminal cancellation comparison failed.",
-        );
-      }
-      if (!cancelled) throw new Error("Direct Creator cancellation produced no result.");
       const jsonStart = cancelled.output.lastIndexOf('{"schemaVersion":');
       expect(jsonStart).toBeGreaterThanOrEqual(0);
       const cancelledResult = JSON.parse(cancelled.output.slice(jsonStart).trim()) as Record<
@@ -866,8 +819,6 @@ AbortSignal.prototype.addEventListener = function (type, ...args) {
       workspaceRemovable = cancelledResult.retirement === "complete";
 
       expect(cancelled.exitCode).toBe(130);
-      expect(cancelled.interruptBytes).toBe(1);
-      expect(cancelled.terminalExitObserved).toBe(true);
       expect(cancelled.output).not.toContain("Choose a host integration:");
       expect(cancelled.output).toContain("Creation cancelled.");
       expect(cancelledResult.schemaVersion).toBe(1);
