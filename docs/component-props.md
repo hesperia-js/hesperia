@@ -25,6 +25,29 @@ The parent passes a string. The child calls `props.name()` to read it. A later
 change updates the rendered text through Aeolia's signals. The child normally
 keeps its existing lifetime, including its state and native elements.
 
+A named prop can also receive JSX. Declare its value as `Rendered` and read it
+through the prop accessor:
+
+```tsx
+import { type Component, type Rendered } from "hesperia";
+
+function Frame(props: Component.Props<{ icon: Rendered }>) {
+  return <main>{props.icon()}</main>;
+}
+
+export default function App() {
+  return (
+    <Frame
+      icon={
+        <svg>
+          <path d="M0 0 1 1" />
+        </svg>
+      }
+    />
+  );
+}
+```
+
 A component assigned to a variable can also use an arrow or a function
 expression, such as `const Greeting = function (props: Component.Props<Props>)`.
 Its declared props follow the same rules. A named function expression can refer

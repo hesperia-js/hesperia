@@ -678,7 +678,8 @@ function resolveProp(prop: CanonicalComponentProp, scope: Scope): CanonicalCompo
   if (prop.kind === "children")
     return { ...prop, children: prop.children.map((item) => resolveChild(item, scope)) };
 
-  if (prop.kind === "fallback") return { ...prop, child: resolveChild(prop.child, scope) };
+  if (prop.kind === "fallback" || prop.kind === "rendered")
+    return { ...prop, child: resolveChild(prop.child, scope) };
 
   return { ...prop, expression: resolveExpression(prop.expression, scope) };
 }

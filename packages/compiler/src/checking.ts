@@ -8,7 +8,11 @@ import { API, fileNameToDocumentURI, type Project } from "typescript/unstable/as
 import type { CompilerDiagnostic } from "./ir.ts";
 import { RouteScanError, scanRouteFiles } from "./scanner.ts";
 import { analyzeRouteModule } from "./route-analysis.ts";
-import { analyzeComponentProps } from "./props-analysis.ts";
+import {
+  analyzeComponentProps,
+  isPendingRenderedPropDiagnostic,
+  unprovedRenderedPropDiagnostics,
+} from "./props-analysis.ts";
 import { createOperationCallAnalyzer } from "./operation-call-analysis.ts";
 import { generatePageDeclarations, PAGE_DECLARATION_MARKER } from "./page-types.ts";
 import { analyzeBrowserCapabilities } from "./capability-analysis.ts";
@@ -568,6 +572,17 @@ async function createCheckingSession(
         modulePaths[index]!,
         view.mapOffset,
         captureTypingEvidence,
+        {
+          module: analysis.result.ir,
+          mapOffset: analysis.mapOffset ?? ((offset) => offset),
+          checkingSource: view.source,
+          helperFilename: jsxPath,
+        },
+      );
+      const renderedDiagnostics = unprovedRenderedPropDiagnostics(
+        componentProps,
+        analysis.result.ir,
+        analysis.mapOffset,
       );
       const operationCalls = await analyzeOperationCalls(modulePaths[index]!, view.mapOffset);
 
@@ -578,7 +593,8 @@ async function createCheckingSession(
         result: {
           ...analysis.result,
           diagnostics: [
-            ...analysis.result.diagnostics,
+            ...analysis.result.diagnostics.filter((item) => !isPendingRenderedPropDiagnostic(item)),
+            ...renderedDiagnostics,
             ...componentProps.diagnostics,
             ...operationCalls.diagnostics,
           ],
@@ -586,7 +602,10 @@ async function createCheckingSession(
       });
 
       viewDiagnostics.set(module.filename, [
-        ...(viewDiagnostics.get(module.filename) ?? []),
+        ...(viewDiagnostics.get(module.filename) ?? []).filter(
+          (item) => !isPendingRenderedPropDiagnostic(item),
+        ),
+        ...renderedDiagnostics,
         ...componentProps.diagnostics,
         ...operationCalls.diagnostics,
       ]);

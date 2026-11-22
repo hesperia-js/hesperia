@@ -17,10 +17,15 @@ import {
   type SourceSpan,
 } from "./ir.ts";
 import { generateModule, type ClientBinding } from "./generate.ts";
-import type { ComponentPropsAnalysis } from "./props-analysis.ts";
+import {
+  isPendingRenderedPropDiagnostic,
+  unprovedRenderedPropDiagnostics,
+  type ComponentPropsAnalysis,
+} from "./props-analysis.ts";
 import type { OperationCallAnalysis } from "./operation-call-analysis.ts";
 import { resolveModuleSemantics, type ModuleSemantics } from "./semantics.ts";
 import { lfLineStarts as lineStarts } from "./utils.ts";
+import { checkedAnalysisOrigin } from "./checking-origin.ts";
 
 interface SourceMap {
   readonly version: 3;
@@ -171,8 +176,21 @@ export function emitAnalysis(
   options: CompileOptions = {},
 ): CompileResult {
   const { result, normalized } = analysis;
+  const pendingRendered = unprovedRenderedPropDiagnostics(undefined, result.ir, analysis.mapOffset);
+  const renderedProof =
+    pendingRendered.length > 0 && checkedAnalysisOrigin(analysis)
+      ? analysis.componentProps
+      : undefined;
 
-  if (!normalized || result.diagnostics.some((item) => item.severity === "error")) return result;
+  const inputDiagnostics = [
+    ...result.diagnostics.filter((item) => !isPendingRenderedPropDiagnostic(item)),
+    ...(renderedProof
+      ? unprovedRenderedPropDiagnostics(renderedProof, result.ir, analysis.mapOffset)
+      : pendingRendered),
+  ];
+
+  if (!normalized || inputDiagnostics.some((item) => item.severity === "error"))
+    return { ...result, code: "", diagnostics: inputDiagnostics };
 
   const filename = options.filename ?? "module.tsx";
   const runtimeModule = options.runtimeModule ?? "hesperia/runtime";
@@ -181,8 +199,9 @@ export function emitAnalysis(
     analysis.componentProps,
     analysis.operationCalls,
     analysis.mapOffset,
+    renderedProof,
   );
-  const diagnostics = [...result.diagnostics, ...obsoleteNavigationDiagnostics(ir)];
+  const diagnostics = [...inputDiagnostics, ...obsoleteNavigationDiagnostics(ir)];
   const clientBindings = resolveClientBindings(ir);
   const generated = generateModule(ir, {
     filename,
@@ -657,6 +676,7 @@ function attachCheckedMetadata(
   analysis: ComponentPropsAnalysis | undefined,
   operationCalls: OperationCallAnalysis | undefined,
   normalizedToAuthored: ((offset: number) => number) | undefined,
+  renderedProof: ComponentPropsAnalysis | undefined,
 ): CanonicalModule {
   if (!analysis && !operationCalls) return module;
 
@@ -709,7 +729,14 @@ function attachCheckedMetadata(
     return copy;
   };
 
-  return map(module) as CanonicalModule;
+  const mapped = map(module) as CanonicalModule;
+  return {
+    ...mapped,
+    diagnostics: [
+      ...mapped.diagnostics.filter((item) => !isPendingRenderedPropDiagnostic(item)),
+      ...unprovedRenderedPropDiagnostics(renderedProof, module),
+    ],
+  };
 }
 
 function hasUnsafeHTML(value: unknown): boolean {

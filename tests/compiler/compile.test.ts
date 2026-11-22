@@ -12,6 +12,8 @@ import {
   checkVirtualModule,
   compile,
 } from "../../packages/compiler/src/index.ts";
+import { analyzeModule, emitAnalysis } from "../../packages/compiler/src/compilation.ts";
+import { openCheckingProject } from "../../packages/compiler/src/checking.ts";
 
 const runtimeFixtureRoot = join(import.meta.dir, "fixtures/applications/runtime-semantics");
 
@@ -32,6 +34,82 @@ async function importGenerated<T extends object>(code: string): Promise<T> {
 }
 
 describe("compiler foundation", () => {
+  test("renders checked named JSX props through the caller's component", async () => {
+    const source = `import { type Component, type Rendered } from "hesperia";
+function Slot(props: Component.Props<{ icon: Rendered }>) {
+  return <main>{props.icon()}</main>;
+}
+export function App() {
+  return <Slot icon={<svg id="named-icon"><path d="M0 0 1 1" /></svg>} />;
+}`;
+    const compiled = await compile(source, { filename: "named-rendered-props.tsx" });
+    expect(compiled.diagnostics).toEqual([]);
+    const generated = await importGenerated<{ App: Component<Record<string, never>> }>(
+      compiled.code,
+    );
+    const window = new Window();
+    const target = window.document.createElement("div");
+    let application: ReturnType<typeof mount> | undefined;
+    try {
+      application = mount(target as unknown as Element, generated.App, {});
+      await application.settled();
+      expect(target.querySelectorAll("#named-icon")).toHaveLength(1);
+      expect(target.querySelector("#named-icon")?.namespaceURI).toBe("http://www.w3.org/2000/svg");
+    } finally {
+      application?.dispose();
+      await window.happyDOM.close();
+    }
+  });
+
+  test("refuses named JSX emission without a checked ordinary prop contract", async () => {
+    for (const parameter of ["{ icon: unknown }", "Component.Props<{ icon: string }>"]) {
+      const compiled = await compile(
+        `import { type Component } from "hesperia";
+function Slot(props: ${parameter}) { return null; }
+export function App() { return <Slot icon={<svg />} />; }`,
+        { filename: "unproved-rendered-prop.tsx" },
+      );
+      expect(compiled.diagnostics).toContainEqual(
+        expect.objectContaining({ code: "HES-EXPRESSION" }),
+      );
+      expect(compiled.code).toBe("");
+    }
+
+    const raw = analyzeModule(
+      `import { type Component, type Rendered } from "hesperia";
+function Slot(props: Component.Props<{ icon: Rendered }>) { return null; }
+export function App() { return <Slot icon={<svg />} />; }`,
+      { filename: "raw-rendered-prop.tsx" },
+    );
+    const emitted = emitAnalysis({ ...raw, result: { ...raw.result, diagnostics: [] } });
+    expect(emitted.diagnostics).toContainEqual(expect.objectContaining({ code: "HES-EXPRESSION" }));
+    expect(emitted.code).toBe("");
+  });
+
+  test("requires the issuing checking session to remain active for named JSX emission", async () => {
+    const filename = "retired-rendered-prop.tsx";
+    const source = `import { type Component, type Rendered } from "hesperia";
+function Slot(props: Component.Props<{ icon: Rendered }>) { return <main>{props.icon()}</main>; }
+export function App() { return <Slot icon={<svg />} />; }`;
+    const session = await openCheckingProject([{ filename, source }]);
+    const analysis = session.analyses.get(filename);
+    expect(analysis).toBeDefined();
+    if (!analysis) throw new Error("The checking session did not retain its analysis.");
+    try {
+      expect(emitAnalysis(analysis).diagnostics).toEqual([]);
+      const copied = emitAnalysis({ ...analysis });
+      expect(copied.diagnostics).toContainEqual(
+        expect.objectContaining({ code: "HES-EXPRESSION" }),
+      );
+      expect(copied.code).toBe("");
+    } finally {
+      await session.dispose();
+    }
+    const retired = emitAnalysis(analysis);
+    expect(retired.diagnostics).toContainEqual(expect.objectContaining({ code: "HES-EXPRESSION" }));
+    expect(retired.code).toBe("");
+  });
+
   test("retains lazy native generator and delegated-yield semantics", async () => {
     const result = await compile(
       await readFile(join(runtimeFixtureRoot, "generators.ts"), "utf8"),
