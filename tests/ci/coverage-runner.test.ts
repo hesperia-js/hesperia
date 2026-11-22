@@ -129,7 +129,7 @@ function lcovCount(record: string, name: "LH" | "FNH"): number {
   return match ? Number(match[1]) : 0;
 }
 
-test("coverage runner separates Creator child fragments from ordinary parent template hits", () => {
+test("coverage runner captures Creator engine hits separately in CLI children and the ordinary parent", () => {
   const result = runCoverageOwner(creatorOwnerPath);
 
   expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -161,9 +161,11 @@ test("coverage runner separates Creator child fragments from ordinary parent tem
   const creatorImplementationPath = resolve(repoPath, "packages/create-hesperia/src/creator.ts");
 
   expect(
-    creatorFragments.every(({ artifact }) =>
-      Object.values(artifact.coverage).every(
-        (file) => resolve(file.path) !== creatorImplementationPath,
+    creatorFragments.some(({ artifact }) =>
+      Object.values(artifact.coverage).some(
+        (file) =>
+          resolve(file.path) === creatorImplementationPath &&
+          Object.values(file.s).some((count) => count > 0),
       ),
     ),
   ).toBe(true);

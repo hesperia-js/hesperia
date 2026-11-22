@@ -23,6 +23,21 @@ Run `bunx create-hesperia@alpha --help` to see the available options, or use
 `--version` to print the installed creator version. These options run on their
 own and do not create an application.
 
+Use `--json` for a noninteractive command that writes one final JSON object to
+stdout. Progress, installer output, and diagnostics go to stderr. The result has
+`schemaVersion: 1`, a `status` of `created`, `failed`, or `cancelled`, and a
+`retirement` of `not-started`, `complete`, or `incomplete`. It includes
+`projectRoot` and `packageName` when known, `installation` only when confirmed,
+an optional failure `message`, and a `cleanup` report when one exists. Unknown
+optional fields are omitted.
+
+`cleanup` describes generated files. `retirement` is `not-started` when the
+creator engine was not invoked, `complete` when its owned file work and direct
+installer have finished, and `incomplete` when that could not be confirmed at
+the time of the result. An incomplete result is not updated later. Retirement
+does not report the lifetime of the caller's output streams or other processes.
+The command keeps its existing exit codes.
+
 Choose the frontend-only starter explicitly and install its dependencies later:
 
 ```sh
