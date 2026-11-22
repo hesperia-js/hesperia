@@ -28,6 +28,7 @@ const launcherPath = resolve(repoPath, "scripts/ci/coverage-owner-launcher.ts");
 const runnerPath = resolve(repoPath, "scripts/ci/run-coverage.ts");
 const cssOwnerPath = resolve(repoPath, "tests/tooling/css-integrations.test.ts");
 const projectWorkerOwnerPath = resolve(repoPath, "tests/tooling/project-worker.test.ts");
+const analyzeProjectOwnerPath = resolve(repoPath, "tests/tooling/analyze-project.test.ts");
 const creatorOwnerPath = resolve(repoPath, "tests/tooling/create-hesperia.test.ts");
 const fixtureRoot = resolve(repoPath, "scripts/ci/fixtures");
 const bootstrapSources = [
@@ -74,6 +75,7 @@ function parseSummary(stdout: string, stderr: string): CoverageRunSummary | unde
 function runCoverageOwner(
   ownerPath: string,
   env: Record<string, string | undefined> = {},
+  timeout = 120_000,
 ): {
   readonly status: number | null;
   readonly stdout: string;
@@ -85,7 +87,7 @@ function runCoverageOwner(
     env: { ...process.env, ...env },
     encoding: "utf8",
     maxBuffer: 8 * 1024 * 1024,
-    timeout: 120_000,
+    timeout,
   });
   const stdout = child.stdout ?? "";
   const stderr = child.stderr ?? "";
@@ -154,7 +156,7 @@ test("coverage runner captures Creator engine hits separately in CLI children an
     name.startsWith(`${summary.runId}-bun-tests-creator-cli-`),
   );
 
-  expect(creatorFragments).toHaveLength(13);
+  expect(creatorFragments).toHaveLength(15);
 
   const creatorImplementationPath = resolve(repoPath, "packages/create-hesperia/src/creator.ts");
 
@@ -176,9 +178,9 @@ test("coverage runner captures Creator engine hits separately in CLI children an
 
   expect(
     childIdentities.map((identity) => Number(identity![1])).sort((left, right) => left - right),
-  ).toStrictEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+  ).toStrictEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
 
-  expect(new Set(childIdentities.map((identity) => identity![2])).size).toBe(13);
+  expect(new Set(childIdentities.map((identity) => identity![2])).size).toBe(15);
 
   const parentFragments = namedArtifacts.filter(({ name }) =>
     name.startsWith(`${summary.runId}-bun-tests-coverage-runner-hits-`),
@@ -387,6 +389,43 @@ test("coverage runner captures each compiled project worker process under its ow
 
   expect(lcovCount(workerLcov ?? "", "FNH")).toBeGreaterThan(0);
 }, 150_000);
+
+test("coverage runner records the typing-evidence TypeScript process", () => {
+  const result = runCoverageOwner(analyzeProjectOwnerPath, {}, 240_000);
+
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  const summary = result.summary;
+  if (!summary?.outputDirectory || summary.status !== "completed")
+    throw new Error(
+      `Project analysis coverage did not complete: ${result.stdout}\n${result.stderr}`,
+    );
+
+  const receipt = JSON.parse(
+    readFileSync(join(summary.outputDirectory, "worker-invocations.json"), "utf8"),
+  ) as {
+    untrackedSpawnCount: number;
+    invocations: { parentPid: number }[];
+    supportInvocations: {
+      parentPid: number;
+      childPid: number;
+      argv: string[];
+      spawnSucceeded: boolean;
+      terminationObserved: boolean;
+      exitCode: number;
+    }[];
+  };
+  const support = receipt.supportInvocations.filter(
+    (item) =>
+      item.argv[4] ===
+      "--callbacks=readFile,fileExists,directoryExists,getAccessibleEntries,realpath",
+  );
+
+  expect(receipt.untrackedSpawnCount).toBe(0);
+  expect(support.length).toBeGreaterThan(0);
+  expect(support.every((item) => item.parentPid === receipt.invocations[0]?.parentPid)).toBe(true);
+  expect(support.every((item) => item.childPid > 0 && item.spawnSucceeded)).toBe(true);
+  expect(support.every((item) => item.terminationObserved && item.exitCode === 0)).toBe(true);
+}, 300_000);
 
 test("a fresh launcher Bun run captures CSS and driver sources into the full current inventory", async () => {
   const inheritedOutput = await mkdtemp(join(tmpdir(), "hesperia-coverage-stale-output-"));

@@ -6,7 +6,170 @@ import { tmpdir } from "node:os";
 import { CheckingInputSnapshot } from "../../packages/compiler/src/checking-inputs.ts";
 import { checkProjectModules, openCheckingProject } from "../../packages/compiler/src/checking.ts";
 import { ModuleResolver } from "../../packages/compiler/src/module-resolution.ts";
+import { emitCheckingSession } from "../../packages/compiler/src/project-compilation.ts";
+import {
+  issuedProjectTypingEvidence,
+  registerMappedProjectCompilation,
+  requestTypingEvidenceCapture,
+} from "../../packages/compiler/src/typing-inputs.ts";
 import { normalizeFilename } from "../../packages/compiler/src/utils.ts";
+
+test("typing evidence stays tied to the actual emitted module population", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-typing-evidence-"));
+  const filename = join(root, "entry.ts");
+  let session: Awaited<ReturnType<typeof openCheckingProject>> | undefined;
+
+  try {
+    session = await openCheckingProject(
+      [{ filename, source: "export const value: string = 'ok';" }],
+      requestTypingEvidenceCapture({ root }),
+    );
+    const compilation = emitCheckingSession(session);
+    const evidence = issuedProjectTypingEvidence(compilation);
+    const emitted = compilation.modules.get(filename);
+
+    expect(compilation.checking.diagnostics.filter((item) => item.severity === "error")).toEqual(
+      [],
+    );
+    expect(emitted).toBeDefined();
+    expect(evidence).toMatchObject({
+      state: "sealed",
+      captureState: "incomplete-capture",
+      projectPolicy: { kind: "unproved" },
+      modulePopulationJoin: true,
+    });
+    expect(evidence?.modules.map((item) => item.filename)).toEqual([filename]);
+    expect(evidence?.unavailableTypeLocations).toContain("component-props");
+
+    const modules = compilation.modules as Map<string, NonNullable<typeof emitted>>;
+    modules.delete(filename);
+    expect(issuedProjectTypingEvidence(compilation)).toBeUndefined();
+    modules.set(filename, emitted!);
+    expect(issuedProjectTypingEvidence(compilation)).toBe(evidence);
+
+    const originalCode = emitted!.code;
+
+    try {
+      expect(Reflect.set(emitted!, "code", originalCode + "\n// changed output")).toBe(true);
+      expect(issuedProjectTypingEvidence(compilation)).toBeUndefined();
+    } finally {
+      Reflect.set(emitted!, "code", originalCode);
+    }
+
+    expect(issuedProjectTypingEvidence(compilation)).toBe(evidence);
+
+    const mapped = {
+      ...compilation,
+      checking: {
+        ...compilation.checking,
+        modules: compilation.checking.modules.map((module) => ({
+          ...module,
+          diagnostics: [...module.diagnostics],
+        })),
+      },
+      modules: new Map(
+        [...compilation.modules].map(
+          ([name, result]) => [name, { ...result, diagnostics: [...result.diagnostics] }] as const,
+        ),
+      ),
+    };
+
+    expect(registerMappedProjectCompilation(compilation, mapped)).toBe(true);
+    expect(issuedProjectTypingEvidence(mapped)).toBe(evidence);
+
+    const forgedCode = {
+      ...mapped,
+      modules: new Map([[filename, { ...emitted!, code: originalCode + "\n// changed output" }]]),
+    };
+
+    expect(registerMappedProjectCompilation(compilation, forgedCode)).toBe(false);
+    expect(issuedProjectTypingEvidence(forgedCode)).toBeUndefined();
+
+    const injectedDiagnostic = {
+      code: "HES-TEST",
+      severity: "error" as const,
+      message: "A projection cannot invent a diagnostic.",
+    };
+    const forgedOutputDiagnostics = {
+      ...mapped,
+      modules: new Map([[filename, { ...emitted!, diagnostics: [injectedDiagnostic] }]]),
+    };
+
+    expect(registerMappedProjectCompilation(compilation, forgedOutputDiagnostics)).toBe(false);
+    expect(issuedProjectTypingEvidence(forgedOutputDiagnostics)).toBeUndefined();
+
+    const forgedCheckingDiagnostics = {
+      ...mapped,
+      checking: {
+        ...mapped.checking,
+        diagnostics: [injectedDiagnostic],
+        modules: mapped.checking.modules.map((module) => ({
+          ...module,
+          diagnostics: [injectedDiagnostic],
+        })),
+      },
+    };
+
+    expect(registerMappedProjectCompilation(compilation, forgedCheckingDiagnostics)).toBe(false);
+    expect(issuedProjectTypingEvidence(forgedCheckingDiagnostics)).toBeUndefined();
+  } finally {
+    await session?.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("typing evidence rejects inconsistent mapped checking diagnostics", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-typing-diagnostics-"));
+  const filename = join(root, "entry.ts");
+  let session: Awaited<ReturnType<typeof openCheckingProject>> | undefined;
+
+  try {
+    session = await openCheckingProject(
+      [{ filename, source: "export const value: string = 42;" }],
+      requestTypingEvidenceCapture({ root }),
+    );
+    const compilation = emitCheckingSession(session);
+    const evidence = issuedProjectTypingEvidence(compilation);
+
+    expect(compilation.checking.diagnostics.some((item) => item.code === "TS2322")).toBe(true);
+    expect(compilation.modules.size).toBe(0);
+    expect(evidence).toMatchObject({ checkingHasErrors: true });
+
+    const checked = compilation.checking.modules.map((module) => ({
+      ...module,
+      diagnostics: module.diagnostics.map((item) => ({ ...item })),
+    }));
+    const mapped = {
+      ...compilation,
+      checking: {
+        ...compilation.checking,
+        modules: checked,
+        diagnostics: checked.flatMap((module) => module.diagnostics.map((item) => ({ ...item }))),
+      },
+      modules: new Map(compilation.modules),
+    };
+
+    expect(registerMappedProjectCompilation(compilation, mapped)).toBe(true);
+    expect(issuedProjectTypingEvidence(mapped)).toBe(evidence);
+
+    const inconsistent = {
+      ...mapped,
+      checking: {
+        ...mapped.checking,
+        diagnostics: mapped.checking.diagnostics.map((item, index) =>
+          index === 0 ? { ...item, message: `${item.message} (altered)` } : item,
+        ),
+      },
+    };
+
+    expect(registerMappedProjectCompilation(compilation, inconsistent)).toBe(false);
+    expect(issuedProjectTypingEvidence(inconsistent)).toBeUndefined();
+    expect(issuedProjectTypingEvidence(mapped)).toBe(evidence);
+  } finally {
+    await session?.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("captures a declaration on first existence check and keeps its bytes immutable", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-checking-inputs-"));
