@@ -135,8 +135,7 @@ test("the emitted check command updates route types and rejects stale parameter 
   expect(failed.output).toContain("uid");
 
   expect(failed.output).toContain("TS2339");
-  expect(failed.output).toContain("TS7053");
-  expect(failed.output).toContain("/users/[uid]");
+  expect(failed.output).toMatch(/TS(?:2551|7053):[^\n]*\/users\/\[uid\]/);
 
   expect(await readFile(join(root, "hesperia.d.ts"), "utf8")).toContain('"userId": string');
 

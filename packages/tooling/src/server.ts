@@ -11,14 +11,16 @@ import {
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import {
   createHost,
-  readBuild,
+  createTargetedHost,
   type ApplicationHost,
   type HostingAssetRecord,
   type HostingPublicFileRecord,
   type HostingRecordV1,
   type HostingRecordV2,
   type HostSelection,
+  type InProcessTargetedCapturedBuild,
 } from "@hesperia/hosting";
+import { readCompletedBuildDirectory } from "@hesperia/hosting/internal";
 import { prepareBuild, ProjectError, type BrowserBuild } from "./project.ts";
 import { isMissingFile } from "./utils.ts";
 
@@ -37,18 +39,68 @@ export async function previewProject(
   port = 4173,
   selection?: HostSelection,
 ): Promise<ProjectServer> {
-  const build = await readBuild(resolve(root, ".hesperia/build"));
-  const host = await createHost(build, selection);
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port,
-    fetch: (request) => host.handle(request) ?? new Response(null, { status: 404 }),
-  });
+  const build = await readCompletedBuildDirectory(resolve(root, ".hesperia/build"));
+  let host: ApplicationHost;
+  let closeHost: (() => Promise<void>) | undefined;
+
+  if ("control" in build) {
+    if (
+      build.control.kind !== "browser" ||
+      build.control.productionTarget.declaration.runtime !== "browser"
+    )
+      throw new ProjectError("Preview requires a browser/static target");
+
+    const resource = await createTargetedHost(build as InProcessTargetedCapturedBuild, selection);
+
+    if (resource.kind !== "browser") {
+      await resource.close();
+
+      throw new ProjectError("Preview requires a browser host");
+    }
+
+    host = resource.host;
+    closeHost = () => resource.close();
+  } else {
+    if ("serverFiles" in build) throw new ProjectError("Preview requires a browser build");
+
+    host = await createHost(build, selection);
+  }
+
+  let server: ReturnType<typeof Bun.serve>;
+
+  try {
+    server = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch: (request) => host.handle(request) ?? new Response(null, { status: 404 }),
+    });
+  } catch (cause) {
+    try {
+      await closeHost?.();
+    } catch (cleanup) {
+      throw new AggregateError([cause, cleanup], "Preview startup and host cleanup failed");
+    }
+
+    throw cause;
+  }
+
   return {
     url: server.url,
 
     async close() {
-      await server.stop(true);
+      try {
+        await server.stop(true);
+      } catch (cause) {
+        try {
+          await closeHost?.();
+        } catch (cleanup) {
+          throw new AggregateError([cause, cleanup], "Preview stop and host cleanup failed");
+        }
+
+        throw cause;
+      }
+
+      await closeHost?.();
     },
   };
 }

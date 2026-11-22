@@ -20,12 +20,15 @@
       "default": "./dist/index.js"
     },
     "./internal": {
-      "types": "./dist/internal/mount.d.ts",
-      "import": "./dist/internal/mount.js",
-      "default": "./dist/internal/mount.js"
+      "types": "./dist/internal/index.d.ts",
+      "import": "./dist/internal/index.js",
+      "default": "./dist/internal/index.js"
     }
   },
   "scripts": {
     "build": "bunx tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "hesperia": "workspace:*"
   }
 }

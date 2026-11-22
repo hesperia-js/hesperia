@@ -177,7 +177,7 @@ describe("createHost", () => {
   });
 
   test("accepts an explicit empty version 2 public inventory", async () => {
-    const { build } = await fixture();
+    const { build, sources } = await fixture();
     const publicBuild: CapturedPublicBuild = {
       hosting: { ...build.hosting, version: 2, publicFiles: [] },
       files: build.files,
@@ -449,7 +449,7 @@ describe("createHost", () => {
 
   test("rejects malformed records, mismatched maps, invalid digests and unsafe inventory paths", async () => {
     const badVersion = await fixture();
-    (badVersion.build.hosting as unknown as { version: number }).version = 0;
+    (badVersion.build.hosting as unknown as { version: number }).version = 4;
 
     await expect(createHost(badVersion.build)).rejects.toThrow("version");
 
