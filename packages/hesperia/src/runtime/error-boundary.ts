@@ -77,63 +77,67 @@ export function errorBoundary(
         return;
       }
 
-      let node = start.nextSibling;
+      owner.context.scheduler.reconcile(() => {
+        let node = start.nextSibling;
 
-      while (node && node !== end) {
-        const next = node.nextSibling;
+        while (node && node !== end) {
+          const next = node.nextSibling;
 
-        node.parentNode?.removeChild(node);
+          node.parentNode?.removeChild(node);
 
-        node = next;
-      }
-
-      const viewOwner = new Owner(owner.context, owner, `${owner.identity}/error`);
-
-      const readError = () => {
-        viewOwner.assertReadable();
-
-        return error;
-      };
-
-      let view: ReturnType<typeof prepareTree>;
-
-      try {
-        view = prepareTree(viewOwner, () => runComponentBody(() => fallback(viewOwner, readError)));
-
-        viewOwner.executingBody = false;
-      } catch (fallbackError) {
-        // A boundary's own view is outside its recovery scope. Forward its
-        // failure through the enclosing owner instead of selecting itself again.
-        reportFault(parent, fallbackError);
-
-        return;
-      }
-
-      const insertionParent = rangeParent();
-
-      if (!insertionParent) {
-        viewOwner.disposeSync(error);
-
-        disposeAfterForwarding(error);
-
-        return;
-      }
-
-      try {
-        insertionParent.insertBefore(view.fragment, end);
-
-        if (owner.state === "mounted") {
-          viewOwner.commit();
-
-          owner.context.scheduler.requestEffects();
+          node = next;
         }
-      } catch (fallbackError) {
-        viewOwner.disposeSync(fallbackError);
 
-        // A boundary's own view is outside its recovery scope. Forward its
-        // failure through the enclosing owner instead of selecting itself again.
-        reportFault(parent, fallbackError);
-      }
+        const viewOwner = new Owner(owner.context, owner, `${owner.identity}/error`);
+
+        const readError = () => {
+          viewOwner.assertReadable();
+
+          return error;
+        };
+
+        let view: ReturnType<typeof prepareTree>;
+
+        try {
+          view = prepareTree(viewOwner, () =>
+            runComponentBody(() => fallback(viewOwner, readError)),
+          );
+
+          viewOwner.executingBody = false;
+        } catch (fallbackError) {
+          // A boundary's own view is outside its recovery scope. Forward its
+          // failure through the enclosing owner instead of selecting itself again.
+          reportFault(parent, fallbackError);
+
+          return;
+        }
+
+        const insertionParent = rangeParent();
+
+        if (!insertionParent) {
+          viewOwner.disposeSync(error);
+
+          disposeAfterForwarding(error);
+
+          return;
+        }
+
+        try {
+          insertionParent.insertBefore(view.fragment, end);
+
+          if (owner.state === "mounted") {
+            viewOwner.commit();
+
+            owner.context.scheduler.requestEffects();
+          }
+        } catch (fallbackError) {
+          viewOwner.disposeSync(fallbackError);
+
+          // A boundary's own view is outside its recovery scope. Forward its
+          // failure through the enclosing owner instead of selecting itself again.
+          reportFault(parent, fallbackError);
+        }
+      });
     };
 
     let selected: void | PromiseLike<void>;

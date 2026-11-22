@@ -231,6 +231,13 @@ function browserHistoryEntry(entry: HistoryEntry): BrowserHistoryEntry {
   };
 }
 
+const reserveDisposal = Symbol("Router.reserveDisposal");
+
+/** @internal Close Router admission and reserve its once-only teardown. */
+export function reserveRouterDisposal(router: Router, reason?: unknown): () => void {
+  return router[reserveDisposal](reason) ?? (() => {});
+}
+
 /** Transactional browser navigation with explicit admission, departure, installation, and terminal phases. */
 export class Router {
   private readonly options: RouterOptions;
@@ -1541,11 +1548,27 @@ export class Router {
   }
 
   /** Cancel pending intent and release the committed route exactly once. */
-  dispose(reason: unknown = new RenderFault("disposed", "Router disposed")): void {
-    if (this.disposed) return;
+  dispose(reason?: unknown): void {
+    this[reserveDisposal](reason)?.();
+  }
+
+  [reserveDisposal](reason?: unknown): (() => void) | undefined {
+    if (this.disposed) return undefined;
 
     this.disposed = true;
     this.navigationRevision++;
+    this.restoreAfterCancellation = undefined;
+    let started = false;
+
+    return () => {
+      if (started) return;
+
+      started = true;
+      this.finishDisposal(reason);
+    };
+  }
+
+  private finishDisposal(reason: unknown = new RenderFault("disposed", "Router disposed")): void {
     this.restoreAfterCancellation = undefined;
 
     for (const remove of this.listeners) remove();

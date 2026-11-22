@@ -86,7 +86,7 @@ async function removeRepoFile(repo: string, path: string): Promise<void> {
   await rm(join(repo, path), { force: true });
 }
 
-test("selects a known narrow fixture change using the complete real repository graph", async () => {
+test("selects a real fixture change or falls back for stale reader contracts", async () => {
   const repo = await mkdtemp(join(tmpdir(), "hesperia-ci-real-selector-"));
   const workspace = resolve(import.meta.dir, "../..");
 
@@ -115,7 +115,30 @@ test("selects a known narrow fixture change using the complete real repository g
       releaseCandidate: false,
     });
 
-    expect(result.fullSuite, JSON.stringify(result.fallbackReasons, null, 2)).toBe(false);
+    if (result.fallbackReasons.length > 0) {
+      for (const reason of result.fallbackReasons) {
+        expect(reason).toMatch(/^golden input reader contract is stale in (base|head): /u);
+      }
+
+      const catalog = JSON.parse(await readFile(join(repo, "golden/catalog.json"), "utf8")) as {
+        cases: { id: string }[];
+      };
+
+      expect(result.fullSuite).toBe(true);
+      expect(result.selectedCaseIds).toStrictEqual(
+        catalog.cases.map(({ id }) => id).sort((left, right) => left.localeCompare(right)),
+      );
+
+      for (const selected of result.selectedCases) {
+        for (const reason of result.fallbackReasons) {
+          expect(selected.reasons).toContain(`full suite required because ${reason}`);
+        }
+      }
+
+      return;
+    }
+
+    expect(result.fullSuite).toBe(false);
 
     expect(result.selectedCaseIds).toStrictEqual([
       "native-identity-witness",

@@ -11,11 +11,16 @@ import {
   type MountedApplication,
   type Rendered,
 } from "./dom.ts";
-import { registerOwnerDisposalPromiseAlias, RenderFault } from "./owner.ts";
+import {
+  disposeOwnerWithAdmissionClose,
+  registerOwnerDisposalPromiseAlias,
+  RenderFault,
+} from "./owner.ts";
 import { bootstrapDataBindingRoot } from "../data/environment.ts";
 import { installRootProjectPolicy } from "./project-policy.ts";
 import { internalStyleBindingFor } from "./style.ts";
-import { reserveNavigation } from "../routing/navigation-api.ts";
+import { reserveNavigation, reserveNavigationRelease } from "../routing/navigation-api.ts";
+import { reserveRouterDisposal } from "../routing/navigation.ts";
 
 /** Deferred authored modules, evaluated only after browser history tracking is installed. */
 export interface ApplicationModules {
@@ -136,27 +141,37 @@ export async function bootstrapApplication(
 
       if (mode === "sync") void disposal.catch(() => undefined);
 
-      if (mode === "sync") {
-        try {
-          mountedRuntime.owner.disposeSync(reason);
-        } catch (cause) {
-          reporterFailure = { cause };
-        }
-      }
-
       let ownerRetirement: Promise<void> | undefined;
 
       try {
-        ownerRetirement = mountedRuntime.owner.dispose(reason);
+        ownerRetirement = disposeOwnerWithAdmissionClose(mountedRuntime.owner, mode, reason, () => {
+          const finishNavigation = reserveNavigationRelease(navigationReservation, reason);
+          const finishRouter = reserveRouterDisposal(mountedRouter, reason);
+
+          return () => {
+            for (const release of [finishNavigation, finishRouter]) {
+              try {
+                release();
+              } catch (cause) {
+                synchronousFailures.push(cause);
+              }
+            }
+          };
+        });
       } catch (cause) {
-        synchronousFailures.push(cause);
+        if (mode === "sync") {
+          reporterFailure = { cause };
+          try {
+            ownerRetirement = mountedRuntime.owner.dispose(reason);
+          } catch (failure) {
+            synchronousFailures.push(failure);
+          }
+        } else {
+          synchronousFailures.push(cause);
+        }
       }
 
-      for (const release of [
-        () => navigationReservation.release(reason),
-        () => mountedRouter.dispose(reason),
-        () => history?.release(),
-      ]) {
+      for (const release of [() => history?.release()]) {
         try {
           release();
         } catch (cause) {

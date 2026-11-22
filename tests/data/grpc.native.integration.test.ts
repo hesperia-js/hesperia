@@ -21,6 +21,8 @@ type JsonRecord = Record<string, unknown>;
 type ModuleResolutionRecord = {
   readonly hesperiaGrpc: string;
   readonly hesperiaGrpcNative: string;
+  readonly hesperiaRuntime: string;
+  readonly hesperiaAeolia: string;
   readonly connectNode: string;
   readonly protobuf: string;
   readonly aeolia: string;
@@ -372,6 +374,8 @@ function requireResolutionRecord(value: unknown): ModuleResolutionRecord {
   return {
     hesperiaGrpc: requireStringField(resolutions, "hesperiaGrpc"),
     hesperiaGrpcNative: requireStringField(resolutions, "hesperiaGrpcNative"),
+    hesperiaRuntime: requireStringField(resolutions, "hesperiaRuntime"),
+    hesperiaAeolia: requireStringField(resolutions, "hesperiaAeolia"),
     connectNode: requireStringField(resolutions, "connectNode"),
     protobuf: requireStringField(resolutions, "protobuf"),
     aeolia: requireStringField(resolutions, "aeolia"),
@@ -553,6 +557,7 @@ async function requireCanonicalFileUrl(
 
 const requiredChecks = [
   "query-mutation-effects",
+  "hesperia-owned-query",
   "error-details",
   "deadline",
   "unary-cancel",
@@ -572,6 +577,22 @@ test("native gRPC works through the emitted package on Node 22.23.2", async () =
   const nodeTypesPath = join(packageRoot, "node_modules", "@types", "node", "package.json");
   const publicIndexPath = join(packageRoot, "packages", "grpc", "dist", "index.js");
   const publicNativePath = join(packageRoot, "packages", "grpc", "dist", "native.js");
+  const hesperiaRuntimePath = join(
+    packageRoot,
+    "packages",
+    "hesperia",
+    "dist",
+    "runtime",
+    "index.js",
+  );
+  const hesperiaAeoliaPath = join(
+    packageRoot,
+    "packages",
+    "hesperia",
+    "dist",
+    "aeolia",
+    "index.js",
+  );
   const compileStdoutPath = join(evidenceDirectory, "compiler.stdout.log");
   const compileStderrPath = join(evidenceDirectory, "compiler.stderr.log");
   const probeStdoutPath = join(evidenceDirectory, "node-probe.stdout.log");
@@ -600,8 +621,22 @@ test("native gRPC works through the emitted package on Node 22.23.2", async () =
   let nodeProbeRecord:
     | { readonly nodeExecutable: string; readonly nodeVersion: string }
     | undefined;
-  let expectedPackageDistPaths: { readonly root: string; readonly native: string } | undefined;
-  let validatedPackageModulePaths: { readonly root: string; readonly native: string } | undefined;
+  let expectedPackageDistPaths:
+    | {
+        readonly root: string;
+        readonly native: string;
+        readonly hesperiaRuntime: string;
+        readonly hesperiaAeolia: string;
+      }
+    | undefined;
+  let validatedPackageModulePaths:
+    | {
+        readonly root: string;
+        readonly native: string;
+        readonly hesperiaRuntime: string;
+        readonly hesperiaAeolia: string;
+      }
+    | undefined;
 
   try {
     const nodeOverride = optionalAbsoluteEnvironmentPath("HESPERIA_GRPC_NODE");
@@ -612,6 +647,8 @@ test("native gRPC works through the emitted package on Node 22.23.2", async () =
     expectedPackageDistPaths = {
       root: await realpath(publicIndexPath),
       native: await realpath(publicNativePath),
+      hesperiaRuntime: await realpath(hesperiaRuntimePath),
+      hesperiaAeolia: await realpath(hesperiaAeoliaPath),
     };
 
     await realpath(compilerPath);
@@ -817,6 +854,16 @@ test("native gRPC works through the emitted package on Node 22.23.2", async () =
         moduleResolutions.hesperiaGrpcNative,
         publicNativePath,
         "@hesperia/grpc/native",
+      ),
+      hesperiaRuntime: await requireCanonicalFileUrl(
+        moduleResolutions.hesperiaRuntime,
+        hesperiaRuntimePath,
+        "hesperia/runtime",
+      ),
+      hesperiaAeolia: await requireCanonicalFileUrl(
+        moduleResolutions.hesperiaAeolia,
+        hesperiaAeoliaPath,
+        "hesperia/aeolia",
       ),
     };
 

@@ -613,10 +613,18 @@ export interface MountOptions {
 
 /** Mounted application lifetime and deterministic effect completion barrier. */
 export interface MountedApplication {
-  /** Revoke the application synchronously and join its owned cleanup work. Idempotent. */
+  /**
+   * Revoke immediately and join the same owned cleanup operation on every call.
+   * If this method starts disposal, its Promise rejects with the original cleanup failures
+   * in invocation order and does not also report them through `onError`.
+   */
   dispose(reason?: unknown): Promise<void>;
 
-  /** Revoke synchronously and report cleanup failures through the owner error route. */
+  /**
+   * Revoke immediately and report synchronous failures through `onError`.
+   * If this method starts disposal, later asynchronous failures are reported once through
+   * the same route. A later `dispose()` joins the retained outcome without rerunning cleanup.
+   */
   disposeSync(reason?: unknown): void;
 
   /** Resolve when pending DOM and effect passes have settled. */

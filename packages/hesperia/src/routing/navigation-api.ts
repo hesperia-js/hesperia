@@ -131,6 +131,16 @@ interface PendingDocumentReload {
 }
 
 const reservations = new WeakMap<Window, NavigationReservation>();
+const reserveRelease = Symbol("WindowNavigationReservation.reserveRelease");
+
+/** @internal Close navigation admission while retaining the Window claim until teardown. */
+export function reserveNavigationRelease(
+  reservation: NavigationReservation,
+  reason?: unknown,
+): () => void {
+  return (reservation as WindowNavigationReservation)[reserveRelease](reason) ?? (() => {});
+}
+
 const devHardReloadEvent = "hesperia:dev-hard-reload";
 
 interface DevHardReloadRequest {
@@ -506,17 +516,31 @@ class WindowNavigationReservation implements NavigationReservation {
     this.startup = false;
   }
 
-  release(
+  release(reason?: unknown): void {
+    this[reserveRelease](reason)?.();
+  }
+
+  [reserveRelease](reason?: unknown): (() => void) | undefined {
+    if (this.disposed) return undefined;
+
+    this.disposed = true;
+    let started = false;
+
+    return () => {
+      if (started) return;
+
+      started = true;
+      this.finishRelease(reason);
+    };
+  }
+
+  private finishRelease(
     reason: unknown = domException(
       this.window,
       "The routed application was disposed",
       "AbortError",
     ),
   ): void {
-    if (this.disposed) return;
-
-    this.disposed = true;
-
     this.nativeNavigation?.removeEventListener("navigate", this.nativeNavigateListener!);
 
     if (this.devHardReloadRequestListener)

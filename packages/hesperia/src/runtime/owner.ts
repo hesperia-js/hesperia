@@ -129,6 +129,7 @@ interface CleanupFailureSlot {
 }
 
 type OwnerRetirementMode = "sync" | "join";
+const closeOwnerAdmission = Symbol("Owner.closeAdmission");
 
 interface OwnerRetirementOperation {
   readonly initiator: Owner;
@@ -830,6 +831,15 @@ export class Owner {
     this.startRetirement("sync", reason, true);
   }
 
+  /** @internal Close routed admission after reserving this Owner retirement. */
+  [closeOwnerAdmission](
+    mode: OwnerRetirementMode,
+    reason: unknown = new RenderFault("cancelled", "Component removed"),
+    closeAdmission: () => () => void,
+  ): Promise<void> {
+    return this.startRetirement(mode, reason, mode === "sync", closeAdmission).promise;
+  }
+
   /** @internal Dispose synchronously while a host retains immediate failures. */
   disposeWithErrors(reason: unknown): readonly unknown[] {
     return this.startRetirement("sync", reason, false).synchronousFailures.slice();
@@ -839,6 +849,7 @@ export class Owner {
     mode: OwnerRetirementMode,
     reason: unknown,
     reportSynchronous: boolean,
+    closeAdmission?: () => () => void,
   ): OwnerRetirementOperation {
     const existing = ownerRetirementByOwner.get(this);
 
@@ -848,6 +859,15 @@ export class Owner {
       return existing;
     }
 
+    for (let parent = this.parent; parent; parent = parent.parent) {
+      const ancestor = ownerRetirementByOwner.get(parent);
+
+      if (ancestor && !ancestor.teardownFinished && parent.state === "cleaning") {
+        this.destroy(reason, ancestor);
+        return ancestor;
+      }
+    }
+
     const operation = makeOwnerRetirementOperation(this, mode, reportSynchronous);
     bindOwnerRetirementAliases(this, operation);
 
@@ -855,7 +875,7 @@ export class Owner {
 
     registerOwnerRetirement(operation);
 
-    this.destroy(reason, operation);
+    this.destroy(reason, operation, closeAdmission);
     operation.teardownFinished = true;
 
     if (
@@ -880,13 +900,16 @@ export class Owner {
     return operation;
   }
 
-  private destroy(reason: unknown, operation: OwnerRetirementOperation): void {
+  private destroy(
+    reason: unknown,
+    operation: OwnerRetirementOperation,
+    closeAdmission?: () => () => void,
+  ): void {
     const existing = ownerRetirementByOwner.get(this);
-    const ownerOperation = existing ?? operation;
     const wasRetiring = this.state === "cleaning" || this.state === "destroyed";
 
     if (existing && existing !== operation) {
-      if (this.parentOwner === null) this.retireDataBinding(ownerOperation, reason);
+      if (this.parentOwner === null) this.retireDataBinding(existing, reason);
 
       bindOwnerRetirementAliases(this, existing);
       dependOnOwnerRetirement(operation, existing);
@@ -899,9 +922,31 @@ export class Owner {
       this.state = "cleaning";
     }
 
-    if (this.parentOwner === null) this.retireDataBinding(ownerOperation, reason);
+    if (wasRetiring) {
+      if (this.parentOwner === null) this.retireDataBinding(existing ?? operation, reason);
 
-    if (wasRetiring) return;
+      return;
+    }
+
+    let finishAdmission: (() => void) | undefined;
+
+    if (closeAdmission) {
+      try {
+        finishAdmission = closeAdmission();
+      } catch (error) {
+        recordCleanupFailure(operation, error);
+      }
+    }
+
+    if (this.parentOwner === null) this.retireDataBinding(existing ?? operation, reason);
+
+    if (finishAdmission) {
+      try {
+        finishAdmission();
+      } catch (error) {
+        recordCleanupFailure(operation, error);
+      }
+    }
 
     try {
       this.controller.abort(reason);
@@ -993,6 +1038,16 @@ export class Owner {
       recordCleanupFailure(operation, error);
     }
   }
+}
+
+/** @internal Close application admission inside its actual root retirement. */
+export function disposeOwnerWithAdmissionClose(
+  owner: Owner,
+  mode: OwnerRetirementMode,
+  reason: unknown,
+  closeAdmission: () => () => void,
+): Promise<void> {
+  return owner[closeOwnerAdmission](mode, reason, closeAdmission);
 }
 
 /** @internal Associate a wrapper Promise with the Owner retirement it returns. */
