@@ -266,8 +266,6 @@ export function createTaskController<Input, Output, Prepared = Input>(
           try {
             stateCell.set({ status: "success", value, error: undefined });
           } catch (error) {
-            current = undefined;
-
             reportPublicationFailure(error);
 
             rejectPromise(error);
@@ -301,8 +299,6 @@ export function createTaskController<Input, Output, Prepared = Input>(
           try {
             stateCell.set({ status: "failure", value: undefined, error });
           } catch (publicationError) {
-            current = undefined;
-
             reportPublicationFailure(publicationError);
 
             rejectPromise(publicationError);

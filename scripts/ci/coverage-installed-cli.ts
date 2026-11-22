@@ -211,6 +211,7 @@ const creatorCliSource = "packages/create-hesperia/src/cli.ts";
 const creatorCliSources = [
   installedCliChildSource,
   creatorCliSource,
+  "packages/create-hesperia/src/creator.ts",
   "packages/create-hesperia/src/templates/elysia.ts",
   "packages/create-hesperia/src/templates/frontend.ts",
 ] as const;
