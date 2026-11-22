@@ -1,4 +1,5 @@
 import { GraphQLWsLink } from "@apollo/client/link/subscriptions";
+import { HttpLink } from "@apollo/client/link/http";
 import type { TypedDocumentNode } from "@apollo/client";
 import { createClient } from "graphql-ws";
 import { parse } from "graphql";
@@ -16,6 +17,15 @@ type NativeEventsData = {
 };
 
 type NativeEventsVariables = { readonly id: string };
+type IncrementalBoardData = {
+  readonly incrementalBoard: {
+    readonly items: readonly {
+      readonly id: string;
+      readonly title: string;
+      readonly details: string;
+    }[];
+  };
+};
 
 const session = new URLSearchParams(globalThis.location.search).get("session");
 
@@ -41,6 +51,28 @@ const subscriptionSocket = createClient({
   lazy: false,
 });
 const graphql = createGraphQLClient({ link: new GraphQLWsLink(subscriptionSocket) });
+const incrementalGraphql = createGraphQLClient({
+  link: new HttpLink({ uri: "/__graphql-native/graphql-incremental" }),
+  context: { headers: { "x-fixture-session": session } },
+  experimentalIncremental: { profile: "graphql17-v0.2" },
+});
+const incrementalBoardDocument = parse(`
+  query BrowserIncrementalBoard {
+    incrementalBoard {
+      items @stream(initialCount: 1, label: "browser-board-items") {
+        id
+        title
+        ... @defer(label: "browser-item-details") { details }
+      }
+    }
+  }
+`) as TypedDocumentNode<IncrementalBoardData, Record<string, never>>;
+const incrementalBoard = incrementalGraphql.query({
+  name: "browser.graphql.incremental-board",
+  document: incrementalBoardDocument,
+  key: () => "incremental-board",
+  revalidateAfterMs: 60_000,
+});
 
 const browserEventsNone = graphql.subscription({
   name: "browser.graphql.events.none",
@@ -64,7 +96,7 @@ const browserEventsIgnore = graphql.subscription({
 
 const contract = defineContract({
   namespace: "browser-graphql-native",
-  operations: { browserEventsNone, browserEventsAll, browserEventsIgnore },
+  operations: { browserEventsNone, browserEventsAll, browserEventsIgnore, incrementalBoard },
 });
 const graph = createGraph({ contract });
 export const api = withAeolia(graph, contract);
@@ -72,6 +104,7 @@ export const api = withAeolia(graph, contract);
 export function disposeGraphQL(): void {
   graph.dispose();
   graphql.stop();
+  incrementalGraphql.stop();
 }
 
 export async function resetGraphQLGraph(): Promise<void> {

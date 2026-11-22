@@ -1,4 +1,5 @@
 import type { GraphQLFormattedError } from "graphql";
+import type { DeepPartial } from "@apollo/client/utilities";
 
 /**
  * The fields available on a GraphQL response envelope.
@@ -26,6 +27,55 @@ export interface GraphQLResult<TData = unknown> {
   /** Additional response metadata returned by the server. */
   extensions?: Record<string, unknown>;
 }
+
+/**
+ * One cumulative result emitted by an explicitly enabled incremental query.
+ *
+ * @remarks
+ * `dataState` is Apollo's public assembly state from the same no-cache
+ * ObservableQuery. Intermediate observer emissions, including `streaming`
+ * states, can be reported while the retained `reobserve()` promise is pending.
+ * After that promise fulfills, Hesperia reads `getCurrentResult()` from the same
+ * query to determine its final assembly state. The promise returns data and
+ * errors but does not expose `dataState` or `loading`.
+ * Streaming data is `DeepPartial<TData> | TData`: deferred fields and streamed
+ * items may still be missing, and Apollo can type a streaming emission as
+ * `TData` before assembly completes. The `streaming` discriminator means
+ * Apollo's observer retains streaming assembly state. A terminal streaming
+ * value also requires an error-bearing `completed` entry in the same
+ * captured Link and an explicit terminal `hasNext: false`. Under `all`,
+ * the promise exposes CombinedGraphQLErrors. Under `ignore`, the capture
+ * retains raw error evidence while the result omits it. The adapter does not
+ * correlate completed IDs with pending IDs.
+ * Query progress remains active until the same native fetch and any bound
+ * output validation succeed.
+ *
+ * When the selected error policy permits them, `errors` contains errors captured
+ * from response frames once each. The `ignore` policy omits them.
+ * `extensions` contains the latest top-level extension value received from a
+ * response frame. It does not merge nested incremental extension values.
+ *
+ * @typeParam TData - The document's complete data shape.
+ */
+export type GraphQLProgress<TData = unknown> =
+  | (Omit<GraphQLResult<DeepPartial<TData>>, "data"> & {
+      /** Apollo reports a cumulative result with streaming assembly state. */
+      readonly dataState: "streaming";
+      /** Full or partial data from Apollo's current observer result. */
+      readonly data: TData | DeepPartial<TData> | null;
+    })
+  | (Omit<GraphQLResult<TData>, "data"> & {
+      /** Apollo reports empty state for the terminal null execution result. */
+      readonly dataState: "empty";
+      /** Strict null from the promise and same-query final observation. */
+      readonly data: null;
+    })
+  | (Omit<GraphQLResult<TData>, "data"> & {
+      /** Apollo reports complete assembly for this observer result. */
+      readonly dataState: "complete";
+      /** Complete data from Apollo's final observer result. */
+      readonly data: TData | null;
+    });
 
 /**
  * A standard `Error` annotated with the GraphQL response details available to
