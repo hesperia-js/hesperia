@@ -12,6 +12,10 @@ export function App({ argument }: { argument: string }) {
   const project = await EditorProject.create([
     { filename: "completion.tsx", source },
     {
+      filename: "src/routes/users/[id]/+page.tsx",
+      source: "export default function Page() { return <span>User</span>; }",
+    },
+    {
       filename: "completion-dependency.ts",
       source: "export const imported = 1; export const notImported = 2;",
     },
@@ -31,10 +35,11 @@ export function App({ argument }: { argument: string }) {
     ])
       expect(items.some((item) => item.label === name)).toBe(true);
 
+    expect(items.filter(({ label }) => label.startsWith("__hesperia_"))).toEqual([]);
+
     for (const name of [
       "hidden",
       "notImported",
-      "__hesperia_element",
       "HesperiaNativeAttributes",
       "HesperiaEventAttributes",
     ])
