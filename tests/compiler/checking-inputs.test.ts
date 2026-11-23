@@ -187,6 +187,201 @@ export function Page(props: Component.Props<{ title: string; serial: bigint }>) 
   }
 });
 
+test("typing evidence preserves object, instantiated and recursive prop contracts", async () => {
+  const filename = "checked-structural-props.tsx";
+  const source = `import { type Component } from "hesperia";
+interface Info { readonly label: string; count: number }
+interface Box<T> { value: T }
+interface Link<T> { value: T; next?: Link<T> }
+interface Lookup { readonly [key: string]: number }
+type Handler = <T extends string = "seed">(value: T) => T;
+declare class Secret { private hidden: string; visible: string }
+export function Page(props: Component.Props<{
+  info: Info;
+  box: Box<number>;
+  stringBox: Box<string>;
+  chain: Link<string>;
+  lookup: Lookup;
+  handler: Handler;
+  secret: Secret;
+}>) {
+  return <main>{props.info().label}</main>;
+}`;
+  const session = await openCheckingProject(
+    [{ filename, source }],
+    requestTypingEvidenceCapture({ root: join(import.meta.dir, "../..") }),
+  );
+
+  try {
+    const compilation = emitCheckingSession(session);
+    const evidence = issuedProjectTypingEvidence(compilation);
+
+    expect(compilation.checking.diagnostics.filter((item) => item.severity === "error")).toEqual(
+      [],
+    );
+    expect(compilation.modules.get(filename)?.code).toBeTruthy();
+    expect(evidence).toMatchObject({
+      state: "sealed",
+      captureState: "incomplete-capture",
+      checkingResultJoin: true,
+      analysisJoin: true,
+      modulePopulationJoin: true,
+    });
+    const module = evidence?.modules.find((item) => item.filename === filename);
+    const component = module?.components.find(
+      (item) => item.parameterStart === source.indexOf("props: Component"),
+    );
+
+    expect(module?.sourceDigest).toBe(
+      `sha256-${createHash("sha256").update(source).digest("hex")}`,
+    );
+    expect(module?.sourceJoin).toBe(true);
+    expect(component?.emittedComponentJoin).toBe("matched");
+    expect(component?.props.kind).toBe("props");
+
+    if (component?.props.kind !== "props") throw new Error("Expected checked component props");
+
+    const entries = component.props.entries;
+    const entry = (name: string) => entries.find((item) => item.name === name)?.mappedType;
+
+    expect(entry("info")).toMatchObject({
+      kind: "structural",
+      shape: {
+        kind: "reference",
+        arguments: [],
+        surface: {
+          properties: expect.arrayContaining([
+            expect.objectContaining({
+              name: "label",
+              readonly: true,
+              optional: false,
+              type: { kind: "primitive", name: "string" },
+            }),
+            expect.objectContaining({
+              name: "count",
+              readonly: false,
+              optional: false,
+              type: { kind: "primitive", name: "number" },
+            }),
+          ]),
+        },
+      },
+    });
+    const box = entry("box");
+
+    expect(box).toMatchObject({
+      kind: "structural",
+      shape: {
+        kind: "reference",
+        arguments: [{ kind: "primitive", name: "number" }],
+      },
+    });
+
+    if (box?.kind !== "structural" || box.shape.kind !== "reference")
+      throw new Error("Expected an instantiated Box reference");
+
+    expect(box.shape.surface.properties.find((item) => item.name === "value")).toMatchObject({
+      name: "value",
+      type: { kind: "type-parameter", identity: "$/surface/typeparam/0" },
+    });
+
+    const stringBox = entry("stringBox");
+
+    expect(stringBox).toMatchObject({
+      kind: "structural",
+      shape: { kind: "reference", arguments: [{ kind: "primitive", name: "string" }] },
+    });
+
+    if (stringBox?.kind !== "structural" || stringBox.shape.kind !== "reference")
+      throw new Error("Expected an instantiated Box<string> reference");
+
+    expect(stringBox.shape.surface.properties.find((item) => item.name === "value")).toMatchObject({
+      name: "value",
+      type: { kind: "type-parameter", identity: "$/surface/typeparam/0" },
+    });
+
+    const chain = entry("chain");
+
+    expect(chain).toMatchObject({
+      kind: "structural",
+      shape: {
+        kind: "reference",
+        arguments: [{ kind: "primitive", name: "string" }],
+      },
+    });
+
+    if (chain?.kind !== "structural" || chain.shape.kind !== "reference")
+      throw new Error("Expected an instantiated Link reference");
+
+    const next = chain.shape.surface.properties.find((item) => item.name === "next");
+
+    expect(next).toMatchObject({ name: "next", optional: true, type: { kind: "union" } });
+
+    if (next?.type.kind !== "union") throw new Error("Expected an optional recursive link");
+
+    expect(next.type.types).toContainEqual({ kind: "primitive", name: "undefined" });
+    expect(next.type.types.find((item) => item.kind === "recursive")).toMatchObject({
+      kind: "recursive",
+      path: "$/surface",
+    });
+
+    const lookup = entry("lookup");
+
+    expect(lookup).toMatchObject({ kind: "structural", shape: { kind: "reference" } });
+
+    if (lookup?.kind !== "structural" || lookup.shape.kind !== "reference")
+      throw new Error("Expected a checked Lookup reference");
+
+    expect(lookup.shape.surface.indexes).toHaveLength(1);
+    expect(lookup.shape.surface.indexes[0]).toMatchObject({
+      readonly: true,
+      key: { kind: "primitive", name: "string" },
+      type: { kind: "primitive", name: "number" },
+    });
+
+    const handler = entry("handler");
+
+    expect(handler).toMatchObject({ kind: "structural", shape: { kind: "reference" } });
+
+    if (handler?.kind !== "structural" || handler.shape.kind !== "reference")
+      throw new Error("Expected a checked Handler reference");
+
+    expect(handler.shape.surface.calls).toHaveLength(1);
+    const signature = handler.shape.surface.calls[0]!;
+
+    expect(signature.typeParameters).toHaveLength(1);
+    expect(signature.typeParameters[0]).toMatchObject({
+      kind: "type-parameter",
+      constraint: { kind: "primitive", name: "string" },
+      default: { kind: "literal", base: "string", value: "seed" },
+    });
+    expect(signature.parameters).toHaveLength(1);
+    expect(signature.parameters[0]).toMatchObject({
+      optional: false,
+      rest: false,
+      type: { kind: "type-parameter" },
+    });
+    expect(signature.returns).toMatchObject({ kind: "type-parameter" });
+
+    const typeParameter = signature.typeParameters[0];
+    const parameter = signature.parameters[0]?.type;
+    const returns = signature.returns;
+
+    if (
+      typeParameter?.kind !== "type-parameter" ||
+      parameter?.kind !== "type-parameter" ||
+      returns.kind !== "type-parameter"
+    )
+      throw new Error("Expected correlated generic signature types");
+
+    expect(parameter.identity).toBe(typeParameter.identity);
+    expect(returns.identity).toBe(typeParameter.identity);
+    expect(entry("secret")).toEqual({ kind: "unproved", reason: "nominal-origin" });
+  } finally {
+    await session.dispose();
+  }
+}, 120_000);
+
 test("typing evidence rejects inconsistent mapped checking diagnostics", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-typing-diagnostics-"));
   const filename = join(root, "entry.ts");
