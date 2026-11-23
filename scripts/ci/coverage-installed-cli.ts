@@ -211,10 +211,11 @@ const creatorCliSource = "packages/create-hesperia/src/cli.ts";
 const creatorCliSources = [
   installedCliChildSource,
   creatorCliSource,
+  "packages/create-hesperia/src/creator.ts",
   "packages/create-hesperia/src/templates/elysia.ts",
   "packages/create-hesperia/src/templates/frontend.ts",
 ] as const;
-const creatorParentInvocationLimit = 13;
+const creatorParentInvocationLimit = 15;
 let creatorParentInvocationCount = 0;
 const configuredPluginBuildChildMarker = "HESPERIA_COVERAGE_CONFIGURED_PLUGIN_BUILD_CHILD";
 const configuredPluginBuildChildConfig = "HESPERIA_COVERAGE_CONFIGURED_PLUGIN_BUILD_CONFIG";

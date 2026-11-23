@@ -58,6 +58,41 @@ async function runCreator(
   return { exitCode, stdout, stderr };
 }
 
+test("prints standalone help and version without creating a project", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-create-metadata-"));
+
+  try {
+    const help = await runCreator(root, ["--help"]);
+    const version = await runCreator(root, ["--version"]);
+    const manifest = JSON.parse(
+      await readFile(
+        new URL("../../packages/create-hesperia/package.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { version: string };
+
+    expect(help.exitCode).toBe(0);
+
+    expect(help.stderr).toBe("");
+
+    expect(help.stdout).toContain("Usage: bun create hesperia <destination>");
+
+    expect(help.stdout).toContain("--host <elysia|none>");
+
+    expect(help.stdout).toContain("--version");
+
+    expect(version.exitCode).toBe(0);
+
+    expect(version.stderr).toBe("");
+
+    expect(version.stdout).toBe(manifest.version + "\n");
+
+    expect(await readdir(root)).toStrictEqual([]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("requires an explicit destination and creates nothing when it is missing", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-create-no-destination-"));
 
@@ -247,11 +282,28 @@ test("--host none creates the frontend-only starter without installing", async (
   const destination = join(root, "frontend-app");
 
   try {
-    const result = await runCreator(root, [destination, "--host", "none", "--no-install"]);
+    const result = await runCreator(root, [
+      destination,
+      "--host",
+      "none",
+      "--no-install",
+      "--json",
+    ]);
 
     expect(result.exitCode).toBe(0);
 
-    expect(result.stdout).toContain("Dependencies were not installed");
+    expect(result.stdout).toMatch(/^[^\r\n]+\r?\n$/u);
+    expect(JSON.parse(result.stdout)).toStrictEqual({
+      schemaVersion: 1,
+      status: "created",
+      projectRoot: destination,
+      packageName: "frontend-app",
+      installation: "skipped",
+      cleanup: { status: "not-needed", retainedPaths: [] },
+      retirement: "complete",
+    });
+    expect(result.stderr).toContain("Created frontend-app");
+    expect(result.stderr).toContain("Dependencies were not installed");
 
     expect(await readdir(destination)).not.toContain("node_modules");
 
@@ -315,10 +367,24 @@ test("rejects an unknown host before creating the destination", async () => {
   const destination = join(root, "invalid-app");
 
   try {
-    const result = await runCreator(root, [destination, "--host", "express", "--no-install"]);
+    const result = await runCreator(root, [
+      destination,
+      "--host",
+      "express",
+      "--no-install",
+      "--json",
+    ]);
 
     expect(result.exitCode).not.toBe(0);
 
+    expect(result.stdout).toMatch(/^[^\r\n]+\r?\n$/u);
+    expect(JSON.parse(result.stdout)).toStrictEqual({
+      schemaVersion: 1,
+      status: "failed",
+      message:
+        'Unknown host integration "express". Choose "elysia" or "none".\nUsage: bun create hesperia <destination> [--no-install] [--host <elysia|none>] [--json]',
+      retirement: "not-started",
+    });
     expect(result.stderr).toContain('Unknown host integration "express"');
 
     expect(await readdir(root)).toStrictEqual([]);
@@ -447,6 +513,7 @@ test("retains the completed scaffold when a real installer fails", async () => {
     if (result.status !== "failed") throw new Error("Expected the installer to fail");
 
     expect(result.message).toContain("Dependency installation failed with exit code");
+    expect(result.retirement).toBe("complete");
     expect(result.projectRoot).toBe(destination);
     expect(result.cleanup).toStrictEqual({ status: "not-needed", retainedPaths: [] });
     expect(progress).toStrictEqual(["started"]);
@@ -579,6 +646,7 @@ test("reaps a running installer after cancellation and retains the scaffold", as
     expect(result.installer?.pid).toBe(observedInstaller?.pid);
     expect(result.installer?.reaped).toBe(true);
     expect(result.installer?.pendingResource).toBe(false);
+    expect(result.retirement).toBe("complete");
     expect(await readFile(join(destination, "app.tsx"), "utf8")).toContain("application");
   } finally {
     controller.abort();

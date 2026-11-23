@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import { ModuleResolver } from "../../packages/compiler/src/module-resolution.ts
 import { emitCheckingSession } from "../../packages/compiler/src/project-compilation.ts";
 import {
   issuedProjectTypingEvidence,
+  registerMappedProjectCompilation,
   requestTypingEvidenceCapture,
 } from "../../packages/compiler/src/typing-inputs.ts";
 import { normalizeFilename } from "../../packages/compiler/src/utils.ts";
@@ -38,12 +40,200 @@ test("typing evidence stays tied to the actual emitted module population", async
       modulePopulationJoin: true,
     });
     expect(evidence?.modules.map((item) => item.filename)).toEqual([filename]);
+    expect(evidence?.unavailableTypeLocations).toContain("component-props");
 
     const modules = compilation.modules as Map<string, NonNullable<typeof emitted>>;
     modules.delete(filename);
     expect(issuedProjectTypingEvidence(compilation)).toBeUndefined();
     modules.set(filename, emitted!);
     expect(issuedProjectTypingEvidence(compilation)).toBe(evidence);
+
+    const originalCode = emitted!.code;
+
+    try {
+      expect(Reflect.set(emitted!, "code", originalCode + "\n// changed output")).toBe(true);
+      expect(issuedProjectTypingEvidence(compilation)).toBeUndefined();
+    } finally {
+      Reflect.set(emitted!, "code", originalCode);
+    }
+
+    expect(issuedProjectTypingEvidence(compilation)).toBe(evidence);
+
+    const mapped = {
+      ...compilation,
+      checking: {
+        ...compilation.checking,
+        modules: compilation.checking.modules.map((module) => ({
+          ...module,
+          diagnostics: [...module.diagnostics],
+        })),
+      },
+      modules: new Map(
+        [...compilation.modules].map(
+          ([name, result]) => [name, { ...result, diagnostics: [...result.diagnostics] }] as const,
+        ),
+      ),
+    };
+
+    expect(registerMappedProjectCompilation(compilation, mapped)).toBe(true);
+    expect(issuedProjectTypingEvidence(mapped)).toBe(evidence);
+
+    const forgedCode = {
+      ...mapped,
+      modules: new Map([[filename, { ...emitted!, code: originalCode + "\n// changed output" }]]),
+    };
+
+    expect(registerMappedProjectCompilation(compilation, forgedCode)).toBe(false);
+    expect(issuedProjectTypingEvidence(forgedCode)).toBeUndefined();
+
+    const injectedDiagnostic = {
+      code: "HES-TEST",
+      severity: "error" as const,
+      message: "A projection cannot invent a diagnostic.",
+    };
+    const forgedOutputDiagnostics = {
+      ...mapped,
+      modules: new Map([[filename, { ...emitted!, diagnostics: [injectedDiagnostic] }]]),
+    };
+
+    expect(registerMappedProjectCompilation(compilation, forgedOutputDiagnostics)).toBe(false);
+    expect(issuedProjectTypingEvidence(forgedOutputDiagnostics)).toBeUndefined();
+
+    const forgedCheckingDiagnostics = {
+      ...mapped,
+      checking: {
+        ...mapped.checking,
+        diagnostics: [injectedDiagnostic],
+        modules: mapped.checking.modules.map((module) => ({
+          ...module,
+          diagnostics: [injectedDiagnostic],
+        })),
+      },
+    };
+
+    expect(registerMappedProjectCompilation(compilation, forgedCheckingDiagnostics)).toBe(false);
+    expect(issuedProjectTypingEvidence(forgedCheckingDiagnostics)).toBeUndefined();
+  } finally {
+    await session?.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("typing evidence retains checked JSX props and marks unsupported types", async () => {
+  const filename = "checked-origin-component.tsx";
+  const source = `import { type Component } from "hesperia";
+export function formatTitle(value: string) {
+  return value.trim();
+}
+export function Page(props: Component.Props<{ title: string; serial: bigint }>) {
+  return <main>{props.title()}</main>;
+}`;
+  const session = await openCheckingProject(
+    [{ filename, source }],
+    requestTypingEvidenceCapture({ root: join(import.meta.dir, "../..") }),
+  );
+
+  try {
+    const checking = session.result;
+    const analysis = session.analyses.get(filename);
+    const compilation = emitCheckingSession(session);
+    const evidence = issuedProjectTypingEvidence(compilation);
+    const sourceDigest = `sha256-${createHash("sha256").update(source).digest("hex")}`;
+
+    expect(checking.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(analysis?.componentProps?.diagnostics).toEqual([]);
+    expect(Object.keys(analysis?.componentProps?.byParameterStart ?? {})).toHaveLength(1);
+    expect(compilation.modules.get(filename)?.code).toBeTruthy();
+    expect(evidence).toMatchObject({
+      state: "sealed",
+      captureState: "incomplete-capture",
+      checkingResultJoin: true,
+      analysisJoin: true,
+      modulePopulationJoin: true,
+    });
+    expect(evidence?.unavailableTypeLocations).toContain("component-props");
+    expect(evidence?.modules.map((item) => item.filename)).toEqual([filename]);
+    const moduleEvidence = evidence?.modules[0];
+    expect(moduleEvidence?.sourceDigest).toBe(sourceDigest);
+    expect(moduleEvidence?.sourceJoin).toBe(true);
+    expect(moduleEvidence?.components).toHaveLength(1);
+    const component = moduleEvidence?.components[0];
+    expect(component?.emittedComponentJoin).toBe("matched");
+    expect(component?.parameterStart).toBe(source.indexOf("props: Component"));
+    expect(component?.props).toMatchObject({
+      kind: "props",
+      entries: [
+        {
+          name: "serial",
+          category: "value",
+          optional: false,
+          mappedType: { kind: "unproved", reason: "unsupported-type" },
+        },
+        {
+          name: "title",
+          category: "value",
+          optional: false,
+          mappedType: {
+            kind: "structural",
+            schema: 1,
+            algorithm: "ts-shape-v1",
+            shape: { kind: "primitive", name: "string" },
+          },
+        },
+      ],
+    });
+  } finally {
+    await session.dispose();
+  }
+});
+
+test("typing evidence rejects inconsistent mapped checking diagnostics", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-typing-diagnostics-"));
+  const filename = join(root, "entry.ts");
+  let session: Awaited<ReturnType<typeof openCheckingProject>> | undefined;
+
+  try {
+    session = await openCheckingProject(
+      [{ filename, source: "export const value: string = 42;" }],
+      requestTypingEvidenceCapture({ root }),
+    );
+    const compilation = emitCheckingSession(session);
+    const evidence = issuedProjectTypingEvidence(compilation);
+
+    expect(compilation.checking.diagnostics.some((item) => item.code === "TS2322")).toBe(true);
+    expect(compilation.modules.size).toBe(0);
+    expect(evidence).toMatchObject({ checkingHasErrors: true });
+
+    const checked = compilation.checking.modules.map((module) => ({
+      ...module,
+      diagnostics: module.diagnostics.map((item) => ({ ...item })),
+    }));
+    const mapped = {
+      ...compilation,
+      checking: {
+        ...compilation.checking,
+        modules: checked,
+        diagnostics: checked.flatMap((module) => module.diagnostics.map((item) => ({ ...item }))),
+      },
+      modules: new Map(compilation.modules),
+    };
+
+    expect(registerMappedProjectCompilation(compilation, mapped)).toBe(true);
+    expect(issuedProjectTypingEvidence(mapped)).toBe(evidence);
+
+    const inconsistent = {
+      ...mapped,
+      checking: {
+        ...mapped.checking,
+        diagnostics: mapped.checking.diagnostics.map((item, index) =>
+          index === 0 ? { ...item, message: `${item.message} (altered)` } : item,
+        ),
+      },
+    };
+
+    expect(registerMappedProjectCompilation(compilation, inconsistent)).toBe(false);
+    expect(issuedProjectTypingEvidence(inconsistent)).toBeUndefined();
+    expect(issuedProjectTypingEvidence(mapped)).toBe(evidence);
   } finally {
     await session?.dispose();
     await rm(root, { recursive: true, force: true });

@@ -50,6 +50,7 @@ component's lifetime.
 
 ## Read more
 
+- [Component cleanup and disposal](https://github.com/hesperia-js/hesperia/blob/main/packages/hesperia/docs/lifecycle.md)
 - [Server environment values (`hesperia/env`)](https://github.com/hesperia-js/hesperia/blob/main/packages/hesperia/docs/env.md)
 - [Native elements, bindings, and events](https://github.com/hesperia-js/hesperia/blob/main/docs/native-elements.md)
 - [Component props](https://github.com/hesperia-js/hesperia/blob/main/docs/component-props.md)
