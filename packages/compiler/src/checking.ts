@@ -556,6 +556,7 @@ async function createCheckingSession(
         project,
         modulePaths[index]!,
         view.mapOffset,
+        captureTypingEvidence,
       );
       const operationCalls = await analyzeOperationCalls(modulePaths[index]!, view.mapOffset);
 
