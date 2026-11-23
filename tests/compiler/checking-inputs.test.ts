@@ -382,6 +382,232 @@ export function Page(props: Component.Props<{
   }
 }, 120_000);
 
+async function captureAuthoredPropEvidence(filename: string, source: string) {
+  const session = await openCheckingProject(
+    [{ filename, source }],
+    requestTypingEvidenceCapture({ root: join(import.meta.dir, "../..") }),
+  );
+
+  try {
+    const compilation = emitCheckingSession(session);
+    const evidence = issuedProjectTypingEvidence(compilation);
+    const module = evidence?.modules.find((item) => item.filename === filename);
+
+    if (!evidence || !module) throw new Error("Expected issued evidence for the authored module");
+
+    return { diagnostics: compilation.checking.diagnostics, evidence, module };
+  } finally {
+    await session.dispose();
+  }
+}
+
+test("typing evidence preserves correlated indexed and conditional callback types", async () => {
+  const source = `import type { Component } from "hesperia";
+type Catalog = { title: string; count: number };
+type Select = <K extends keyof Catalog>(key: K, value: Catalog[K]) => K extends "title" ? \`title:\${string}\` : \`count:\${number}\`;
+export function Page(props: Component.Props<{ select: Select }>) {
+  return <main>{props.select("title", "ok")}</main>;
+}`;
+  const valid = await captureAuthoredPropEvidence("checked-indexed-callback.tsx", source);
+
+  expect(valid.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+  expect(valid.module.sourceJoin).toBe(true);
+  const component = valid.module.components.find(
+    (item) => item.parameterStart === source.indexOf("props: Component"),
+  );
+
+  expect(component?.emittedComponentJoin).toBe("matched");
+
+  if (component?.props.kind !== "props") throw new Error("Expected checked callback props");
+
+  const select = component.props.entries.find((item) => item.name === "select");
+
+  expect(select).toMatchObject({
+    name: "select",
+    category: "callback",
+    mappedType: { kind: "structural" },
+  });
+
+  if (select?.mappedType.kind !== "structural" || select.mappedType.shape.kind !== "reference")
+    throw new Error("Expected a checked callback reference");
+
+  const calls = select.mappedType.shape.surface.calls;
+
+  expect(calls).toHaveLength(1);
+  const signature = calls[0]!;
+  const typeParameter = signature.typeParameters[0];
+  const key = signature.parameters[0]?.type;
+  const value = signature.parameters[1]?.type;
+  const result = signature.returns;
+
+  expect(typeParameter).toMatchObject({
+    kind: "type-parameter",
+    constraint: {
+      kind: "union",
+      types: expect.arrayContaining([
+        { kind: "literal", base: "string", value: "title" },
+        { kind: "literal", base: "string", value: "count" },
+      ]),
+    },
+  });
+  expect(value).toMatchObject({ kind: "indexed-access", index: { kind: "type-parameter" } });
+  expect(result).toMatchObject({
+    kind: "conditional",
+    extends: { kind: "literal", base: "string", value: "title" },
+    whenTrue: {
+      kind: "template-literal",
+      texts: ["title:", ""],
+      types: [{ kind: "primitive", name: "string" }],
+    },
+    whenFalse: {
+      kind: "template-literal",
+      texts: ["count:", ""],
+      types: [{ kind: "primitive", name: "number" }],
+    },
+  });
+
+  if (
+    typeParameter?.kind !== "type-parameter" ||
+    key?.kind !== "type-parameter" ||
+    value?.kind !== "indexed-access" ||
+    value.index.kind !== "type-parameter" ||
+    result.kind !== "conditional" ||
+    result.check.kind !== "type-parameter"
+  )
+    throw new Error("Expected a correlated generic callback");
+
+  expect(key.identity).toBe(typeParameter.identity);
+  expect(value.index.identity).toBe(typeParameter.identity);
+  expect(result.check.identity).toBe(typeParameter.identity);
+
+  const invalid = await captureAuthoredPropEvidence(
+    "invalid-indexed-callback.tsx",
+    source.replace('props.select("title", "ok")', 'props.select("title", 1)'),
+  );
+
+  expect(
+    invalid.diagnostics.some((item) => item.code === "TS2345" && item.severity === "error"),
+  ).toBe(true);
+  expect(invalid.evidence.checkingHasErrors).toBe(true);
+  expect(invalid.module.sourceJoin).toBe(false);
+}, 120_000);
+
+test("typing evidence retains intrinsic string mapping and its generic parameter", async () => {
+  const source = `import type { Component } from "hesperia";
+type Upper = <T extends string>(value: T) => Uppercase<T>;
+export function Page(props: Component.Props<{ upper: Upper }>) {
+  return <main>{props.upper("ok")}</main>;
+}`;
+  const result = await captureAuthoredPropEvidence("checked-string-mapping.tsx", source);
+
+  expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+  expect(result.module.sourceJoin).toBe(true);
+  const component = result.module.components.find(
+    (item) => item.parameterStart === source.indexOf("props: Component"),
+  );
+
+  expect(component?.emittedComponentJoin).toBe("matched");
+
+  if (component?.props.kind !== "props") throw new Error("Expected checked string-mapping props");
+
+  const upper = component.props.entries.find((item) => item.name === "upper")?.mappedType;
+
+  if (upper?.kind !== "structural" || upper.shape.kind !== "reference")
+    throw new Error("Expected a checked intrinsic string-mapping callback");
+
+  expect(upper.shape.surface.calls).toHaveLength(1);
+  const upperCall = upper.shape.surface.calls[0]!;
+  const upperParameter = upperCall.typeParameters[0];
+  const upperReturn = upperCall.returns;
+
+  expect(upperParameter).toMatchObject({
+    kind: "type-parameter",
+    constraint: { kind: "primitive", name: "string" },
+  });
+  expect(upperReturn).toMatchObject({ kind: "string-mapping", operation: "Uppercase" });
+
+  if (
+    upperParameter?.kind !== "type-parameter" ||
+    upperReturn.kind !== "string-mapping" ||
+    upperReturn.target.kind !== "type-parameter"
+  )
+    throw new Error("Expected the intrinsic mapping to retain its type parameter");
+
+  expect(upperReturn.target.identity).toBe(upperParameter.identity);
+}, 120_000);
+
+test("typing evidence refuses unbound array and tuple surfaces", async () => {
+  const source = `import type { Component } from "hesperia";
+type Pair = readonly [label: string, count?: number];
+export function Page(props: Component.Props<{ pair: Pair; values: readonly string[] }>) {
+  return <main>{props.pair()[0]} {props.values()[0]}</main>;
+}`;
+  const result = await captureAuthoredPropEvidence("checked-collection-props.tsx", source);
+
+  expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+  expect(result.module.sourceJoin).toBe(true);
+  const component = result.module.components.find(
+    (item) => item.parameterStart === source.indexOf("props: Component"),
+  );
+
+  expect(component?.emittedComponentJoin).toBe("matched");
+
+  if (component?.props.kind !== "props") throw new Error("Expected checked collection props");
+
+  expect(component.props.entries.find((item) => item.name === "pair")?.mappedType).toEqual({
+    kind: "unproved",
+    reason: "free-instantiation",
+  });
+  expect(component.props.entries.find((item) => item.name === "values")?.mappedType).toEqual({
+    kind: "unproved",
+    reason: "free-instantiation",
+  });
+}, 120_000);
+
+test("typing evidence distinguishes the intrinsic iterator from a local symbol", async () => {
+  const genuine = await captureAuthoredPropEvidence(
+    "checked-intrinsic-iterator.tsx",
+    `import type { Component } from "hesperia";
+interface Sequence { [Symbol.iterator](): { next(): { value: string; done: boolean } } }
+export function Page(props: Component.Props<{ item: Sequence }>) { return <span>{props.item().toString()}</span>; }`,
+  );
+  const lookalike = await captureAuthoredPropEvidence(
+    "checked-local-iterator.tsx",
+    `import type { Component } from "hesperia";
+declare const token: unique symbol;
+const Symbol = { iterator: token } as const;
+interface Sequence { [Symbol.iterator](): string }
+export function Page(props: Component.Props<{ item: Sequence }>) { return <span>{props.item().toString()}</span>; }`,
+  );
+
+  for (const result of [genuine, lookalike]) {
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.module.sourceJoin).toBe(true);
+    expect(result.module.components[0]?.emittedComponentJoin).toBe("matched");
+  }
+
+  const genuineProps = genuine.module.components[0]?.props;
+  const localProps = lookalike.module.components[0]?.props;
+
+  if (genuineProps?.kind !== "props" || localProps?.kind !== "props")
+    throw new Error("Expected checked iterator props");
+
+  const genuineType = genuineProps.entries.find((item) => item.name === "item")?.mappedType;
+
+  expect(genuineType).toMatchObject({ kind: "structural", shape: { kind: "reference" } });
+
+  if (genuineType?.kind !== "structural" || genuineType.shape.kind !== "reference")
+    throw new Error("Expected the intrinsic iterator reference");
+
+  expect(
+    genuineType.shape.surface.properties.some((item) => item.name === "[Symbol.iterator]"),
+  ).toBe(true);
+  expect(localProps.entries.find((item) => item.name === "item")?.mappedType).toEqual({
+    kind: "unproved",
+    reason: "symbol-origin",
+  });
+}, 120_000);
+
 test("typing evidence rejects inconsistent mapped checking diagnostics", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-typing-diagnostics-"));
   const filename = join(root, "entry.ts");
