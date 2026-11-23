@@ -85,6 +85,8 @@ export interface ModuleAnalysis {
   readonly result: CompileResult;
   /** TypeScript-erased source and its map to authored source, when normalization succeeded. */
   readonly normalized?: { readonly code: string; readonly map?: unknown };
+  /** @internal Digest of the exact authored bytes supplied to this compiler analysis. */
+  readonly authoredSourceDigest?: string;
   /** Translate a normalized string offset to its authored offset for subsequent compiler stages. */
   readonly mapOffset?: (offset: number) => number;
   /** Native-checker prop contracts keyed by authored parameter offset. */
@@ -149,6 +151,7 @@ export function analyzeModule(source: string, options: CompileOptions = {}): Mod
   const semantics = resolveModuleSemantics(ir);
   return {
     normalized,
+    authoredSourceDigest: sha256(source),
     mapOffset: authoredOffset,
     result: {
       code: "",
