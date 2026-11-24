@@ -326,7 +326,7 @@ test("settled called during old content removal waits for the connected fallback
   } finally {
     releaseContent();
 
-    app.dispose();
+    await app.dispose();
   }
 });
 
