@@ -56,6 +56,41 @@ interface Owner extends CheckedSourceOrigin {
   readonly fixedResult: string;
 }
 
+interface DiagnosticOwner {
+  readonly project: Project;
+  readonly session: CheckingSession;
+  readonly inputSnapshot: CheckingInputSnapshot;
+  readonly isActive: () => boolean;
+  readonly sessionShape: string;
+  readonly analysisMap: ReadonlyMap<string, ModuleAnalysis>;
+  readonly viewMap: ReadonlyMap<string, CheckingView>;
+  readonly analysisEntries: readonly (readonly [string, ModuleAnalysis])[];
+  readonly viewEntries: readonly (readonly [string, CheckingView])[];
+  readonly analysisFacts: readonly {
+    readonly analysis: ModuleAnalysis;
+    readonly fingerprint: string;
+    readonly mapOffset: ModuleAnalysis["mapOffset"];
+  }[];
+  readonly viewFacts: readonly {
+    readonly nativeKey: string;
+    readonly view: CheckingView;
+    readonly source: string;
+    readonly diagnostics: string;
+    readonly mapOffset: CheckingView["mapOffset"];
+    readonly generatedOffset: CheckingView["generatedOffset"];
+  }[];
+  readonly finalFiles: ReadonlyMap<string, string>;
+  readonly dispose: CheckingSession["dispose"];
+  readonly fixedResult: string;
+}
+
+interface DiagnosticResultRecord {
+  readonly owner: DiagnosticOwner;
+  readonly result: ProjectCheckingResult;
+  readonly checkingInputs: ProjectCheckingResult["checkingInputs"];
+  readonly encoding: string;
+}
+
 const projectOwners = new WeakMap<Project, Owner>();
 const sessionOwners = new WeakMap<CheckingSession, Owner>();
 const analysisOwners = new WeakMap<
@@ -63,6 +98,9 @@ const analysisOwners = new WeakMap<
   { readonly owner: Owner; readonly fact: CheckedAnalysisOrigin }
 >();
 const resultOwners = new WeakMap<ProjectCheckingResult, ResultRecord>();
+const diagnosticProjectOwners = new WeakMap<Project, DiagnosticOwner>();
+const diagnosticSessionOwners = new WeakMap<CheckingSession, DiagnosticOwner>();
+const diagnosticResultOwners = new WeakMap<ProjectCheckingResult, DiagnosticResultRecord>();
 const objectIds = new WeakMap<object, number>();
 const symbolIds = new Map<symbol, number>();
 let nextId = 1;
@@ -164,12 +202,20 @@ export function issueNativeCheckingOrigin(
     _result: ProjectCheckingResult,
     _checkingInputs: ProjectCheckingResult["checkingInputs"],
   ): void => {};
-  if (
-    !population ||
-    session.project !== project ||
-    internalResult.diagnostics.some((item) => item.severity === "error")
-  )
-    return refuse;
+  if (!population || session.project !== project) return refuse;
+
+  if (internalResult.diagnostics.some((item) => item.severity === "error"))
+    return issueDiagnosticCheckingSession(
+      project,
+      session,
+      population,
+      analyses,
+      views,
+      finalFiles,
+      inputSnapshot,
+      internalResult,
+      isActive,
+    );
 
   const analysisFacts = new Map<string, CheckedAnalysisOrigin>();
   const expectedAnalysisNames: string[] = [];
@@ -273,6 +319,41 @@ export function checkedSourceOrigin(
     return undefined;
   }
 }
+
+/** Keep the admitted owner live while the private typing inventory is being collected. */
+export function nativeCheckingSessionGuard(
+  session: CheckingSession,
+  initialResult: ProjectCheckingResult,
+  inputSnapshot: CheckingInputSnapshot,
+  internalResult: ProjectCheckingResult,
+): (() => boolean) | undefined {
+  try {
+    const owner = sessionOwners.get(session);
+    if (
+      !owner ||
+      owner.inputSnapshot !== inputSnapshot ||
+      checkedSourceOrigin(session, initialResult) !== owner ||
+      !inputSnapshot.ownsCaptured(initialResult.checkingInputs) ||
+      encodeFixedResult(internalResult) !== owner.fixedResult
+    )
+      return undefined;
+
+    return (): boolean => {
+      try {
+        return (
+          owner.isActive() &&
+          sourceOwnerIntact(session, owner) &&
+          encodeFixedResult(internalResult) === owner.fixedResult &&
+          inputSnapshot.ownsCaptured(inputSnapshot.captured)
+        );
+      } catch {
+        return false;
+      }
+    };
+  } catch {
+    return undefined;
+  }
+}
 /** New emissions may enroll only from an unchanged active native session. */
 export function checkedAnalysisOrigin(
   analysis: ModuleAnalysis,
@@ -294,6 +375,207 @@ export function checkedAnalysisOrigin(
     return undefined;
   }
 }
+
+function issueDiagnosticCheckingSession(
+  project: Project,
+  session: CheckingSession,
+  population: CheckedSourceOrigin["population"],
+  analyses: ReadonlyMap<string, ModuleAnalysis>,
+  views: ReadonlyMap<string, CheckingView>,
+  finalFiles: ReadonlyMap<string, string>,
+  inputSnapshot: CheckingInputSnapshot,
+  internalResult: ProjectCheckingResult,
+  isActive: () => boolean,
+): (
+  result: ProjectCheckingResult,
+  checkingInputs: ProjectCheckingResult["checkingInputs"],
+) => void {
+  const refuse = (): void => {};
+
+  try {
+    const analysisFacts: DiagnosticOwner["analysisFacts"][number][] = [];
+    const viewFacts: DiagnosticOwner["viewFacts"][number][] = [];
+    const expectedAnalysisNames: string[] = [];
+
+    for (const module of population) {
+      const view = views.get(module.nativeKey);
+      const diagnostics = view && checkedDataEncoding(view.diagnostics, false);
+
+      if (!view || view.source !== finalFiles.get(module.nativeKey) || diagnostics === undefined)
+        return refuse;
+
+      viewFacts.push(
+        Object.freeze({
+          nativeKey: module.nativeKey,
+          view,
+          source: view.source,
+          diagnostics,
+          mapOffset: view.mapOffset,
+          generatedOffset: view.generatedOffset,
+        }),
+      );
+
+      if (!/\.(?:ts|tsx|mts)$/u.test(module.filename)) continue;
+      expectedAnalysisNames.push(module.filename);
+      const analysis = analyses.get(module.filename);
+      const fingerprint = analysis && analysisFingerprint(analysis);
+
+      if (!analysis || analysis.authoredSourceDigest !== module.sourceDigest || !fingerprint)
+        return refuse;
+
+      analysisFacts.push(Object.freeze({ analysis, fingerprint, mapOffset: analysis.mapOffset }));
+    }
+
+    if (
+      analyses.size !== expectedAnalysisNames.length ||
+      !sameMapKeys(analyses, expectedAnalysisNames)
+    )
+      return refuse;
+
+    const fixedResult = encodeFixedResult(internalResult);
+    const sessionShape = encodeSessionShape(session);
+
+    if (!fixedResult || !sessionShape) return refuse;
+
+    const owner: DiagnosticOwner = Object.freeze({
+      project,
+      session,
+      inputSnapshot,
+      isActive,
+      sessionShape,
+      analysisMap: analyses,
+      viewMap: views,
+      analysisEntries: freezeEntries(analyses),
+      viewEntries: freezeEntries(views),
+      analysisFacts: Object.freeze(analysisFacts),
+      viewFacts: Object.freeze(viewFacts),
+      finalFiles,
+      dispose: session.dispose,
+      fixedResult,
+    });
+
+    diagnosticProjectOwners.set(project, owner);
+    diagnosticSessionOwners.set(session, owner);
+
+    return (result, checkingInputs): void => {
+      try {
+        if (
+          !diagnosticOwnerIntact(session, owner) ||
+          result.checkingInputs !== checkingInputs ||
+          !inputSnapshot.ownsCaptured(checkingInputs) ||
+          encodeFixedResult(internalResult) !== owner.fixedResult ||
+          encodeFixedResult(result) !== owner.fixedResult
+        )
+          return;
+
+        const encoding = encodeIssuedResult(result);
+        if (encoding === undefined) return;
+
+        diagnosticResultOwners.set(
+          result,
+          Object.freeze({ owner, result, checkingInputs, encoding }),
+        );
+      } catch {
+        return;
+      }
+    };
+  } catch {
+    return refuse;
+  }
+}
+
+function diagnosticOwnerIntact(session: CheckingSession, owner: DiagnosticOwner): boolean {
+  if (
+    !owner.isActive() ||
+    diagnosticProjectOwners.get(owner.project) !== owner ||
+    diagnosticSessionOwners.get(session) !== owner ||
+    session !== owner.session ||
+    session.project !== owner.project ||
+    session.analyses !== owner.analysisMap ||
+    session.views !== owner.viewMap ||
+    session.dispose !== owner.dispose ||
+    encodeSessionShape(session) !== owner.sessionShape ||
+    !sameEntries(session.analyses, owner.analysisEntries) ||
+    !sameEntries(session.views, owner.viewEntries)
+  )
+    return false;
+
+  for (const fact of owner.analysisFacts) {
+    const mapOffset = ownData(fact.analysis, "mapOffset");
+
+    if (
+      !mapOffset.ok ||
+      mapOffset.value !== fact.mapOffset ||
+      analysisFingerprint(fact.analysis) !== fact.fingerprint
+    )
+      return false;
+  }
+
+  return owner.viewFacts.every(
+    (fact) =>
+      fact.view.source === fact.source &&
+      owner.finalFiles.get(fact.nativeKey) === fact.source &&
+      fact.view.mapOffset === fact.mapOffset &&
+      fact.view.generatedOffset === fact.generatedOffset &&
+      checkedDataEncoding(fact.view.diagnostics, false) === fact.diagnostics,
+  );
+}
+
+function diagnosticResultIntact(
+  result: ProjectCheckingResult,
+  record: DiagnosticResultRecord,
+): boolean {
+  return (
+    diagnosticResultOwners.get(result) === record &&
+    record.result === result &&
+    result.checkingInputs === record.checkingInputs &&
+    encodeIssuedResult(result) === record.encoding
+  );
+}
+
+/** Bind diagnostic capture to the same active error-bearing session without issuing an origin. */
+export function diagnosticCheckingSessionGuard(
+  session: CheckingSession,
+  initialResult: ProjectCheckingResult,
+  inputSnapshot: CheckingInputSnapshot,
+): ((current: ProjectCheckingResult) => boolean) | undefined {
+  try {
+    const owner = diagnosticSessionOwners.get(session);
+    const initial = diagnosticResultOwners.get(initialResult);
+
+    if (
+      !owner ||
+      owner.inputSnapshot !== inputSnapshot ||
+      !initial ||
+      initial.owner !== owner ||
+      !diagnosticOwnerIntact(session, owner) ||
+      !diagnosticResultIntact(initialResult, initial) ||
+      !inputSnapshot.ownsCaptured(initialResult.checkingInputs)
+    )
+      return undefined;
+
+    return (current): boolean => {
+      try {
+        const record = diagnosticResultOwners.get(current);
+
+        return Boolean(
+          owner.inputSnapshot === inputSnapshot &&
+          diagnosticOwnerIntact(session, owner) &&
+          diagnosticResultIntact(initialResult, initial) &&
+          record &&
+          record.owner === owner &&
+          diagnosticResultIntact(current, record) &&
+          inputSnapshot.ownsCaptured(current.checkingInputs),
+        );
+      } catch {
+        return false;
+      }
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export function checkedDataEncoding(value: unknown, includeIdentity = true): string | undefined {
   try {
     const encoded = encodeData(value, new WeakSet<object>(), includeIdentity);

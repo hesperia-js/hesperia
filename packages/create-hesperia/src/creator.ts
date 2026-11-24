@@ -36,7 +36,7 @@ export interface CreatorCleanup {
   readonly reason?: string;
 }
 
-export type CreatorResult =
+type CreatorOutcome =
   | {
       readonly status: "created";
       readonly packageName: string;
@@ -56,6 +56,10 @@ export type CreatorResult =
       readonly projectRoot: string;
       readonly cleanup: CreatorCleanup;
     };
+
+export type CreatorResult = CreatorOutcome & {
+  readonly retirement: "complete" | "incomplete";
+};
 
 export interface CreatorInstallerStop {
   readonly pid: number;
@@ -88,6 +92,11 @@ interface TemplateFile {
   readonly relativePath: string;
   readonly variant: "frontend" | "elysia";
   readonly assetPath: string;
+}
+
+interface CreatorRetirementObservation {
+  filePending: boolean;
+  installerPending: boolean;
 }
 
 type InstallOutcome =
@@ -210,8 +219,10 @@ async function writeOwnedFile(
   contents: string | Uint8Array,
   ownedFiles: Map<string, OwnedFile | undefined>,
   signal: AbortSignal,
+  retirement: CreatorRetirementObservation,
 ): Promise<void> {
   const file = await open(filename, "wx");
+  retirement.filePending = true;
 
   let identity: PathIdentity | undefined;
 
@@ -234,6 +245,7 @@ async function writeOwnedFile(
     throw error;
   } finally {
     await file.close();
+    retirement.filePending = false;
   }
 }
 
@@ -387,11 +399,13 @@ async function installDependencies(
   signal: AbortSignal,
   output: { readonly stdout: number; readonly stderr: number },
   options: CreatorExecutionOptions,
+  retirement: CreatorRetirementObservation,
 ): Promise<InstallOutcome> {
   checkCancellation(signal);
 
   emitProgress(options, { kind: "install", status: "started" });
 
+  retirement.installerPending = true;
   const installation = Bun.spawn([process.execPath, "install"], {
     cwd: projectRoot,
     stdout: output.stdout,
@@ -409,12 +423,17 @@ async function installDependencies(
     if (signal.aborted) onAbort();
 
     const outcome = await Promise.race([
-      installation.exited.then((exitCode) => ({ status: "exited" as const, exitCode })),
+      installation.exited.then((exitCode) => {
+        retirement.installerPending = false;
+        return { status: "exited" as const, exitCode };
+      }),
       aborted.then(() => ({ status: "cancelled" as const })),
     ]);
 
     if (outcome.status === "cancelled") {
-      return { status: "cancelled", stop: await stopInstallation(installation) };
+      const stop = await stopInstallation(installation);
+      retirement.installerPending = !stop.reaped || stop.pendingResource;
+      return { status: "cancelled", stop };
     }
 
     if (outcome.exitCode !== 0) {
@@ -440,6 +459,16 @@ export async function executeCreator(
 ): Promise<CreatorResult> {
   const ownedFiles = new Map<string, OwnedFile | undefined>();
   const ownedDirectories = new Map<string, PathIdentity | undefined>();
+  const retirement: CreatorRetirementObservation = { filePending: false, installerPending: false };
+  const finish = (result: CreatorOutcome): CreatorResult => ({
+    ...result,
+    retirement:
+      retirement.filePending ||
+      retirement.installerPending ||
+      (result.status === "cancelled" && result.installer?.pendingResource === true)
+        ? "incomplete"
+        : "complete",
+  });
   let scaffoldComplete = false;
 
   try {
@@ -472,7 +501,7 @@ export async function executeCreator(
           .replaceAll(projectNamePlaceholder, plan.packageName);
       }
 
-      await writeOwnedFile(filename, contents, ownedFiles, options.signal);
+      await writeOwnedFile(filename, contents, ownedFiles, options.signal, retirement);
 
       emitProgress(options, {
         kind: "scaffold",
@@ -491,13 +520,13 @@ export async function executeCreator(
     });
 
     if (!plan.install) {
-      return {
+      return finish({
         status: "created",
         packageName: plan.packageName,
         projectRoot: plan.projectRoot,
         installation: "skipped",
         cleanup: { status: "not-needed", retainedPaths: [] },
-      };
+      });
     }
 
     if (options.installerOutput === undefined) {
@@ -509,11 +538,12 @@ export async function executeCreator(
       options.signal,
       options.installerOutput,
       options,
+      retirement,
     );
 
     if (installation.status === "cancelled") {
       if (!installation.stop.reaped) {
-        return {
+        return finish({
           status: "cancelled",
           projectRoot: plan.projectRoot,
           cleanup: retainedCompletedProject(
@@ -521,30 +551,30 @@ export async function executeCreator(
             "The installer remained active; its project files were retained.",
           ),
           installer: installation.stop,
-        };
+        });
       }
 
       throw new CreatorCancellation(installation.stop);
     }
 
     if (installation.status === "failed") {
-      return {
+      return finish({
         status: "failed",
         message: installation.message,
         projectRoot: plan.projectRoot,
         cleanup: { status: "not-needed", retainedPaths: [] },
-      };
+      });
     }
 
     emitProgress(options, { kind: "install", status: "completed" });
 
-    return {
+    return finish({
       status: "created",
       packageName: plan.packageName,
       projectRoot: plan.projectRoot,
       installation: "installed",
       cleanup: { status: "not-needed", retainedPaths: [] },
-    };
+    });
   } catch (error) {
     const cancelled = options.signal.aborted || error instanceof CreatorCancellation;
 
@@ -557,42 +587,42 @@ export async function executeCreator(
       );
 
       if (cancelled) {
-        return {
+        return finish({
           status: "cancelled",
           projectRoot: plan.projectRoot,
           cleanup,
           ...(error instanceof CreatorCancellation && error.installer !== undefined
             ? { installer: error.installer }
             : {}),
-        };
+        });
       }
 
-      return {
+      return finish({
         status: "failed",
         message: errorMessage(error),
         projectRoot: plan.projectRoot,
         cleanup,
-      };
+      });
     }
 
     const cleanup = await cleanupOwnedPaths(ownedFiles, ownedDirectories);
 
     if (cancelled) {
-      return {
+      return finish({
         status: "cancelled",
         projectRoot: plan.projectRoot,
         cleanup,
         ...(error instanceof CreatorCancellation && error.installer !== undefined
           ? { installer: error.installer }
           : {}),
-      };
+      });
     }
 
-    return {
+    return finish({
       status: "failed",
       message: errorMessage(error),
       projectRoot: plan.projectRoot,
       cleanup,
-    };
+    });
   }
 }

@@ -265,6 +265,244 @@ async function runExpectingFailure(
   return { exitCode, output: stdout + stderr };
 }
 
+async function runInstalledCreatorJson(
+  cwd: string,
+  args: readonly string[],
+  env: Record<string, string | undefined> = process.env,
+  preload?: string,
+): Promise<{ readonly exitCode: number | null; readonly stdout: string; readonly stderr: string }> {
+  const command =
+    preload === undefined
+      ? [process.execPath, "x", "create-hesperia", ...args]
+      : [
+          process.execPath,
+          "--preload",
+          preload,
+          join(cwd, "node_modules/create-hesperia/dist/cli.js"),
+          ...args,
+        ];
+  const child = Bun.spawn(command, {
+    cwd,
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+
+  return { exitCode, stdout, stderr };
+}
+
+function parseCreatorJson(stdout: string): Record<string, unknown> {
+  expect(stdout).toMatch(/^[^\r\n]+\r?\n$/u);
+  return JSON.parse(stdout) as Record<string, unknown>;
+}
+
+async function cancelInstalledCreatorJson(
+  cwd: string,
+  entry: string,
+  destination: string,
+  env: Record<string, string | undefined>,
+  installerStarted: Promise<void>,
+  preload?: string,
+): Promise<{
+  readonly exitCode: number;
+  readonly output: string;
+  readonly interruptBytes: number;
+  readonly terminalExitObserved: boolean;
+}> {
+  const decoder = new TextDecoder();
+  let output = "";
+  let registryReady = false;
+  let interruptAttempted = false;
+  let interruptBytes: number | undefined;
+  let terminalExitObserved = false;
+  let terminalExitCode: number | undefined;
+  let terminalExitSignal: string | null | undefined;
+  let observedExitCode: number | undefined;
+  let finishOutput!: () => void;
+  const outputClosed = new Promise<void>((resolve) => {
+    finishOutput = resolve;
+  });
+  const command = [process.execPath];
+  if (preload) command.push("--preload", preload);
+  command.push(entry, destination, "--json", "--host", "none");
+  const child = Bun.spawn(command, {
+    cwd,
+    env,
+    terminal: {
+      cols: 100,
+      rows: 30,
+      data(_terminal, data) {
+        output = (output + decoder.decode(data, { stream: true })).slice(-8192);
+      },
+      exit(_terminal, code, signal) {
+        terminalExitObserved = true;
+        terminalExitCode = code;
+        terminalExitSignal = signal;
+        output = (output + decoder.decode()).slice(-8192);
+        finishOutput();
+      },
+    },
+  });
+  let childFinished = false;
+  const childExit = child.exited.then((code) => {
+    childFinished = true;
+    observedExitCode = code;
+    return code;
+  });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error("JSON creator cancellation timed out")), 30_000);
+  });
+
+  try {
+    await Promise.race([
+      installerStarted,
+      childExit.then((code) => {
+        throw new Error(`Creator exited before the installer reached the registry: ${code}`);
+      }),
+      timedOut,
+    ]);
+    registryReady = true;
+    if (!child.terminal) throw new Error("Creator terminal was not acquired");
+    interruptAttempted = true;
+    interruptBytes = child.terminal.write("\u0003");
+
+    const exitCode = await Promise.race([
+      Promise.all([childExit, outputClosed]).then(([code]) => code),
+      timedOut,
+    ]);
+    return {
+      exitCode,
+      output: normalizeTerminalOutput(output),
+      interruptBytes,
+      terminalExitObserved,
+    };
+  } catch (error) {
+    console.error(
+      `Creator JSON cancellation observation: ${JSON.stringify({
+        registryReady,
+        interruptAttempted,
+        interruptBytes,
+        childFinished,
+        observedExitCode,
+        childSignalCode: child.signalCode,
+        terminalExitObserved,
+        terminalExitCode,
+        terminalExitSignal,
+        terminalHandleClosed: child.terminal?.closed,
+        outputTail: normalizeTerminalOutput(output).slice(-2048),
+      })}`,
+    );
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    if (!childFinished) {
+      if (process.platform === "win32") {
+        await terminateIntegratedServerProcess(child);
+      } else {
+        child.kill();
+        await childExit;
+      }
+    }
+    if (child.terminal && !child.terminal.closed) child.terminal.close();
+  }
+}
+
+interface WindowsCancellationResult {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly job: {
+    readonly remainingMembers: number;
+    readonly limitTerminations: number;
+    readonly disarmed: boolean;
+  };
+}
+
+async function cancelWindowsInstalledCreator(
+  driver: string,
+  entry: string,
+  destination: string,
+  registryUrl: string,
+  proofUrl: string,
+  cache: string,
+  outputRoot: string,
+): Promise<WindowsCancellationResult> {
+  const helper = Bun.spawn(
+    [
+      process.execPath,
+      join(import.meta.dir, "creator-windows-signal.mjs"),
+      driver,
+      entry,
+      destination,
+      registryUrl,
+      proofUrl,
+      cache,
+      outputRoot,
+    ],
+    { cwd: driver, stdout: "pipe", stderr: "pipe" },
+  );
+  const exit = helper.exited;
+  const stdout = new Response(helper.stdout).text();
+  const stderr = new Response(helper.stderr).text();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("Windows Creator fixture timed out")), 60_000);
+  });
+  let result: WindowsCancellationResult | undefined;
+  let fixtureFailed = false;
+  let fixtureError: unknown;
+  const cleanupErrors: unknown[] = [];
+  try {
+    const [code, out, err] = await Promise.race([Promise.all([exit, stdout, stderr]), timeout]);
+    if (code !== 0) throw new Error(`Windows Creator fixture failed (${code})\n${err}\n${out}`);
+    result = JSON.parse(out) as WindowsCancellationResult;
+    expect(result.job).toStrictEqual({ remainingMembers: 1, limitTerminations: 0, disarmed: true });
+    console.error(
+      "Windows Creator signal evidence: " +
+        JSON.stringify({ ...result, stdout: undefined, stderr: undefined }),
+    );
+  } catch (error) {
+    fixtureFailed = true;
+    fixtureError = error;
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (helper.exitCode === null) {
+      try {
+        helper.kill();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      try {
+        const retired = await Promise.race([
+          exit.then(() => true),
+          Bun.sleep(5000).then(() => false),
+        ]);
+        if (!retired)
+          cleanupErrors.push(new Error("Windows Creator fixture retirement is unconfirmed"));
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+  }
+  if (fixtureFailed && cleanupErrors.length > 0) {
+    throw new AggregateError(
+      [fixtureError, ...cleanupErrors],
+      "Windows Creator fixture and cleanup failed",
+    );
+  }
+  if (fixtureFailed) throw fixtureError;
+  if (cleanupErrors.length > 0)
+    throw new AggregateError(cleanupErrors, "Windows Creator fixture cleanup failed");
+  if (!result) throw new Error("Windows Creator fixture produced no result");
+  return result;
+}
+
 test("packed creator defaults to Elysia and builds a selectable no-host application", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "hesperia-create-installed-"));
 
@@ -277,6 +515,7 @@ test("packed creator defaults to Elysia and builds a selectable no-host applicat
   const noHostApplication = join(workspace, "Frontend Without Host");
 
   let passed = false;
+  let workspaceRemovable = true;
 
   let server: IntegratedServer | undefined;
 
@@ -366,6 +605,241 @@ test("packed creator defaults to Elysia and builds a selectable no-host applicat
     expect(mixedMetadata.output).toContain("Unknown option: --version");
     expect(await readdir(workspace)).not.toContain("unexpected");
     expect(await readdir(driver)).not.toContain("unexpected");
+
+    const jsonApplication = join(workspace, "JSON Frontend");
+    const createdJson = await runInstalledCreatorJson(driver, [
+      jsonApplication,
+      "--json",
+      "--host",
+      "none",
+      "--no-install",
+    ]);
+
+    expect(createdJson.exitCode).toBe(0);
+    expect(parseCreatorJson(createdJson.stdout)).toStrictEqual({
+      schemaVersion: 1,
+      status: "created",
+      projectRoot: jsonApplication,
+      packageName: "json-frontend",
+      installation: "skipped",
+      cleanup: { status: "not-needed", retainedPaths: [] },
+      retirement: "complete",
+    });
+    expect(createdJson.stderr).toContain("Created json-frontend");
+    expect(createdJson.stderr).toContain("Dependencies were not installed");
+
+    const invalidJson = await runInstalledCreatorJson(driver, ["--json", "--host", "unknown"]);
+
+    expect(invalidJson.exitCode).toBe(1);
+    expect(parseCreatorJson(invalidJson.stdout)).toStrictEqual({
+      schemaVersion: 1,
+      status: "failed",
+      message: `Unknown host integration "unknown". Choose "elysia" or "none".\nUsage: bun create hesperia <destination> [--no-install] [--host <elysia|none>] [--json]`,
+      retirement: "not-started",
+    });
+    expect(invalidJson.stderr).toContain('Unknown host integration "unknown"');
+
+    let registryRequests = 0;
+    let blockRegistry = false;
+    let activeRegistryPath = "/";
+    let heldRequest: Request | undefined;
+    let heldAt = 0;
+    const proofPath = `/creator-signal-proof-${crypto.randomUUID()}`;
+    let notifyInstallerStarted!: () => void;
+    const installerStarted = new Promise<void>((resolve) => {
+      notifyInstallerStarted = resolve;
+    });
+    const blockedRequests: ((response: Response) => void)[] = [];
+    const registry = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const pathname = new URL(request.url).pathname;
+        if (pathname === proofPath) {
+          return Response.json({
+            live: Boolean(heldRequest && !heldRequest.signal.aborted),
+            ageMs: heldAt ? Date.now() - heldAt : null,
+          });
+        }
+        registryRequests++;
+        if (blockRegistry) {
+          if (pathname.startsWith(activeRegistryPath)) {
+            if (!heldRequest) {
+              heldRequest = request;
+              heldAt = Date.now();
+            }
+            notifyInstallerStarted();
+          }
+          return new Promise<Response>((resolve) => blockedRequests.push(resolve));
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+
+    try {
+      const failedApplication = join(workspace, "Failed JSON Frontend");
+      workspaceRemovable = false;
+      const failedJson = await runInstalledCreatorJson(
+        driver,
+        [failedApplication, "--json", "--host", "none"],
+        {
+          ...process.env,
+          BUN_CONFIG_REGISTRY: registry.url.href,
+          BUN_INSTALL_CACHE_DIR: join(workspace, "json-install-cache"),
+        },
+      );
+      const failed = parseCreatorJson(failedJson.stdout);
+      workspaceRemovable = failed.retirement === "complete";
+
+      expect(failedJson.exitCode).toBe(1);
+      expect(registryRequests).toBeGreaterThan(0);
+      expect(failed.schemaVersion).toBe(1);
+      expect(failed.status).toBe("failed");
+      expect(failed.projectRoot).toBe(failedApplication);
+      expect(failed.packageName).toBe("failed-json-frontend");
+      expect(failed.message).toEqual(expect.stringContaining("Dependency installation failed"));
+      expect(failed.cleanup).toStrictEqual({ status: "not-needed", retainedPaths: [] });
+      expect(failed.retirement).toBe("complete");
+      expect(failed).not.toHaveProperty("installation");
+      expect(Object.keys(failed).sort()).toStrictEqual(
+        [
+          "schemaVersion",
+          "status",
+          "projectRoot",
+          "packageName",
+          "message",
+          "cleanup",
+          "retirement",
+        ].sort(),
+      );
+      expect(failedJson.stderr).toContain("bun install");
+      expect(failedJson.stderr).toContain("Dependency installation failed");
+
+      const observationPreload = join(workspace, "installer-observation-failure.mjs");
+      await writeFile(
+        observationPreload,
+        `const spawn = Bun.spawn;
+let installerStarted = false;
+Bun.spawn = (...args) => {
+  const child = Reflect.apply(spawn, Bun, args);
+  if (Array.isArray(args[0]) && args[0][0] === process.execPath && args[0][1] === "install") {
+    installerStarted = true;
+    child.exited.then(() => process.stderr.write("__creator_installer_exited__\\n"));
+  }
+  return child;
+};
+const add = AbortSignal.prototype.addEventListener;
+AbortSignal.prototype.addEventListener = function (type, ...args) {
+  if (installerStarted && type === "abort") throw new Error("Installer observation registration failed");
+  return Reflect.apply(add, this, [type, ...args]);
+};
+`,
+      );
+      const unobservedApplication = join(workspace, "Unobserved JSON Frontend");
+      workspaceRemovable = false;
+      const unobservedJson = await runInstalledCreatorJson(
+        driver,
+        [unobservedApplication, "--json", "--host", "none"],
+        {
+          ...process.env,
+          BUN_CONFIG_REGISTRY: registry.url.href,
+          BUN_INSTALL_CACHE_DIR: join(workspace, "json-unobserved-cache"),
+        },
+        observationPreload,
+      );
+      const unobserved = parseCreatorJson(unobservedJson.stdout);
+      workspaceRemovable = unobservedJson.stderr.includes("__creator_installer_exited__");
+
+      expect(unobservedJson.exitCode).toBe(1);
+      expect(unobserved.status).toBe("failed");
+      expect(unobserved.projectRoot).toBe(unobservedApplication);
+      expect(unobserved.packageName).toBe("unobserved-json-frontend");
+      expect(unobserved.message).toBe("Installer observation registration failed");
+      expect(unobserved.retirement).toBe("incomplete");
+      expect(Object.keys(unobserved).sort()).toStrictEqual(
+        [
+          "schemaVersion",
+          "status",
+          "projectRoot",
+          "packageName",
+          "message",
+          "cleanup",
+          "retirement",
+        ].sort(),
+      );
+      expect(unobserved.cleanup).toStrictEqual({
+        status: "retained",
+        retainedPaths: [unobservedApplication],
+        reason: "The scaffold was complete and remains available after a later operation failed.",
+      });
+      expect(unobservedJson.stderr).toContain(
+        "Creator operation retirement could not be confirmed",
+      );
+      expect(unobservedJson.stderr).toContain("__creator_installer_exited__");
+
+      const cancelledApplication = join(workspace, "Cancelled JSON Frontend");
+      blockRegistry = true;
+      workspaceRemovable = false;
+      const creatorEntry = join(driver, "node_modules/create-hesperia/dist/cli.js");
+      let cancelled: { readonly exitCode: number; readonly output: string };
+      if (process.platform === "win32") {
+        activeRegistryPath = "/direct/";
+        const windows = await cancelWindowsInstalledCreator(
+          driver,
+          creatorEntry,
+          cancelledApplication,
+          new URL("direct/", registry.url).href,
+          new URL(proofPath, registry.url).href,
+          join(workspace, "json-cancel-cache"),
+          join(workspace, "windows-cancellation-observation"),
+        );
+        cancelled = { exitCode: windows.exitCode, output: windows.stderr + windows.stdout };
+      } else {
+        const terminal = await cancelInstalledCreatorJson(
+          driver,
+          creatorEntry,
+          cancelledApplication,
+          {
+            ...process.env,
+            BUN_CONFIG_REGISTRY: registry.url.href,
+            BUN_INSTALL_CACHE_DIR: join(workspace, "json-cancel-cache"),
+          },
+          installerStarted,
+        );
+        expect(terminal.interruptBytes).toBe(1);
+        expect(terminal.terminalExitObserved).toBe(true);
+        cancelled = terminal;
+      }
+      const jsonStart = cancelled.output.lastIndexOf('{"schemaVersion":');
+      expect(jsonStart).toBeGreaterThanOrEqual(0);
+      const cancelledResult = JSON.parse(cancelled.output.slice(jsonStart).trim()) as Record<
+        string,
+        unknown
+      >;
+      workspaceRemovable = cancelledResult.retirement === "complete";
+
+      expect(cancelled.exitCode).toBe(130);
+      expect(cancelled.output).not.toContain("Choose a host integration:");
+      expect(cancelled.output).toContain("Creation cancelled.");
+      expect(cancelledResult.schemaVersion).toBe(1);
+      expect(cancelledResult.status).toBe("cancelled");
+      expect(cancelledResult.projectRoot).toBe(cancelledApplication);
+      expect(cancelledResult.packageName).toBe("cancelled-json-frontend");
+      expect(cancelledResult.retirement).toBe("complete");
+      expect(cancelledResult.cleanup).toStrictEqual({
+        status: "retained",
+        retainedPaths: [cancelledApplication],
+        reason: "The scaffold completed before cancellation, so it was kept.",
+      });
+      expect(cancelledResult).not.toHaveProperty("installation");
+      expect(cancelledResult).not.toHaveProperty("installer");
+      expect(Object.keys(cancelledResult).sort()).toStrictEqual(
+        ["schemaVersion", "status", "projectRoot", "packageName", "cleanup", "retirement"].sort(),
+      );
+    } finally {
+      for (const release of blockedRequests) release(new Response("Not found", { status: 404 }));
+      registry.stop(true);
+    }
 
     await run(driver, "x", "create-hesperia", application, "--no-install");
 
@@ -870,7 +1344,10 @@ test("packed creator defaults to Elysia and builds a selectable no-host applicat
 
     await browser?.close();
 
-    if (passed || process.env.HESPERIA_PACKAGE_TEST_KEEP_TEMP_ON_FAILURE !== "1") {
+    if (
+      workspaceRemovable &&
+      (passed || process.env.HESPERIA_PACKAGE_TEST_KEEP_TEMP_ON_FAILURE !== "1")
+    ) {
       await rm(workspace, { recursive: true, force: true });
     } else {
       console.error(`Retained failed creator fixture at ${workspace}`);

@@ -22,7 +22,6 @@ import { normalizeFilename as normalize } from "./utils.ts";
 import {
   TypingHostObservationRecorder,
   captureTypingInputEnvironment,
-  fingerprintCheckingResult,
   hasRequestedTypingEvidenceCapture,
   registerCheckingSessionTypingState,
   type TypingInputEnvironment,
@@ -30,7 +29,9 @@ import {
 import {
   captureCheckingModules,
   checkedSourceOrigin,
+  diagnosticCheckingSessionGuard,
   issueNativeCheckingOrigin,
+  nativeCheckingSessionGuard,
   nativePopulation,
   type CapturedCheckingModules,
 } from "./checking-origin.ts";
@@ -706,51 +707,28 @@ async function createCheckingSession(
       let typingEnvironment: TypingInputEnvironment | undefined;
       const initialResult = session.result;
       const initialOrigin = checkedSourceOrigin(session, initialResult);
+      const nativeGuard = initialOrigin
+        ? nativeCheckingSessionGuard(session, initialResult, checkingInputs, result)
+        : undefined;
+      const diagnosticGuard = initialOrigin
+        ? undefined
+        : diagnosticCheckingSessionGuard(session, initialResult, checkingInputs);
       const resultGetter = Object.getOwnPropertyDescriptor(session, "result")?.get;
-      let diagnosticFingerprint: string | undefined;
-
-      // Checking inputs can grow during capture and are checked by their snapshot owner.
-      try {
-        if (!initialOrigin && initialResult.diagnostics.some((item) => item.severity === "error"))
-          diagnosticFingerprint = fingerprintCheckingResult({
-            ...initialResult,
-            checkingInputs: [],
-          });
-      } catch {
-        // An unencodable diagnostic result cannot own typing evidence.
-      }
-
       const ownsInitialSession = (): boolean => {
-        try {
-          if (
-            disposed ||
-            session.project !== project ||
-            session.analyses !== analyses ||
-            session.views !== views ||
-            session.dispose !== dispose ||
-            Object.getOwnPropertyDescriptor(session, "result")?.get !== resultGetter
-          )
-            return false;
-
-          const current = session.result;
-
-          if (!checkingInputs.ownsCaptured(current.checkingInputs)) return false;
-
-          if (initialOrigin)
-            return (
-              checkedSourceOrigin(session, current) === initialOrigin &&
-              initialOrigin.inputSnapshot === checkingInputs
-            );
-
-          return (
-            diagnosticFingerprint !== undefined &&
-            current.diagnostics === initialResult.diagnostics &&
-            current.modules === initialResult.modules &&
-            fingerprintCheckingResult({ ...current, checkingInputs: [] }) === diagnosticFingerprint
-          );
-        } catch {
+        if (
+          (!nativeGuard && !diagnosticGuard) ||
+          disposed ||
+          session.project !== project ||
+          session.analyses !== analyses ||
+          Object.getOwnPropertyDescriptor(session, "result")?.get !== resultGetter
+        )
           return false;
-        }
+
+        if (nativeGuard) return nativeGuard();
+        const current = session.result;
+        return (
+          diagnosticGuard?.(current) === true && checkingInputs.ownsCaptured(current.checkingInputs)
+        );
       };
       try {
         typingEnvironment = await captureTypingInputEnvironment(
@@ -767,7 +745,16 @@ async function createCheckingSession(
         typingHost.close();
       }
       typingHost.close();
-      if (typingEnvironment && ownsInitialSession())
+      const finalResult = typingEnvironment && ownsInitialSession() ? session.result : undefined;
+      if (
+        typingEnvironment &&
+        finalResult &&
+        (initialOrigin
+          ? checkedSourceOrigin(session, finalResult) === initialOrigin &&
+            initialOrigin.inputSnapshot === checkingInputs
+          : diagnosticGuard?.(finalResult) === true) &&
+        checkingInputs.ownsCaptured(finalResult.checkingInputs)
+      )
         registerCheckingSessionTypingState(session, {
           project,
           environment: typingEnvironment,

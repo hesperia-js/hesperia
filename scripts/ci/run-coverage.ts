@@ -46,6 +46,7 @@ const configuredPluginCoverageTest = "tests/tooling/configured-plugin.test.ts" a
 const creatorCliCoverageTest = "tests/tooling/create-hesperia.test.ts" as const;
 const creatorCliSources = [
   "packages/create-hesperia/src/cli.ts",
+  "packages/create-hesperia/src/creator.ts",
   "packages/create-hesperia/src/templates/elysia.ts",
   "packages/create-hesperia/src/templates/frontend.ts",
 ] as const;
