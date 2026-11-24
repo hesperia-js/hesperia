@@ -5,6 +5,10 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CheckingInputSnapshot } from "../../packages/compiler/src/checking-inputs.ts";
+import {
+  checkedAnalysisOrigin,
+  checkedSourceOrigin,
+} from "../../packages/compiler/src/checking-origin.ts";
 import { checkProjectModules, openCheckingProject } from "../../packages/compiler/src/checking.ts";
 import { ModuleResolver } from "../../packages/compiler/src/module-resolution.ts";
 import { emitCheckingSession } from "../../packages/compiler/src/project-compilation.ts";
@@ -25,6 +29,13 @@ test("typing evidence stays tied to the actual emitted module population", async
       [{ filename, source: "export const value: string = 'ok';" }],
       requestTypingEvidenceCapture({ root }),
     );
+    const result = session.result;
+    const origin = checkedSourceOrigin(session, result);
+    const analysis = session.analyses.get(filename);
+
+    expect(origin).toBeDefined();
+    expect(checkedSourceOrigin(session, { ...result })).toBeUndefined();
+    expect(analysis && checkedAnalysisOrigin(analysis)?.origin).toBe(origin);
     const compilation = emitCheckingSession(session);
     const evidence = issuedProjectTypingEvidence(compilation);
     const emitted = compilation.modules.get(filename);
@@ -113,6 +124,10 @@ test("typing evidence stays tied to the actual emitted module population", async
 
     expect(registerMappedProjectCompilation(compilation, forgedCheckingDiagnostics)).toBe(false);
     expect(issuedProjectTypingEvidence(forgedCheckingDiagnostics)).toBeUndefined();
+    await session.dispose();
+    expect(checkedSourceOrigin(session, result)).toBe(origin);
+    expect(analysis && checkedAnalysisOrigin(analysis)).toBeUndefined();
+    session = undefined;
   } finally {
     await session?.dispose();
     await rm(root, { recursive: true, force: true });
@@ -135,6 +150,7 @@ export function Page(props: Component.Props<{ title: string; serial: bigint }>) 
 
   try {
     const checking = session.result;
+    const origin = checkedSourceOrigin(session, checking);
     const analysis = session.analyses.get(filename);
     const compilation = emitCheckingSession(session);
     const evidence = issuedProjectTypingEvidence(compilation);
@@ -143,6 +159,11 @@ export function Page(props: Component.Props<{ title: string; serial: bigint }>) 
     expect(checking.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
     expect(analysis?.componentProps?.diagnostics).toEqual([]);
     expect(Object.keys(analysis?.componentProps?.byParameterStart ?? {})).toHaveLength(1);
+    expect(origin?.analyses.get(filename)?.analysis).toBe(analysis);
+    expect(analysis && checkedAnalysisOrigin(analysis)?.origin).toBe(origin);
+    expect(origin?.project).toBe(session.project);
+    expect(origin?.population).toHaveLength(1);
+    expect(origin?.population[0]).toMatchObject({ filename, source, sourceDigest });
     expect(compilation.modules.get(filename)?.code).toBeTruthy();
     expect(evidence).toMatchObject({
       state: "sealed",
@@ -618,12 +639,25 @@ test("typing evidence rejects inconsistent mapped checking diagnostics", async (
       [{ filename, source: "export const value: string = 42;" }],
       requestTypingEvidenceCapture({ root }),
     );
+    const checking = session.result;
+    const analysis = session.analyses.get(filename);
+
+    expect(checkedSourceOrigin(session, checking)).toBeUndefined();
+    expect(analysis && checkedAnalysisOrigin(analysis)).toBeUndefined();
     const compilation = emitCheckingSession(session);
     const evidence = issuedProjectTypingEvidence(compilation);
 
     expect(compilation.checking.diagnostics.some((item) => item.code === "TS2322")).toBe(true);
     expect(compilation.modules.size).toBe(0);
-    expect(evidence).toMatchObject({ checkingHasErrors: true });
+    expect(evidence).toMatchObject({
+      checkingHasErrors: true,
+      modulePopulationJoin: false,
+      certificates: [],
+    });
+    expect(evidence?.modules[0]).toMatchObject({
+      sourceJoin: false,
+      emittedModuleAvailable: false,
+    });
 
     const checked = compilation.checking.modules.map((module) => ({
       ...module,
