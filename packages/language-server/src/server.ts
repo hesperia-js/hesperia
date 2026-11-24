@@ -327,6 +327,8 @@ export function startLanguageServer(
             (await documentFor(filename)) ??
             TextDocument.create(pathToFileURL(filename).href, "typescript", 0, "");
 
+          if (stopped || requested !== revision) return;
+
           await connection.sendDiagnostics({
             uri: document.uri,
             diagnostics: [
