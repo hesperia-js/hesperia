@@ -8,7 +8,13 @@ import {
   type WritableBinding,
 } from "./binding.ts";
 import type { Rendered } from "./dom.ts";
-import { Owner, RenderFault, runComponentBody, runRenderContext } from "./owner.ts";
+import {
+  disposeOwnerSyncPreservingFailure,
+  Owner,
+  RenderFault,
+  runComponentBody,
+  runRenderContext,
+} from "./owner.ts";
 
 declare const componentPropsType: unique symbol;
 
@@ -328,7 +334,7 @@ export function instantiateComponent(
   } catch (error) {
     owner.executingBody = false;
 
-    owner.dispose(error);
+    disposeOwnerSyncPreservingFailure(owner, error);
 
     throw error;
   }

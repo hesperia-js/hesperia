@@ -57,7 +57,8 @@ export async function scopeCompletions(
 }
 
 async function checkingSymbol(project: Project, symbol: Symbol): Promise<boolean> {
-  if (!symbol.name.startsWith("Hesperia") && !symbol.name.startsWith("__hesperia_")) return false;
+  if (symbol.name.startsWith("__hesperia_")) return true;
+  if (!symbol.name.startsWith("Hesperia")) return false;
 
   for (const handle of symbol.declarations) {
     const declaration = await handle.resolve(project);

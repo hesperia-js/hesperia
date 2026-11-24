@@ -25,7 +25,9 @@ import {
 import {
   captureCheckingModules,
   checkedSourceOrigin,
+  diagnosticCheckingSessionGuard,
   issueNativeCheckingOrigin,
+  nativeCheckingSessionGuard,
   nativePopulation,
   type CapturedCheckingModules,
 } from "./checking-origin.ts";
@@ -686,10 +688,16 @@ async function createCheckingSession(
       let typingEnvironment: TypingInputEnvironment | undefined;
       const initialResult = session.result;
       const initialOrigin = checkedSourceOrigin(session, initialResult);
+      const nativeGuard = initialOrigin
+        ? nativeCheckingSessionGuard(session, initialResult, checkingInputs, result)
+        : undefined;
+      const diagnosticGuard = initialOrigin
+        ? undefined
+        : diagnosticCheckingSessionGuard(session, initialResult, checkingInputs);
       const resultGetter = Object.getOwnPropertyDescriptor(session, "result")?.get;
       const ownsInitialSession = (): boolean => {
         if (
-          !initialOrigin ||
+          (!nativeGuard && !diagnosticGuard) ||
           disposed ||
           session.project !== project ||
           session.analyses !== analyses ||
@@ -697,11 +705,10 @@ async function createCheckingSession(
         )
           return false;
 
+        if (nativeGuard) return nativeGuard();
         const current = session.result;
         return (
-          checkedSourceOrigin(session, current) === initialOrigin &&
-          initialOrigin.inputSnapshot === checkingInputs &&
-          checkingInputs.ownsCaptured(current.checkingInputs)
+          diagnosticGuard?.(current) === true && checkingInputs.ownsCaptured(current.checkingInputs)
         );
       };
       try {
@@ -719,7 +726,16 @@ async function createCheckingSession(
         typingHost.close();
       }
       typingHost.close();
-      if (typingEnvironment && ownsInitialSession())
+      const finalResult = typingEnvironment && ownsInitialSession() ? session.result : undefined;
+      if (
+        typingEnvironment &&
+        finalResult &&
+        (initialOrigin
+          ? checkedSourceOrigin(session, finalResult) === initialOrigin &&
+            initialOrigin.inputSnapshot === checkingInputs
+          : diagnosticGuard?.(finalResult) === true) &&
+        checkingInputs.ownsCaptured(finalResult.checkingInputs)
+      )
         registerCheckingSessionTypingState(session, {
           project,
           environment: typingEnvironment,

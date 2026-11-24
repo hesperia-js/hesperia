@@ -2080,6 +2080,7 @@ export interface SealedProjectTypingEvidence {
     readonly reason: "missing-policy";
   };
   readonly unavailableTypeLocations: readonly (
+    | "component-props"
     | "state-value"
     | "native-markup-context"
     | "native-binding"
@@ -2359,6 +2360,7 @@ function sealProjectTypingEvidenceUnchecked(
     certificates: Object.freeze([] as const),
     projectPolicy: Object.freeze({ kind: "unproved", reason: "missing-policy" }),
     unavailableTypeLocations: Object.freeze([
+      "component-props",
       "state-value",
       "native-markup-context",
       "native-binding",
