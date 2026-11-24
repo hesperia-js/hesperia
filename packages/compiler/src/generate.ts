@@ -1263,27 +1263,40 @@ function componentProps(
               prop.span,
               options.source,
             )
-          : ownProperty(
-              prop.name,
-              prop.lazy
-                ? call(
-                    optionsRuntime(options),
-                    "dynamic",
-                    [
-                      arrow(
-                        [],
-                        generateExpression(prop.expression, options),
-                        prop.span,
-                        options.source,
-                      ),
-                    ],
-                    prop.span,
-                    options.source,
-                  )
-                : generateExpression(prop.expression, options),
-              prop.span,
-              options.source,
-            ),
+          : prop.kind === "rendered"
+            ? ownProperty(
+                prop.name,
+                call(
+                  optionsRuntime(options),
+                  "dynamic",
+                  [arrow([], generateChild(prop.child, options, owner), prop.span, options.source)],
+                  prop.span,
+                  options.source,
+                ),
+                prop.span,
+                options.source,
+              )
+            : ownProperty(
+                prop.name,
+                prop.lazy
+                  ? call(
+                      optionsRuntime(options),
+                      "dynamic",
+                      [
+                        arrow(
+                          [],
+                          generateExpression(prop.expression, options),
+                          prop.span,
+                          options.source,
+                        ),
+                      ],
+                      prop.span,
+                      options.source,
+                    )
+                  : generateExpression(prop.expression, options),
+                prop.span,
+                options.source,
+              ),
     ),
     emptySpan(),
     options.source,

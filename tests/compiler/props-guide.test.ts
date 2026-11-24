@@ -6,7 +6,7 @@ test("component prop guide examples pass authored checking and executable emissi
   const guide = await Bun.file(resolve(import.meta.dir, "../../docs/component-props.md")).text();
   const examples = [...guide.matchAll(/```tsx\r?\n([\s\S]*?)```/gu)];
 
-  expect(examples).toHaveLength(2);
+  expect(examples.length).toBeGreaterThanOrEqual(3);
 
   for (const [index, example] of examples.entries()) {
     const source = example[1]!;

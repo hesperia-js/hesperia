@@ -603,7 +603,11 @@ function assignProp(prop: CanonicalComponentProp, path: string): CanonicalCompon
   if (prop.kind === "value")
     return { ...prop, expression: assignExpression(prop.expression, `${path}.v`) };
 
-  if (prop.kind === "fallback") return { ...prop, child: assignChild(prop.child, `${path}.f`) };
+  if (prop.kind === "fallback" || prop.kind === "rendered")
+    return {
+      ...prop,
+      child: assignChild(prop.child, `${path}.${prop.kind === "fallback" ? "f" : "r"}`),
+    };
 
   return {
     ...prop,
@@ -2736,7 +2740,8 @@ function jsxElement(
     return null;
   }
 
-  const name = jsxName(node(opening.name));
+  const nameNode = node(opening.name);
+  const name = jsxName(nameNode);
 
   if (!name) {
     diagnostic(diagnostics, "HES-JSX-NAME", "JSX element name is not supported.", input);
@@ -2782,12 +2787,17 @@ function jsxElement(
       name === "AsyncBoundary" &&
       attrName === "fallback" &&
       value?.type === "JSXExpressionContainer";
-    const expression =
+    const componentTag = /^[A-Z]/.test(name) || name.includes(".");
+    const incoming =
       value?.type === "JSXExpressionContainer" && !isAsyncFallback
-        ? expressionOf(node(value.expression), diagnostics, markers)
+        ? componentTag
+          ? expressionOrChild(node(value.expression), diagnostics, markers, parentNamespace)
+          : expressionOf(node(value.expression), diagnostics, markers)
         : null;
+    const rendered = incoming !== null && isCanonicalChild(incoming) ? incoming : null;
+    const expression = incoming !== null && !isCanonicalChild(incoming) ? incoming : null;
 
-    if (/^[A-Z]/.test(name) || name.includes(".")) {
+    if (componentTag) {
       if (
         name === "AsyncBoundary" &&
         attrName === "fallback" &&
@@ -2828,7 +2838,16 @@ function jsxElement(
           lazy: false,
           span: span(attr),
         });
-      else if (expression)
+      else if (rendered) {
+        const prop = {
+          kind: "rendered" as const,
+          name: attrName,
+          child: rendered,
+          span: span(attr),
+        };
+        props.push(prop);
+        diagnostics.push(renderedPropDiagnostic(prop));
+      } else if (expression)
         props.push({
           kind: "value",
           name: attrName,
@@ -2910,7 +2929,7 @@ function jsxElement(
     return {
       kind: "component",
       occurrence: "",
-      reference: jsxReference(name, input),
+      reference: jsxReference(name, nameNode ?? input),
       props,
       span: span(input),
     };
@@ -2934,6 +2953,17 @@ function jsxElement(
     attributes,
     children,
     span: span(input),
+  };
+}
+
+function renderedPropDiagnostic(
+  prop: Extract<CanonicalComponentProp, { kind: "rendered" }>,
+): CompilerDiagnostic {
+  return {
+    code: "HES-EXPRESSION",
+    severity: "error",
+    message: "A JSX-valued component prop requires a checked ordinary Component.Props contract.",
+    span: prop.span,
   };
 }
 
