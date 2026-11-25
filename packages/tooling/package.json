@@ -17,6 +17,12 @@
   "type": "module",
   "main": "./dist/project-service.js",
   "types": "./dist/project-service.d.ts",
+  "imports": {
+    "#hesperia-project-worker": {
+      "types": "./dist/project-worker.d.ts",
+      "default": "./dist/project-worker.js"
+    }
+  },
   "exports": {
     ".": {
       "types": "./dist/project-service.d.ts",
