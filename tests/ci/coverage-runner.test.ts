@@ -254,16 +254,16 @@ test("coverage runner captures each compiled project worker process under its ow
 
   expect(receipt.untrackedSpawnCount).toBe(0);
 
-  expect(receipt.invocations).toHaveLength(8);
+  expect(receipt.invocations).toHaveLength(12);
 
-  expect(receipt.invocations.filter((item) => item.exitCode === 0)).toHaveLength(6);
+  expect(receipt.invocations.filter((item) => item.exitCode === 0)).toHaveLength(8);
 
   expect(
     receipt.invocations.filter(
       (item) =>
         item.exitCode === 1 && !item.abortErrorObserved && item.preTerminationKillCount === 0,
     ),
-  ).toHaveLength(1);
+  ).toHaveLength(3);
 
   const abortedInvocations = receipt.invocations.filter((item) => item.abortErrorObserved);
 
