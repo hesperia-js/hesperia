@@ -336,6 +336,7 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
         throw new Error("CSS fixture update did not change its input");
 
       await writeFile(cssPath, revisedCss);
+      stage("CSS revision input written");
 
       await devPage.waitForFunction(
         () =>
@@ -344,6 +345,7 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
         undefined,
         { timeout: 15_000 },
       );
+      stage("CSS revision visible");
 
       expect(await counter.textContent()).toBe("Count: 2");
 
@@ -421,6 +423,9 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
       expect(errors).toStrictEqual([]);
 
       await previewPage.close();
+    } catch (error) {
+      console.error("[Q10-STYLING] browser exercise failed", error);
+      throw error;
     } finally {
       stage("close browser");
       await browser.close();
@@ -431,15 +436,21 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
     stage("clean up application");
 
     if (devServer) {
+      stage("signal development server " + devServer.pid);
       devServer.kill();
 
-      await devServer.exited;
+      stage("await development server exit " + devServer.pid);
+      const status = await devServer.exited;
+      stage("development server exited with status " + status);
     }
 
     if (previewServer) {
+      stage("signal preview server " + previewServer.pid);
       previewServer.kill();
 
-      await previewServer.exited;
+      stage("await preview server exit " + previewServer.pid);
+      const status = await previewServer.exited;
+      stage("preview server exited with status " + status);
     }
 
     if (!passed && process.env.HESPERIA_PACKAGE_TEST_KEEP_TEMP_ON_FAILURE === "1") {
@@ -447,7 +458,9 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
     } else if (!isInside(tempRoot, workspace)) {
       console.error(`Skipped cleanup outside the temp root: ${workspace}`);
     } else {
+      stage("remove temporary workspace");
       await rm(workspace, { recursive: true, force: true });
+      stage("temporary workspace removed");
     }
   }
 }, 300_000);
