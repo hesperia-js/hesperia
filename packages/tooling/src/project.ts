@@ -49,7 +49,11 @@ import {
 } from "@hesperia/hosting/internal";
 import { compareRoutes } from "hesperia/routing";
 import { capturePublicFiles } from "./public-files.ts";
-import { readConfiguration, type ProjectConfiguration } from "./configuration.ts";
+import {
+  readConfiguration,
+  verifyProjectConfigurationSourceCapture,
+  type ProjectConfiguration,
+} from "./configuration.ts";
 import { buildRouteGuards, routeFilesFromManifest } from "./route-build.ts";
 import { createRouteTable } from "./route-table.ts";
 import { escapeRegExp, isMissingFile, sourceKey } from "./utils.ts";
@@ -521,21 +525,21 @@ export async function prepareBuild(root: string, development = false): Promise<B
 
 /** Project-root worker entry; plugin closures never cross this boundary. */
 export async function prepareBuildLocal(root: string, development = false): Promise<BrowserBuild> {
-  const publicWatches = createPluginWatchAccumulator();
+  const attemptWatches = createPluginWatchAccumulator();
 
   try {
-    return await prepareBuildLocalAttempt(root, development, publicWatches);
+    return await prepareBuildLocalAttempt(root, development, attemptWatches);
   } catch (error) {
-    if (publicWatches.watches.length === 0) throw error;
+    if (attemptWatches.watches.length === 0) throw error;
 
-    throw projectErrorWithWatches(error, publicWatches.watches);
+    throw projectErrorWithWatches(error, attemptWatches.watches);
   }
 }
 
 async function prepareBuildLocalAttempt(
   root: string,
   development: boolean,
-  publicWatches: ReturnType<typeof createPluginWatchAccumulator>,
+  attemptWatches: ReturnType<typeof createPluginWatchAccumulator>,
 ): Promise<BrowserBuild> {
   root = resolve(root);
 
@@ -615,7 +619,7 @@ async function prepareBuildLocalAttempt(
     routeRoot,
     [...sources.keys()].filter((path) => path.startsWith(`${routeRoot}${sep}`)),
   );
-  const publicCapture = await capturePublicFiles(root, manifest, publicWatches.report);
+  const publicCapture = await capturePublicFiles(root, manifest, attemptWatches.report);
   const routeDeclarations = new Set<string>();
   const pendingRoutes = [manifest.root];
 
@@ -1496,6 +1500,27 @@ async function prepareBuildLocalAttempt(
     developmentDependencies = { shared, routes, assets };
   }
 
+  if (development) {
+    for (const file of configured.pipeline.capturedFiles) {
+      // Authored modules enter the pipeline through the project's separate source snapshot.
+      if (authored.has(file.filename)) continue;
+
+      const bytes = await readFile(file.filename).catch((error: unknown) => {
+        if (isMissingFile(error)) return undefined;
+        throw error;
+      });
+      const digest =
+        bytes && `sha256-${new Bun.CryptoHasher("sha256").update(bytes).digest("hex")}`;
+      if (digest === file.digest) continue;
+
+      attemptWatches.report({ kind: "file", file: file.filename });
+
+      throw new ProjectError(
+        `A captured plugin input changed during browser development preparation: ${file.filename}`,
+      );
+    }
+  }
+
   const buildMetadata: BrowserBuildMetadata = {
     files,
     sources: Object.freeze([
@@ -1510,10 +1535,15 @@ async function prepareBuildLocalAttempt(
     ...(styleRevision ? { styleRevision } : {}),
     ...(developmentDependencies ? { developmentDependencies } : {}),
     ...(configured ? { styles } : {}),
-    ...(configured || publicWatches.watches.length > 0
-      ? { watch: mergePluginWatches(configured?.pipeline.watch ?? [], publicWatches.watches) }
+    ...(configured || attemptWatches.watches.length > 0
+      ? { watch: mergePluginWatches(configured?.pipeline.watch ?? [], attemptWatches.watches) }
       : {}),
   };
+
+  if (development && !(await verifyProjectConfigurationSourceCapture(configuration, root)))
+    throw new ProjectError(
+      "The original project configuration changed during browser development preparation",
+    );
 
   if (hosting.version === 2) return { ...buildMetadata, hosting, publicFiles: publicCapture.files };
 
