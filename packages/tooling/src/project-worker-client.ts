@@ -240,7 +240,7 @@ export async function runProjectWorker(
 ): Promise<unknown> {
   signal?.throwIfAborted();
 
-  const filename = resolve(fileURLToPath(new URL("../dist/project-worker.js", import.meta.url)));
+  const filename = fileURLToPath(import.meta.resolve("#hesperia-project-worker"));
   const child = Bun.spawn([process.execPath, filename], {
     cwd: resolve(root),
     stdin: "pipe",
