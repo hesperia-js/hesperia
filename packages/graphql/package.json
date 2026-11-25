@@ -28,7 +28,7 @@
     }
   },
   "scripts": {
-    "build": "bunx tsc -p tsconfig.build.json"
+    "build": "bunx --bun --no-install tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@apollo/client": "4.3.5"

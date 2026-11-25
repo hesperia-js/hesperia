@@ -789,9 +789,8 @@ test("one captured browser graph serves native generated resources at same-origi
   const svgSourceSha256 = sha256(
     new Uint8Array(await readFile(join(fixtureRoot, "assets/proof.svg"))),
   );
-  const fontSourceSha256 = sha256(
-    new Uint8Array(await readFile(join(fixtureRoot, "assets/proof.ttf"))),
-  );
+  const fontSourceBytes = new Uint8Array(await readFile(join(fixtureRoot, "assets/proof.ttf")));
+  const fontSourceSha256 = sha256(fontSourceBytes);
   const svgAssetPins = capture.inventory.hosting.assets.filter(
     (asset) => asset.sha256 === svgSourceSha256 && asset.contentType.startsWith("image/svg+xml"),
   );
@@ -1018,6 +1017,102 @@ test("one captured browser graph serves native generated resources at same-origi
           const completedState = await readGeneratedAssetBrowserState(page);
 
           observations = { ...observations, fontState };
+
+          try {
+            const fontControl = await page.evaluate(
+              async ({ bytes, id, sourceSha256 }) => {
+                const canvas = document.createElement("canvas");
+                const context = canvas.getContext("2d");
+
+                if (!context) throw new Error("Canvas 2D text metrics are unavailable");
+
+                const missingFamily = `HesperiaMissing-${id}`;
+                const controlFamily = `HesperiaControl-${id}`;
+
+                context.font = `100px "${missingFamily}"`;
+                const fallbackFont = context.font;
+                const fallbackWidth = context.measureText("\uE000").width;
+
+                context.font = "100px sans-serif";
+                const genericWidth = context.measureText("\uE000").width;
+                const result = {
+                  sourceSha256,
+                  fallbackFont,
+                  fallbackWidth,
+                  genericWidth,
+                  controlStatus: null as string | null,
+                  controlFont: null as string | null,
+                  controlWidth: null as number | null,
+                  error: null as string | null,
+                  removed: null as boolean | null,
+                };
+                let control: FontFace | undefined;
+                let timer: number | undefined;
+
+                try {
+                  if (
+                    sourceSha256 !==
+                    "82c7efe1d8d9f598644b92e8c03489a4240ce60586631f60eb9bfe844e8a9f7f"
+                  )
+                    throw new Error("Independent font source does not match the pinned fixture");
+
+                  control = new FontFace(controlFamily, new Uint8Array(bytes).buffer, {
+                    style: "normal",
+                    weight: "400",
+                  });
+                  const loaded = await Promise.race([
+                    control.load(),
+                    new Promise<never>((_, reject) => {
+                      timer = window.setTimeout(
+                        () => reject(new Error("Independent font control timed out")),
+                        3_000,
+                      );
+                    }),
+                  ]);
+
+                  document.fonts.add(loaded);
+                  result.controlStatus = loaded.status;
+                  context.font = `100px "${controlFamily}"`;
+                  result.controlFont = context.font;
+                  result.controlWidth = context.measureText("\uE000").width;
+                } catch (error) {
+                  result.error = String(error);
+                } finally {
+                  if (timer !== undefined) window.clearTimeout(timer);
+
+                  if (control) {
+                    try {
+                      result.removed = document.fonts.delete(control);
+                    } catch (error) {
+                      result.error = [result.error, `Control cleanup: ${String(error)}`]
+                        .filter(Boolean)
+                        .join("; ");
+                    }
+                  }
+                }
+
+                return result;
+              },
+              { bytes: Array.from(fontSourceBytes), id: runId, sourceSha256: fontSourceSha256 },
+            );
+
+            observations = {
+              ...observations,
+              fontControl: {
+                ...fontControl,
+                generatedDifference:
+                  fontControl.controlWidth === null
+                    ? null
+                    : fontState.width - fontControl.controlWidth,
+                fallbackDifference:
+                  fontControl.controlWidth === null
+                    ? null
+                    : fontControl.controlWidth - fontControl.fallbackWidth,
+              },
+            };
+          } catch (error) {
+            observations = { ...observations, fontControl: { error: String(error) } };
+          }
 
           expect(fontState.faceStatuses).toContain("loaded");
           expect(fontState.check).toBe(true);
