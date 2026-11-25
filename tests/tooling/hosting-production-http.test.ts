@@ -1,4 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { API } from "typescript/unstable/async";
 import * as filesystem from "node:fs";
 import * as filesystemPromises from "node:fs/promises";
 import {
@@ -2385,3 +2386,197 @@ test("public dependency replacement and rollback use the existing native watcher
     () => cleanup?.close(),
   ]);
 }, 240_000);
+
+for (const targetSnapshot of [1, 2] as const) {
+  test(`development retires superseded ${targetSnapshot === 1 ? "first check" : "retained session"} before recovery`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "hesperia-dev-cancel-checking-"));
+    const app = join(root, "app.tsx");
+    const initialMarker = "HESPERIA_CANCEL_INITIAL";
+    const recoveredMarker = "HESPERIA_CANCEL_RECOVERED";
+    const appSource = (marker: string) =>
+      `export default function App() { return <html><head></head><body>${marker}</body></html>; }`;
+    const invalidApp =
+      "export default function App() { return <html><body>missing head</body></html>; }";
+    const nativeHeld = completion();
+    const releaseNative = completion();
+    const deadline = createDeadline(210_000);
+    const signal = deadline.signal;
+    const pending = new Set<Promise<unknown>>();
+    const reports: string[] = [];
+    let operationRejected = false;
+    let cleanup: ReturnType<typeof createDeadline> | undefined;
+    let watches: ReturnType<typeof observePublicWatches> | undefined;
+    let snapshotSpy: { mockRestore(): void } | undefined;
+    let server: ProjectServer | undefined;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let armed = false;
+    let armedSnapshots = 0;
+    let heldCount = 0;
+    let startupSucceeded = false;
+    let serverClosed = false;
+    let readerRetired = false;
+    let spiesRestored = false;
+    let completed = false;
+
+    function track<T>(operation: Promise<T>): Promise<T> {
+      pending.add(operation);
+      void operation.then(
+        () => pending.delete(operation),
+        () => {
+          pending.delete(operation);
+          operationRejected = true;
+        },
+      );
+      return operation;
+    }
+
+    await withFixtureCleanup(async () => {
+      await withAbort(track(linkFrameworkPackages(root)), signal);
+      await withAbort(track(mkdir(join(root, "src"))), signal);
+      await withAbort(track(writeFile(app, appSource(initialMarker))), signal);
+      await withAbort(track(writeFile(join(root, "hesperia.config.json"), "{}")), signal);
+
+      const observed = observePublicWatches(root, () => ({ heldCount, armed }));
+      watches = observed;
+      observed.holdNotifications(root);
+      observed.beforeRegistration(root, () => {
+        armed = true;
+      });
+      const originalSnapshot = API.prototype.updateSnapshot;
+      snapshotSpy = spyOn(API.prototype, "updateSnapshot").mockImplementation(async function (
+        this: API,
+        ...args: Parameters<API["updateSnapshot"]>
+      ) {
+        const snapshot: Awaited<ReturnType<API["updateSnapshot"]>> = await Reflect.apply(
+          originalSnapshot,
+          this,
+          args,
+        );
+
+        if (armed && ++armedSnapshots === targetSnapshot) {
+          armed = false;
+          heldCount++;
+          nativeHeld.resolve();
+          await releaseNative.promise;
+        }
+
+        return snapshot;
+      });
+
+      const activeServer = await withAbort(
+        track(
+          devProject(root, { port: 0, report: (message) => reports.push(message) }).then(
+            (started) => {
+              server = started;
+              startupSucceeded = true;
+              return started;
+            },
+          ),
+        ),
+        signal,
+      );
+      await withAbort(nativeHeld.promise, signal);
+      expect(heldCount).toBe(1);
+      expect(observed.forwardedNativeCallbacks()).toBe(0);
+
+      const events = await fetch(new URL("/_hesperia/events", activeServer.url), { signal });
+      expect(events.status).toBe(200);
+      reader = events.body!.getReader();
+      const nextEvent = nextDevelopmentEvent(reader, signal);
+      await nextEvent();
+
+      async function servedModule(marker: string): Promise<readonly [string, string]> {
+        const html = await (
+          await fetch(activeServer.url, { headers: { accept: "text/html" }, signal })
+        ).text();
+        const startup = html.match(/src="(\/_hesperia\/startup\.js)"/)?.[1];
+        if (!startup) throw new Error("The served startup module is missing");
+        const urls = new Set([new URL(startup, activeServer.url).href]);
+        const scanner = new Bun.Transpiler({ loader: "js" });
+
+        for (const url of urls) {
+          const response = await fetch(url, { signal });
+          expect(response.status).toBe(200);
+          const source = await response.text();
+          if (source.includes(marker)) return [url, source];
+
+          for (const dependency of scanner.scanImports(source)) {
+            const target = new URL(dependency.path, url);
+            expect(target.origin).toBe(activeServer.url.origin);
+            urls.add(target.href);
+          }
+        }
+
+        throw new Error("The expected source was absent from the served module graph");
+      }
+
+      const initial = await servedModule(initialMarker);
+      const rootWatch = observed.records
+        .filter(
+          (record) =>
+            !record.closed && record.directory === String(filesystem.realpathSync.native(root)),
+        )
+        .at(-1);
+      if (!rootWatch) throw new Error("The root watcher was not retained");
+
+      await withAbort(track(writeFile(app, invalidApp)), signal);
+      rootWatch.notify("app.tsx");
+      releaseNative.resolve();
+      while (!(await nextEvent()).includes("Hesperia checking failed")) {}
+      expect(reports.some((message) => message.includes("Hesperia checking failed"))).toBe(true);
+      expect(await (await fetch(initial[0], { signal })).text()).toBe(initial[1]);
+
+      await withAbort(track(writeFile(app, appSource(recoveredMarker))), signal);
+      rootWatch.notify("app.tsx");
+      while (!(await nextEvent()).includes('data: "reload"')) {}
+      const recovered = await servedModule(recoveredMarker);
+      expect(recovered[1]).toContain(recoveredMarker);
+      expect(observed.forwardedNativeCallbacks()).toBe(0);
+      completed = true;
+    }, [
+      () => releaseNative.resolve(),
+      () => {
+        deadline.close();
+        cleanup = createDeadline(15_000);
+      },
+      async () => {
+        if (!reader) return;
+        await withAbort(track(reader.cancel()), cleanup!.signal);
+        readerRetired = true;
+      },
+      async () => {
+        if (!startupSucceeded || !server) return;
+        await withAbort(track(server.close()), cleanup!.signal);
+        serverClosed = true;
+      },
+      () => {
+        if (!watches) return;
+        if (!serverClosed)
+          throw new Error(`Retained watcher spies after uncertain retirement: ${root}`);
+        watches.restore();
+        snapshotSpy?.mockRestore();
+        spiesRestored = true;
+      },
+      async () => {
+        if (
+          !completed ||
+          !startupSucceeded ||
+          !readerRetired ||
+          !serverClosed ||
+          !spiesRestored ||
+          signal.aborted ||
+          cleanup!.signal.aborted ||
+          operationRejected ||
+          pending.size > 0
+        )
+          throw new Error(`Retained cancellation fixture after failure or unsettled work: ${root}`);
+        await withAbort(track(unlinkFrameworkPackages(root)), cleanup!.signal);
+        if (cleanup!.signal.aborted || operationRejected || pending.size > 0)
+          throw new Error(`Retained cancellation fixture after incomplete unlink: ${root}`);
+        cleanup!.close();
+        await rm(root, { recursive: true, force: true });
+      },
+      () => cleanup?.close(),
+    ]);
+  }, 240_000);
+}
