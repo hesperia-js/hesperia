@@ -2,7 +2,6 @@ import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { afterEach, expect, test } from "bun:test";
 import {
   chromium,
-  errors as playwrightErrors,
   firefox,
   webkit,
   type Browser,
@@ -885,6 +884,13 @@ test("one captured browser graph serves native generated resources at same-origi
         expect(seededCookie).toBeDefined();
 
         recorder = await recordGeneratedAssetBrowserEvents(page, scenario, capture);
+        const svgURL = new URL(svgAssetPin.path.slice(1), scenario.assetRoot).href;
+        const svgResponse =
+          mode === "positive"
+            ? page.waitForResponse((response) => response.url() === svgURL, { timeout: 0 })
+            : undefined;
+
+        void svgResponse?.catch(() => undefined);
         const applicationUrl = new URL("/", scenario.appOrigin).href;
 
         if (mode === "positive" && input.holdStylesheet) {
@@ -976,17 +982,25 @@ test("one captured browser graph serves native generated resources at same-origi
             undefined,
             { timeout: 20_000 },
           );
-          const svgURL = new URL(svgAssetPin.path.slice(1), scenario.assetRoot).href;
+          if (!svgResponse) throw new Error("The SVG response observer was not installed");
+
+          let svgWaitTimedOut = false;
+          let svgWaitTimer: ReturnType<typeof setTimeout> | undefined;
 
           try {
-            await page.waitForFunction(
-              (url: string) =>
-                performance.getEntriesByType("resource").some((resource) => resource.name === url),
-              svgURL,
-              { timeout: 20_000 },
-            );
+            const response = await Promise.race([
+              svgResponse,
+              new Promise<never>((_, reject) => {
+                svgWaitTimer = setTimeout(() => {
+                  svgWaitTimedOut = true;
+                  reject(new Error(`Timed out after 20000ms waiting for SVG response: ${svgURL}`));
+                }, 20_000);
+              }),
+            ]);
+
+            expect(response.status()).toBe(200);
           } catch (waitError) {
-            if (waitError instanceof playwrightErrors.TimeoutError) {
+            if (svgWaitTimedOut) {
               let timer: ReturnType<typeof setTimeout> | undefined;
 
               try {
@@ -1045,6 +1059,8 @@ test("one captured browser graph serves native generated resources at same-origi
             }
 
             throw waitError;
+          } finally {
+            if (svgWaitTimer !== undefined) clearTimeout(svgWaitTimer);
           }
 
           const finalState = await readGeneratedAssetBrowserState(page);
@@ -1081,8 +1097,16 @@ test("one captured browser graph serves native generated resources at same-origi
 
           observations = { ...observations, fontState };
 
+          let fontControlDeadline: ReturnType<typeof setTimeout> | undefined;
+
           try {
-            const fontControl = await page.evaluate(
+            const fontControlTimeout = new Promise<never>((_, reject) => {
+              fontControlDeadline = setTimeout(
+                () => reject(new Error("Independent font observation timed out")),
+                5_000,
+              );
+            });
+            const fontControlWork = page.evaluate(
               async ({ bytes, id, sourceSha256 }) => {
                 const canvas = document.createElement("canvas");
                 const context = canvas.getContext("2d");
@@ -1158,6 +1182,7 @@ test("one captured browser graph serves native generated resources at same-origi
               },
               { bytes: Array.from(fontSourceBytes), id: runId, sourceSha256: fontSourceSha256 },
             );
+            const fontControl = await Promise.race([fontControlWork, fontControlTimeout]);
 
             observations = {
               ...observations,
@@ -1173,13 +1198,27 @@ test("one captured browser graph serves native generated resources at same-origi
                     : fontControl.controlWidth - fontControl.fallbackWidth,
               },
             };
+            expect(fontControl.error).toBeNull();
+            expect(fontControl.controlStatus).toBe("loaded");
+            expect(fontControl.removed).toBe(true);
+
+            if (fontControl.controlWidth === null)
+              throw new Error("The independent font control did not produce a width");
+
+            expect(Math.abs(fontState.width - fontControl.controlWidth)).toBeLessThan(0.05);
+            expect(Math.abs(fontControl.controlWidth - fontControl.fallbackWidth)).toBeGreaterThan(
+              0.05,
+            );
           } catch (error) {
-            observations = { ...observations, fontControl: { error: String(error) } };
+            observations = { ...observations, fontControlFailure: String(error) };
+
+            throw error;
+          } finally {
+            if (fontControlDeadline !== undefined) clearTimeout(fontControlDeadline);
           }
 
           expect(fontState.faceStatuses).toContain("loaded");
           expect(fontState.check).toBe(true);
-          expect(Math.abs(fontState.width - 73.3)).toBeLessThan(0.05);
           expect(completedState.dynamicEvaluations).toBe(1);
 
           const nextRouteLink = page.locator("#next-route-link");
@@ -1402,7 +1441,15 @@ test("one captured browser graph serves native generated resources at same-origi
                 event.bodySha256 === authoredStylesheetPin?.sha256,
             ),
           ).toBe(true);
-          expect(svgResponses.every((event) => event.bodySha256 === svgSourceSha256)).toBe(true);
+          expect(
+            svgResponses.every(
+              (event) =>
+                event.status === 200 &&
+                event.contentType === svgAssetPin.contentType &&
+                event.expectedContentType === svgAssetPin.contentType &&
+                event.bodySha256 === svgSourceSha256,
+            ),
+          ).toBe(true);
           expect(fontResponses.every((event) => event.bodySha256 === fontSourceSha256)).toBe(true);
           for (const stylesheetURL of generatedStylesheetURLs) {
             expect(new URL(stylesheetURL).origin).toBe(scenario.assetOrigin);
