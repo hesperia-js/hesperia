@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { snapshotProductionTarget, type ProductionTargetV1 } from "@hesperia/hosting";
@@ -60,45 +60,104 @@ export interface ProjectConfiguration {
   readonly public?: Readonly<Record<string, PublicValue>>;
 }
 
-const loadedTypeScript = new Map<string, string>();
+interface ProjectConfigurationPathObservation {
+  readonly filename: string;
+  readonly status: "missing" | "non-file" | "file";
+  readonly realpath?: string;
+}
+
+interface CapturedProjectConfigurationText {
+  readonly filename: string;
+  readonly bytesBase64: string;
+}
+
+interface ProjectConfigurationSourceCapture {
+  readonly root: string;
+  readonly candidates: readonly ProjectConfigurationPathObservation[];
+  readonly source?: CapturedProjectConfigurationText;
+}
+
+const loadedTypeScript = new Map<string, Uint8Array>();
+const configurationSourceCaptures = new WeakMap<
+  ProjectConfiguration,
+  ProjectConfigurationSourceCapture
+>();
+
+/** @internal Verify the original configuration paths and bytes before returning a development build. */
+export async function verifyProjectConfigurationSourceCapture(
+  configuration: ProjectConfiguration,
+  root: string,
+): Promise<boolean> {
+  const capture = configurationSourceCaptures.get(configuration);
+
+  if (!capture || capture.root !== resolve(root)) return false;
+
+  try {
+    if (!(await configurationPathsMatch(capture.candidates))) return false;
+    if (!capture.source) return true;
+
+    const currentBytes = await readFile(capture.source.filename);
+
+    return (
+      currentBytes.toString("base64") === capture.source.bytesBase64 &&
+      (await configurationPathsMatch(capture.candidates))
+    );
+  } catch (error) {
+    if (isMissingFile(error)) return false;
+
+    throw error;
+  }
+}
 
 /** Read exactly one optional project file in its project-root Bun process. */
 export async function readConfiguration(root: string): Promise<ProjectConfiguration> {
   root = resolve(root);
   const jsonFile = resolve(root, "hesperia.config.json");
   const tsFile = resolve(root, "hesperia.config.ts");
-  const [jsonPresent, tsPresent] = await Promise.all([exists(jsonFile), exists(tsFile)]);
+  const candidates = Object.freeze(
+    await Promise.all([observeConfigurationPath(jsonFile), observeConfigurationPath(tsFile)]),
+  );
+  const jsonPresent = candidates[0].status === "file";
+  const tsPresent = candidates[1].status === "file";
 
   if (jsonPresent && tsPresent)
     throw new TypeError("Use either hesperia.config.ts or hesperia.config.json, not both");
 
-  if (!jsonPresent && !tsPresent)
-    return Object.freeze({
+  if (!jsonPresent && !tsPresent) {
+    const configuration = Object.freeze({
       allowUnsafeHTML: false,
       allowUnsafeEmbed: false,
       mountURL: "/",
       resolutionOverrides: { browser: {} },
     });
 
+    configurationSourceCaptures.set(configuration, Object.freeze({ root, candidates }));
+    return configuration;
+  }
+
+  if (tsPresent && process.cwd() !== root)
+    throw new Error("hesperia.config.ts must run in a Bun process started from the project root");
+
+  const filename = jsonPresent ? jsonFile : tsFile;
+  const bytes = await readFile(filename);
+  const source = bytes.toString("utf8");
   let value: unknown;
 
-  if (jsonPresent) value = JSON.parse(await readFile(jsonFile, "utf8"));
+  if (jsonPresent) value = JSON.parse(source);
   else {
-    if (process.cwd() !== root)
-      throw new Error("hesperia.config.ts must run in a Bun process started from the project root");
-
-    const source = await readFile(tsFile, "utf8");
-    const digest = new Bun.CryptoHasher("sha256").update(source).digest("hex");
     const previous = loadedTypeScript.get(tsFile);
 
-    if (previous && previous !== digest)
+    if (previous && !sameBytes(previous, bytes))
       throw new Error("hesperia.config.ts changed; restart the project Bun command to load it");
 
-    loadedTypeScript.set(tsFile, digest);
+    if (!previous) loadedTypeScript.set(tsFile, Uint8Array.from(bytes));
 
     const module = await import(pathToFileURL(tsFile).href);
     value = module.default;
   }
+
+  if (!(await configurationPathsMatch(candidates)) || !sameBytes(bytes, await readFile(filename)))
+    throw new Error("The project configuration changed while its source was being read");
 
   if (!isNonArrayObject(value))
     throw new TypeError("Hesperia project configuration must contain an object");
@@ -194,7 +253,7 @@ export async function readConfiguration(root: string): Promise<ProjectConfigurat
   const publicValues = Object.hasOwn(value, "public")
     ? projectPublicValues((value as { public?: unknown }).public).values
     : undefined;
-  return Object.freeze({
+  const configuration = Object.freeze({
     allowUnsafeHTML: (value as { allowUnsafeHTML?: boolean }).allowUnsafeHTML ?? false,
     allowUnsafeEmbed: (value as { allowUnsafeEmbed?: boolean }).allowUnsafeEmbed ?? false,
     mountURL,
@@ -204,16 +263,52 @@ export async function readConfiguration(root: string): Promise<ProjectConfigurat
     ...(plugins ? { plugins: Object.freeze([...plugins]) } : {}),
     ...(publicValues ? { public: publicValues } : {}),
   });
+
+  configurationSourceCaptures.set(
+    configuration,
+    Object.freeze({
+      root,
+      candidates,
+      source: Object.freeze({
+        filename,
+        bytesBase64: bytes.toString("base64"),
+      }),
+    }),
+  );
+
+  return configuration;
 }
 
-async function exists(filename: string): Promise<boolean> {
+async function observeConfigurationPath(
+  filename: string,
+): Promise<ProjectConfigurationPathObservation> {
   try {
-    return (await stat(filename)).isFile();
+    const info = await stat(filename);
+
+    return Object.freeze({
+      filename,
+      status: info.isFile() ? "file" : "non-file",
+      realpath: await realpath(filename),
+    });
   } catch (error) {
-    if (isMissingFile(error)) return false;
+    if (isMissingFile(error)) return Object.freeze({ filename, status: "missing" });
 
     throw error;
   }
+}
+
+async function configurationPathsMatch(
+  candidates: readonly ProjectConfigurationPathObservation[],
+): Promise<boolean> {
+  const current = await Promise.all(
+    candidates.map((item) => observeConfigurationPath(item.filename)),
+  );
+
+  return JSON.stringify(current) === JSON.stringify(candidates);
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.byteLength === right.byteLength && left.every((byte, index) => byte === right[index]);
 }
 
 function validatePlugins(value: unknown): asserts value is readonly Plugin<any>[] {
