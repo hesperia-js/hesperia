@@ -185,6 +185,9 @@ test("configuration target domains include case-folded filenames on supported fi
 
 test.each([
   "known build",
+  "bare build",
+  "bun-only build",
+  "unrecognized flags",
   "ambiguous output",
   "unrecognized build",
   "missing module",
@@ -193,6 +196,8 @@ test.each([
   "resolves relative emitted workspace imports only with a unique package build identity: %s",
   async (variant) => {
     const repo = await initializeRepo();
+    const recognized =
+      variant === "known build" || variant === "bare build" || variant === "bun-only build";
 
     try {
       await writeJson(repo, CATALOG_PATH, {
@@ -213,7 +218,15 @@ test.each([
         name: "@fixture/demo",
         scripts: {
           build:
-            variant === "unrecognized build" ? "node build.mjs" : "bunx tsc -p tsconfig.build.json",
+            variant === "unrecognized build"
+              ? "node build.mjs"
+              : variant === "unrecognized flags"
+                ? "bunx --no-install --bun tsc -p tsconfig.build.json"
+                : variant === "bun-only build"
+                  ? "bunx --bun --no-install tsc -p tsconfig.build.json"
+                  : variant === "bare build"
+                    ? "tsc -p tsconfig.build.json"
+                    : "bunx tsc -p tsconfig.build.json",
         },
       });
 
@@ -250,10 +263,10 @@ test.each([
 
       const result = selection(repo, base, commit(repo, "change emitted dependency source"));
 
-      expect(result.fullSuite).toBe(variant !== "known build");
+      expect(result.fullSuite).toBe(!recognized);
 
       expect(result.selectedCaseIds).toStrictEqual(
-        variant === "known build" ? ["browser-case"] : ["browser-case", "other-case"],
+        recognized ? ["browser-case"] : ["browser-case", "other-case"],
       );
     } finally {
       await rm(repo, { recursive: true, force: true });

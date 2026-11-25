@@ -1086,7 +1086,9 @@ function emittedSourceIndex(snapshot: SourceSnapshot): ReadonlyMap<string, Reado
     if (typeof manifest.name !== "string" || !manifest.name) continue;
     const scripts = manifest.scripts as Record<string, unknown> | undefined;
     const command = typeof scripts?.build === "string" ? scripts.build : "";
-    const match = /^(?:bunx )?tsc -p ([A-Za-z0-9_./-]+\.json)$/.exec(command);
+    const match = /^(?:bunx (?:--bun --no-install )?)?tsc -p ([A-Za-z0-9_./-]+\.json)$/.exec(
+      command,
+    );
 
     if (!match?.[1]) continue;
     const directory = posix.dirname(manifestPath);
