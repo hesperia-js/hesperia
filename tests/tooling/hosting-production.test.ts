@@ -999,9 +999,7 @@ test("one captured browser graph serves native generated resources at same-origi
           expect(new URL(staticModule!.url).origin).toBe(scenario.assetOrigin);
           expect(initialRequests.some((event) => event.url === staticModule!.url)).toBe(true);
           expect(
-            recorder.events.some(
-              (event) => event.kind === "request" && event.url === startupURL,
-            ),
+            recorder.events.some((event) => event.kind === "request" && event.url === startupURL),
           ).toBe(true);
 
           const activationEventStart = recorder.events.length;
