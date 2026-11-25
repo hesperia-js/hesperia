@@ -14,11 +14,13 @@ import {
 } from "../../packages/tooling/src/project.ts";
 import { devProject, previewProject } from "../../packages/tooling/src/server.ts";
 import {
+  createGeneratedAssetHost,
   createHost,
   createTargetedHost,
   readBuild,
   readTargetedBuild,
 } from "../../packages/hosting/src/index.ts";
+import { readRetainedManagedBuild } from "../../packages/hosting/src/internal/index.ts";
 import { startProcessDiagnostics } from "./fixtures/drivers/process-diagnostics.mjs";
 import { captureRejection } from "./capture-rejection.ts";
 import { linkFrameworkPackages, unlinkFrameworkPackages } from "./fixture-dependencies.ts";
@@ -138,6 +140,98 @@ describe("project commands", () => {
       expect((await readTargetedBuild(output)).control).toEqual(captured.control);
 
       if (withPublic) {
+        const deployedOutput = await writeBuild(root, built, {
+          mountURL: "/release",
+          generatedAssets: {
+            baseURL: "https://assets.example.test/release",
+            moduleCredentials: "use-credentials",
+          },
+        });
+        const deployed = await readTargetedBuild(deployedOutput);
+
+        if (!("deployment" in deployed)) throw new Error("Expected a published deployment");
+
+        expect(deployed.control).toEqual(captured.control);
+        expect(deployed.deployment).toMatchObject({
+          mountPathname: "/release",
+          generatedAssets: {
+            root: { kind: "url", href: "https://assets.example.test/release/" },
+            moduleCredentials: "use-credentials",
+            credentials: "include",
+          },
+        });
+
+        const deployedPreview = await previewProject(root, 0, { mountURL: "/moved" });
+
+        try {
+          const html = await fetch(new URL("/moved/items/42", deployedPreview.url), {
+            headers: { accept: "text/html" },
+          });
+
+          expect(html.status).toBe(200);
+          const document = await html.text();
+          expect(document).toContain(
+            '<script type="module" crossorigin="use-credentials" src="https://assets.example.test/release/startup.js">',
+          );
+
+          const preloads = [
+            ...document.matchAll(
+              /<link rel="modulepreload" crossorigin="use-credentials" href="https:\/\/assets\.example\.test\/release(\/assets\/[^"]+)">/gu,
+            ),
+          ].map((link) => link[1]!);
+
+          expect(preloads).toContain(deployed.inventory.hosting.startupAsset);
+          expect(preloads.length).toBeGreaterThan(1);
+          expect(preloads.every((path) => deployed.inventory.files.has(path))).toBe(true);
+          expect(deployed.control.kind).toBe("browser");
+
+          if (deployed.control.kind === "browser")
+            expect(preloads).not.toContain(deployed.control.routeTable);
+
+          const stored = JSON.parse(await readFile(recordPath, "utf8")) as {
+            assetDirectory: string;
+          };
+          const staticDocument = await readFile(
+            join(output, stored.assetDirectory, "..", "static", "index.html"),
+            "utf8",
+          );
+          expect(staticDocument).toBe(document);
+          expect(
+            await (await fetch(new URL("/moved/robots.txt", deployedPreview.url))).text(),
+          ).toBe("fixture public bytes");
+        } finally {
+          await deployedPreview.close();
+        }
+
+        const generated = await createGeneratedAssetHost(deployed, { mountURL: "/moved" });
+        const wrapper = await generated
+          .handle(new Request("https://assets.example.test/release/startup.js"))
+          ?.text();
+
+        expect(wrapper).toContain('await start("/moved",');
+
+        const assetPath = deployed.inventory.hosting.startupAsset;
+        const asset = generated.handle(
+          new Request("https://assets.example.test/release" + assetPath),
+        );
+
+        expect(await asset?.arrayBuffer()).toEqual(await built.files.get(assetPath)!.arrayBuffer());
+        expect(
+          generated.handle(new Request("https://wrong.example.test/release" + assetPath)),
+        ).toBeUndefined();
+
+        const priorCaptureId = JSON.parse(published.toString("utf8")).assetDirectory.split("/")[1];
+        const retained = await readRetainedManagedBuild(output, priorCaptureId);
+
+        expect(await retained.files.get(assetPath)?.arrayBuffer()).toEqual(
+          await built.files.get(assetPath)!.arrayBuffer(),
+        );
+        await writeBuild(root, built);
+        const inherited = await readTargetedBuild(output);
+
+        expect(inherited).toHaveProperty("deployment", deployed.deployment);
+        const lastGood = await readFile(recordPath);
+
         await writeFile(
           join(root, "hesperia.config.json"),
           JSON.stringify({ target: { version: 1, runtime: "bun", profile: "hono" } }),
@@ -146,10 +240,85 @@ describe("project commands", () => {
         expect(await captureRejection(prepareBuild(root))).toMatchObject({
           message: expect.stringContaining("production-target-unavailable"),
         });
-        expect(await readFile(recordPath)).toEqual(published);
+        expect(await readFile(recordPath)).toEqual(lastGood);
       }
     },
   );
+
+  test("browser preview serves retained assets at their published paths", async () => {
+    const root = await temporaryProject();
+    await mkdir(join(root, "src/routes"), { recursive: true });
+    await mkdir(join(root, "public"));
+    await writeFile(
+      join(root, "hesperia.config.json"),
+      JSON.stringify({ target: { version: 1, runtime: "browser", profile: "static" } }),
+    );
+    await writeFile(
+      join(root, "app.tsx"),
+      "export default function App() { return <html><head></head><body></body></html>; }",
+    );
+    const page = join(root, "src/routes/+page.tsx");
+    const robots = join(root, "public/robots.txt");
+    await writeFile(page, "export default function Page() { return <main>Original page</main>; }");
+    await writeFile(robots, "original public file");
+
+    const first = await prepareBuild(root);
+    await writeBuild(root, first, { generatedAssets: { baseURL: "/first-assets" } });
+    await writeFile(
+      page,
+      "export default function Page() { return <main>Replacement page</main>; }",
+    );
+    await writeFile(robots, "replacement public file");
+
+    const second = await prepareBuild(root);
+    const earlierModule = first.hosting.assets.find(
+      ({ path }) => path.endsWith(".js") && !second.files.has(path),
+    );
+
+    if (!earlierModule) throw new Error("Expected a JavaScript module unique to the first build");
+
+    const original = await previewProject(root, 0);
+    const earlierPath = "/first-assets" + earlierModule.path;
+
+    try {
+      const response = await fetch(new URL(earlierPath, original.url));
+      expect(response.status).toBe(200);
+      expect(await response.arrayBuffer()).toEqual(
+        await first.files.get(earlierModule.path)!.arrayBuffer(),
+      );
+    } finally {
+      await original.close();
+    }
+
+    await writeBuild(root, second, { generatedAssets: { baseURL: "/second-assets" } });
+    const replacement = await previewProject(root, 0);
+
+    try {
+      const response = await fetch(
+        new URL("/second-assets" + second.hosting.startupAsset, replacement.url),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.arrayBuffer()).toEqual(
+        await second.files.get(second.hosting.startupAsset)!.arrayBuffer(),
+      );
+      expect(await (await fetch(new URL("/robots.txt", replacement.url))).text()).toBe(
+        "replacement public file",
+      );
+      expect((await fetch(new URL("/first-assets/startup.js", replacement.url))).status).toBe(404);
+      expect(
+        (await fetch(new URL("/second-assets" + earlierModule.path, replacement.url))).status,
+      ).toBe(404);
+
+      const retained = await fetch(new URL(earlierPath, replacement.url));
+      const retainedBytes = await retained.arrayBuffer();
+
+      expect(retained.status).toBe(200);
+      expect(retained.headers.get("content-type")).toBe(earlierModule.contentType);
+      expect(retainedBytes).toEqual(await first.files.get(earlierModule.path)!.arrayBuffer());
+    } finally {
+      await replacement.close();
+    }
+  });
 
   test("checks imported modules outside src in the same source snapshot", async () => {
     const root = await temporaryProject();
@@ -629,7 +798,9 @@ export default function App() {
 
       expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
 
-      expect(await page.text()).toContain('<script type="module" src="/_hesperia/startup.js">');
+      expect(await page.text()).toContain(
+        '<script type="module" crossorigin="anonymous" src="/_hesperia/startup.js">',
+      );
 
       const script = await fetch(new URL("/_hesperia/assets/team%20docs/caf%C3%A9.js", server.url));
 

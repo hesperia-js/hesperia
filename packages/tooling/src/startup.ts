@@ -17,13 +17,13 @@ export function browserStartupSource(
   channelDefaults: ChannelProjectDefaults,
   runtimeModule = "hesperia/runtime",
 ): string {
-  return `import { bootstrapApplication } from ${JSON.stringify(runtimeModule)};
-export async function start(mountPath: string): Promise<void> {
+  return `import { bootstrapApplication, type ResolvedGeneratedAssets } from ${JSON.stringify(runtimeModule)};
+export async function start(mountPath: string, generatedAssets?: ResolvedGeneratedAssets, modulePreloads?: Readonly<Record<string, readonly string[]>>): Promise<void> {
   await bootstrapApplication(window, {
     configuration: ${hasConfiguration ? `() => import(${JSON.stringify(startupModules.configuration)}).then(module => module.default)` : "() => ({})"},
     shell: () => import(${JSON.stringify(startupModules.shell)}).then(module => module.default),
     routes: () => import(${JSON.stringify(startupModules.routes)}).then(module => module.default),
-  }, { mountPath, channelDefaults: ${JSON.stringify(channelDefaults)} });
+  }, { mountPath, generatedAssets, modulePreloads, channelDefaults: ${JSON.stringify(channelDefaults)} });
 }
 `;
 }

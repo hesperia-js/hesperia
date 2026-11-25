@@ -19,9 +19,19 @@ import {
   type HostingRecordV2,
   type HostSelection,
   type InProcessTargetedCapturedBuild,
+  type InProcessTargetedDeploymentCapturedBuildV4,
+  type TargetedHostResource,
 } from "@hesperia/hosting";
-import { readCompletedBuildDirectory } from "@hesperia/hosting/internal";
+import {
+  BROWSER_STATIC_ROUTING_ASSET,
+  BROWSER_MODULE_PRELOADS_ASSET,
+  createRetainedManagedHost,
+  readCompletedBuildDirectory,
+  relativeGeneratedRequestPath,
+  snapshotHostSelection,
+} from "@hesperia/hosting/internal";
 import { prepareBuild, ProjectError, type BrowserBuild } from "./project.ts";
+import { readRetainedManagedHistory } from "./targeted-publication.ts";
 import { isMissingFile } from "./utils.ts";
 
 /** A local server handle owns its file watchers and connected development clients. */
@@ -39,44 +49,50 @@ export async function previewProject(
   port = 4173,
   selection?: HostSelection,
 ): Promise<ProjectServer> {
-  const build = await readCompletedBuildDirectory(resolve(root, ".hesperia/build"));
-  let host: ApplicationHost;
-  let closeHost: (() => Promise<void>) | undefined;
-
-  if ("control" in build) {
-    if (
-      build.control.kind !== "browser" ||
-      build.control.productionTarget.declaration.runtime !== "browser"
-    )
-      throw new ProjectError("Preview requires a browser/static target");
-
-    const resource = await createTargetedHost(build as InProcessTargetedCapturedBuild, selection);
-
-    if (resource.kind !== "browser") {
-      await resource.close();
-
-      throw new ProjectError("Preview requires a browser host");
-    }
-
-    host = resource.host;
-    closeHost = () => resource.close();
-  } else {
-    if ("serverFiles" in build) throw new ProjectError("Preview requires a browser build");
-
-    host = await createHost(build, selection);
-  }
-
+  const selected = snapshotHostSelection(selection);
+  const output = resolve(root, ".hesperia/build");
+  const build = await readCompletedBuildDirectory(output);
+  const resources: TargetedHostResource[] = [];
   let server: ReturnType<typeof Bun.serve>;
 
   try {
+    let host: ApplicationHost;
+    let inventory: PreviewInventory;
+
+    if ("control" in build) {
+      if (
+        build.control.kind !== "browser" ||
+        build.control.productionTarget.declaration.runtime !== "browser"
+      )
+        throw new ProjectError("Preview requires a browser/static target");
+
+      const resource = await createTargetedHost(
+        build as InProcessTargetedCapturedBuild | InProcessTargetedDeploymentCapturedBuildV4,
+        selected,
+      );
+      resources.push(resource);
+
+      if (resource.kind !== "browser") throw new ProjectError("Preview requires a browser host");
+
+      host = resource.host;
+      inventory = build.inventory;
+    } else {
+      if ("serverFiles" in build) throw new ProjectError("Preview requires a browser build");
+
+      host = await createHost(build, selected);
+      inventory = build;
+    }
+
+    const handle = await previewWithRetainedAssets(output, host, inventory, resources);
+
     server = Bun.serve({
       hostname: "127.0.0.1",
       port,
-      fetch: (request) => host.handle(request) ?? new Response(null, { status: 404 }),
+      fetch: (request) => handle(request) ?? new Response(null, { status: 404 }),
     });
   } catch (cause) {
     try {
-      await closeHost?.();
+      await closePreviewResources(resources);
     } catch (cleanup) {
       throw new AggregateError([cause, cleanup], "Preview startup and host cleanup failed");
     }
@@ -92,7 +108,7 @@ export async function previewProject(
         await server.stop(true);
       } catch (cause) {
         try {
-          await closeHost?.();
+          await closePreviewResources(resources);
         } catch (cleanup) {
           throw new AggregateError([cause, cleanup], "Preview stop and host cleanup failed");
         }
@@ -100,9 +116,113 @@ export async function previewProject(
         throw cause;
       }
 
-      await closeHost?.();
+      await closePreviewResources(resources);
     },
   };
+}
+
+interface RetainedPreviewAsset {
+  readonly host: ApplicationHost;
+  readonly sha256: string;
+  readonly contentType: string;
+}
+
+interface PreviewInventory {
+  readonly files: ReadonlyMap<string, Blob>;
+  readonly publicFiles?: ReadonlyMap<string, Blob>;
+}
+
+async function previewWithRetainedAssets(
+  output: string,
+  current: ApplicationHost,
+  inventory: PreviewInventory,
+  resources: TargetedHostResource[],
+): Promise<ApplicationHost["handle"]> {
+  const retained = new Map<string, Map<string, RetainedPreviewAsset>>();
+  const currentRoot = current.generatedAssets.root;
+
+  for (const capture of await readRetainedManagedHistory(output)) {
+    const resource = await createRetainedManagedHost(
+      capture.inventory,
+      undefined,
+      capture.deployment,
+    );
+    resources.push(resource);
+
+    const root = resource.host.generatedAssets.root;
+    const absolute = root.kind === "url" ? new URL(root.href) : undefined;
+    const origin = absolute?.origin ?? "";
+    const directory = root.kind === "path" ? root.pathname : absolute!.pathname;
+    const sameRoot =
+      root.kind === "path"
+        ? currentRoot.kind === "path" && root.pathname === currentRoot.pathname
+        : currentRoot.kind === "url" && root.href === currentRoot.href;
+
+    for (const asset of capture.inventory.hosting.assets) {
+      if (
+        asset.path === BROWSER_STATIC_ROUTING_ASSET ||
+        asset.path === BROWSER_MODULE_PRELOADS_ASSET ||
+        (sameRoot && inventory.files.has(asset.path))
+      )
+        continue;
+
+      const pathname = directory + asset.path.slice(1);
+      let origins = retained.get(pathname);
+
+      if (!origins) {
+        origins = new Map();
+        retained.set(pathname, origins);
+      }
+
+      const prior = origins.get(origin);
+
+      if (prior && (prior.sha256 !== asset.sha256 || prior.contentType !== asset.contentType))
+        throw new ProjectError(
+          `Retained generated URL has conflicting bytes or media type: ${origin}${pathname}`,
+        );
+
+      origins.set(origin, {
+        host: resource.host,
+        sha256: asset.sha256,
+        contentType: asset.contentType,
+      });
+    }
+  }
+
+  return (request) => {
+    const url = new URL(request.url);
+    const origins = retained.get(url.pathname);
+    const original = origins?.get(url.origin) ?? origins?.get("");
+
+    if (!original) return current.handle(request);
+
+    const path = relativeGeneratedRequestPath(url, current.generatedAssets);
+    const mount = current.mount.pathname;
+    const publicPath =
+      mount === "/"
+        ? url.pathname
+        : url.pathname.startsWith(mount + "/")
+          ? url.pathname.slice(mount.length)
+          : undefined;
+
+    if (
+      (path !== undefined && inventory.files.has("/" + path)) ||
+      (publicPath !== undefined && inventory.publicFiles?.has(publicPath))
+    )
+      return current.handle(request);
+
+    return original.host.handle(request);
+  };
+}
+
+async function closePreviewResources(resources: readonly TargetedHostResource[]): Promise<void> {
+  const results = await Promise.allSettled(resources.map((resource) => resource.close()));
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, "Preview target cleanup failed");
 }
 
 /** Development reports compilation failures without replacing the last successful application. */
@@ -1328,8 +1448,8 @@ export async function devProject(
       const body = await response.text();
       const clientPath = `${current.host.mount.assetPath}/client.js?publication=${encodeURIComponent(current.identity)}`;
       const html = body.replace(
-        '<script type="module" src=',
-        `<script type="module" src="${clientPath.replaceAll("&", "&amp;")}"></script><script type="module" src=`,
+        '<script type="module" crossorigin=',
+        `<script type="module" src="${clientPath.replaceAll("&", "&amp;")}"></script><script type="module" crossorigin=`,
       );
       const headers = new Headers(response.headers);
 

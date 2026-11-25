@@ -24,6 +24,11 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./runtime/generated-assets": {
+      "types": "./dist/runtime/generated-assets.d.ts",
+      "import": "./dist/runtime/generated-assets.js",
+      "default": "./dist/runtime/generated-assets.js"
+    },
     "./runtime": {
       "types": "./dist/runtime/index.d.ts",
       "import": "./dist/runtime/index.js",

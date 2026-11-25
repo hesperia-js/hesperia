@@ -1,12 +1,30 @@
 import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { afterEach, expect, test } from "bun:test";
-import { chromium } from "playwright";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chromium,
+  firefox,
+  webkit,
+  type Browser,
+  type Page,
+  type Response as BrowserResponse,
+} from "playwright";
+import { randomUUID } from "node:crypto";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import {
+  readTargetedBuild,
+  type InProcessTargetedDeploymentCapturedBuildV4,
+} from "../../packages/hosting/src/index.ts";
 import { prepareBuild, writeBuild } from "../../packages/tooling/src/project.ts";
 import { previewProject, type ProjectServer } from "../../packages/tooling/src/server.ts";
 import { linkFrameworkPackages, unlinkFrameworkPackages } from "./fixture-dependencies.ts";
+import {
+  createGeneratedAssetProviderFixture,
+  type GeneratedAssetProviderEvent,
+  type GeneratedAssetScenario,
+  type GeneratedAssetScenarioInput,
+} from "./fixtures/generated-assets-browser.ts";
 
 const roots: string[] = [];
 
@@ -164,12 +182,20 @@ test("one production build serves root and nested hosts without changing its ass
       expect(document.status).toBe(200);
 
       expect(await document.text()).toContain(
-        '<script type="module" src="' + assetBase + '/startup.js">',
+        '<script type="module" crossorigin="anonymous" src="' + assetBase + '/startup.js">',
       );
 
       const wrapper = await fetch(new URL(assetBase + "/startup.js", fixture.server.url));
 
-      expect(await wrapper.text()).toContain('await start("' + (fixture.mount || "/") + '")');
+      const expectedGeneratedAssets = JSON.stringify({
+        root: { kind: "path", pathname: `${assetBase}/` },
+        moduleCredentials: "anonymous",
+        credentials: "same-origin",
+      });
+
+      expect(await wrapper.text()).toContain(
+        `await start(${JSON.stringify(fixture.mount || "/")}, ${expectedGeneratedAssets},`,
+      );
 
       for (const asset of build.hosting.assets) {
         const response = await fetch(new URL(assetBase + asset.path, fixture.server.url));
@@ -394,3 +420,1067 @@ test("one production build serves root and nested hosts without changing its ass
     await rootServer?.close();
   }
 }, 45_000);
+
+interface GeneratedAssetBrowserEvent {
+  readonly kind:
+    | "request"
+    | "response"
+    | "requestfailed"
+    | "pageerror"
+    | "console"
+    | "observererror";
+  readonly url?: string;
+  readonly path?: string;
+  readonly origin?: string;
+  readonly method?: string;
+  readonly resourceType?: string;
+  readonly navigation?: boolean;
+  readonly status?: number;
+  readonly contentType?: string | null;
+  readonly expectedContentType?: string | null;
+  readonly allowOrigin?: string | null;
+  readonly allowCredentials?: string | null;
+  readonly contentSecurityPolicy?: string | null;
+  readonly bodySha256?: string | null;
+  readonly expectedSha256?: string | null;
+  readonly bodyReadError?: string | null;
+  readonly headersReadError?: string | null;
+  readonly failure?: string | null;
+  readonly message?: string;
+}
+
+interface GeneratedAssetPolicyViolation {
+  readonly blockedURI: string;
+  readonly effectiveDirective: string;
+  readonly violatedDirective: string;
+  readonly disposition: string;
+}
+
+interface GeneratedAssetModuleEvaluation {
+  readonly kind: "static" | "dynamic";
+  readonly url: string;
+}
+
+interface GeneratedAssetAuditState {
+  readonly staticEvaluations: number;
+  readonly dynamicEvaluations: number;
+  readonly committedEffects: number;
+}
+
+interface GeneratedAssetBrowserAudit {
+  readonly policyViolations: GeneratedAssetPolicyViolation[];
+  readonly moduleEvaluations: GeneratedAssetModuleEvaluation[];
+}
+
+interface GeneratedAssetDiagnosticRecorder {
+  readonly events: GeneratedAssetBrowserEvent[];
+  readonly overflow: () => boolean;
+  flush(): Promise<void>;
+}
+
+async function recordGeneratedAssetBrowserEvents(
+  page: Page,
+  scenario: GeneratedAssetScenario,
+  capture: InProcessTargetedDeploymentCapturedBuildV4,
+): Promise<GeneratedAssetDiagnosticRecorder> {
+  const events: GeneratedAssetBrowserEvent[] = [];
+  const responseTasks: Promise<void>[] = [];
+  const responseTaskLimit = 512;
+  const responseBodyLimit = 4 * 1024 * 1024;
+  const assetPins = new Map<string, { readonly sha256: string; readonly contentType: string }>();
+  const publicPins = new Map<string, { readonly sha256: string; readonly contentType: string }>();
+  let bytes = 0;
+  let didOverflow = false;
+
+  for (const asset of capture.inventory.hosting.assets)
+    assetPins.set(new URL(asset.path.slice(1), scenario.assetRoot).href, {
+      sha256: asset.sha256,
+      contentType: asset.contentType,
+    });
+
+  if ("publicFiles" in capture.inventory.hosting)
+    for (const file of capture.inventory.hosting.publicFiles)
+      publicPins.set(new URL(file.urlPath, scenario.appOrigin).href, {
+        sha256: file.sha256,
+        contentType: file.contentType,
+      });
+
+  const append = (event: GeneratedAssetBrowserEvent): void => {
+    const serialized = JSON.stringify(event);
+
+    if (serialized === undefined) {
+      didOverflow = true;
+
+      return;
+    }
+
+    const size = new TextEncoder().encode(serialized).byteLength;
+
+    if (events.length >= 512 || bytes + size > 512 * 1024) {
+      didOverflow = true;
+
+      return;
+    }
+
+    events.push(event);
+    bytes += size;
+  };
+
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+
+    append({
+      kind: "request",
+      url: url.href,
+      path: url.pathname,
+      origin: url.origin,
+      method: request.method(),
+      resourceType: request.resourceType(),
+      navigation: request.isNavigationRequest(),
+    });
+  });
+
+  page.on("response", (response: BrowserResponse) => {
+    if (responseTasks.length >= responseTaskLimit) {
+      didOverflow = true;
+      append({
+        kind: "observererror",
+        message: "Generated-asset response observer reached its bounded task limit",
+      });
+
+      return;
+    }
+
+    responseTasks.push(
+      (async () => {
+        try {
+          const url = new URL(response.url());
+          let headers: Record<string, string> = {};
+          let headersReadError: string | null = null;
+
+          try {
+            headers = await response.allHeaders();
+          } catch (error) {
+            headersReadError = error instanceof Error ? error.message.slice(0, 500) : String(error);
+          }
+
+          const expected = assetPins.get(url.href) ?? publicPins.get(url.href);
+          let bodySha256: string | null = null;
+          let bodyReadError: string | null = null;
+          const declaredLength = Number(headers["content-length"]);
+
+          if (Number.isFinite(declaredLength) && declaredLength > responseBodyLimit) {
+            bodyReadError = `Response exceeds ${responseBodyLimit} byte diagnostic body limit`;
+          } else {
+            try {
+              const body = new Uint8Array(await response.body());
+
+              bodySha256 = body.byteLength <= responseBodyLimit ? sha256(body) : null;
+              if (body.byteLength > responseBodyLimit)
+                bodyReadError = `Response exceeds ${responseBodyLimit} byte diagnostic body limit`;
+            } catch (error) {
+              bodyReadError = error instanceof Error ? error.message.slice(0, 500) : String(error);
+            }
+          }
+
+          append({
+            kind: "response",
+            url: url.href,
+            path: url.pathname,
+            origin: url.origin,
+            resourceType: response.request().resourceType(),
+            status: response.status(),
+            contentType: headers["content-type"] ?? null,
+            expectedContentType: expected?.contentType ?? null,
+            allowOrigin: headers["access-control-allow-origin"] ?? null,
+            allowCredentials: headers["access-control-allow-credentials"] ?? null,
+            contentSecurityPolicy: headers["content-security-policy"] ?? null,
+            bodySha256,
+            expectedSha256: expected?.sha256 ?? null,
+            headersReadError,
+            bodyReadError,
+          });
+        } catch (error) {
+          append({
+            kind: "observererror",
+            message: error instanceof Error ? error.message.slice(0, 1000) : String(error),
+          });
+        }
+      })(),
+    );
+  });
+
+  page.on("requestfailed", (request) => {
+    const url = new URL(request.url());
+
+    append({
+      kind: "requestfailed",
+      url: url.href,
+      path: url.pathname,
+      origin: url.origin,
+      method: request.method(),
+      resourceType: request.resourceType(),
+      failure: request.failure()?.errorText ?? null,
+    });
+  });
+
+  page.on("pageerror", (error) => {
+    append({ kind: "pageerror", message: error.message.slice(0, 1000) });
+  });
+
+  page.on("console", (message) => {
+    if (message.type() === "error")
+      append({ kind: "console", message: message.text().slice(0, 1000) });
+  });
+
+  return {
+    events,
+    overflow: () => didOverflow,
+    async flush() {
+      await Promise.all(responseTasks);
+    },
+  };
+}
+
+async function installGeneratedAssetBrowserAudit(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const audited = window as typeof window & {
+      __generatedAssetAudit?: GeneratedAssetAuditState;
+      __generatedAssetBrowserAudit?: GeneratedAssetBrowserAudit;
+    };
+
+    audited.__generatedAssetAudit = {
+      staticEvaluations: 0,
+      dynamicEvaluations: 0,
+      committedEffects: 0,
+    };
+    audited.__generatedAssetBrowserAudit = { policyViolations: [], moduleEvaluations: [] };
+
+    window.addEventListener("securitypolicyviolation", (event) => {
+      audited.__generatedAssetBrowserAudit?.policyViolations.push({
+        blockedURI: event.blockedURI,
+        effectiveDirective: event.effectiveDirective,
+        violatedDirective: event.violatedDirective,
+        disposition: event.disposition,
+      });
+    });
+
+    window.addEventListener("hesperia:generated-asset-module", (event) => {
+      const detail = (event as CustomEvent<GeneratedAssetModuleEvaluation>).detail;
+
+      audited.__generatedAssetBrowserAudit?.moduleEvaluations.push({
+        kind: detail.kind,
+        url: detail.url,
+      });
+    });
+  });
+}
+
+async function readGeneratedAssetBrowserState(page: Page): Promise<{
+  readonly hasApplication: boolean;
+  readonly visibleApplication: boolean;
+  readonly staticEvaluations: number;
+  readonly dynamicEvaluations: number;
+  readonly committedEffects: number;
+  readonly generatedStylesheets: readonly {
+    readonly href: string;
+    readonly hasSheet: boolean;
+    readonly crossOrigin: string | null;
+  }[];
+  readonly color: string | null;
+  readonly importedCssValue: string | null;
+  readonly backgroundImage: string | null;
+  readonly authoredStylesheet: {
+    readonly href: string | null;
+    readonly crossOrigin: string | null;
+    readonly integrity: string | null;
+    readonly decorationColor: string | null;
+  } | null;
+  readonly policyViolations: readonly GeneratedAssetPolicyViolation[];
+  readonly moduleEvaluations: readonly GeneratedAssetModuleEvaluation[];
+}> {
+  return page.evaluate(() => {
+    const audited = window as typeof window & {
+      __generatedAssetAudit?: GeneratedAssetAuditState;
+      __generatedAssetBrowserAudit?: GeneratedAssetBrowserAudit;
+    };
+    const application = document.querySelector<HTMLElement>("#asset-proof");
+    const stylesheet = document.querySelector<HTMLLinkElement>(
+      'link[rel="stylesheet"][href="/asset-controls.css"]',
+    );
+    const generatedStylesheets = [
+      ...document.querySelectorAll<HTMLLinkElement>("link[data-hesperia-style-id]"),
+    ].map((link) => ({
+      href: link.href,
+      hasSheet: link.sheet !== null,
+      crossOrigin: link.getAttribute("crossorigin"),
+    }));
+
+    return {
+      hasApplication: application !== null,
+      visibleApplication: application !== null && application.getClientRects().length > 0,
+      staticEvaluations: audited.__generatedAssetAudit?.staticEvaluations ?? 0,
+      dynamicEvaluations: audited.__generatedAssetAudit?.dynamicEvaluations ?? 0,
+      committedEffects: audited.__generatedAssetAudit?.committedEffects ?? 0,
+      generatedStylesheets,
+      color: application ? getComputedStyle(application).color : null,
+      importedCssValue: application
+        ? getComputedStyle(application).getPropertyValue("--generated-assets-import").trim()
+        : null,
+      backgroundImage: document.querySelector<HTMLElement>("#asset-image")
+        ? getComputedStyle(document.querySelector<HTMLElement>("#asset-image")!).backgroundImage
+        : null,
+      authoredStylesheet: stylesheet
+        ? {
+            href: stylesheet.getAttribute("href"),
+            crossOrigin: stylesheet.getAttribute("crossorigin"),
+            integrity: stylesheet.integrity,
+            decorationColor: application
+              ? getComputedStyle(document.querySelector<HTMLElement>("#static-proof")!)
+                  .textDecorationColor
+              : null,
+          }
+        : null,
+      policyViolations: audited.__generatedAssetBrowserAudit?.policyViolations ?? [],
+      moduleEvaluations: audited.__generatedAssetBrowserAudit?.moduleEvaluations ?? [],
+    };
+  });
+}
+
+test("one captured browser graph serves native generated resources at same-origin and external bases", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-generated-assets-browser-"));
+
+  roots.push(root);
+
+  const fixtureRoot = join(import.meta.dir, "fixtures/applications/generated-assets");
+
+  await cp(fixtureRoot, root, { recursive: true });
+  await linkFrameworkPackages(root);
+
+  const prepared = await prepareBuild(root);
+  const output = await writeBuild(root, prepared);
+  const loaded = await readTargetedBuild(output);
+
+  if (
+    !("deployment" in loaded) ||
+    loaded.version !== 4 ||
+    loaded.control.kind !== "browser" ||
+    "serverFiles" in loaded.inventory
+  )
+    throw new Error("The generated-assets fixture must publish a targeted V4 browser capture");
+
+  const capture = loaded;
+  const publicFiles =
+    "publicFiles" in capture.inventory.hosting ? capture.inventory.hosting.publicFiles : [];
+  const capturedAssetPins = [
+    ...capture.inventory.hosting.assets.map((asset) => ({
+      kind: "managed" as const,
+      path: asset.path,
+      sha256: asset.sha256,
+      contentType: asset.contentType,
+    })),
+    ...publicFiles.map((file) => ({
+      kind: "public" as const,
+      path: file.urlPath,
+      sha256: file.sha256,
+      contentType: file.contentType,
+    })),
+  ];
+  const svgSourceSha256 = sha256(
+    new Uint8Array(await readFile(join(fixtureRoot, "assets/proof.svg"))),
+  );
+  const fontSourceSha256 = sha256(
+    new Uint8Array(await readFile(join(fixtureRoot, "assets/proof.ttf"))),
+  );
+  const svgAssetPins = capture.inventory.hosting.assets.filter(
+    (asset) => asset.sha256 === svgSourceSha256 && asset.contentType.startsWith("image/svg+xml"),
+  );
+  const fontAssetPins = capture.inventory.hosting.assets.filter(
+    (asset) => asset.sha256 === fontSourceSha256 && asset.contentType.startsWith("font/"),
+  );
+
+  expect(svgAssetPins).toHaveLength(1);
+  expect(fontAssetPins).toHaveLength(1);
+
+  const svgAssetPin = svgAssetPins[0]!;
+  const fontAssetPin = fontAssetPins[0]!;
+  const authoredStylesheetPin = publicFiles.find((file) => file.urlPath === "/asset-controls.css");
+
+  expect(capture.control.hosting.mode).toBe("production");
+  expect(authoredStylesheetPin).toBeDefined();
+
+  const provider = await createGeneratedAssetProviderFixture(capture);
+
+  try {
+    const runId = randomUUID();
+    const diagnosticsDirectory = resolve(
+      import.meta.dir,
+      "../../.hesperia/browser-diagnostics/generated-assets-browser",
+    );
+    const positiveInputs: readonly GeneratedAssetScenarioInput[] = [
+      { id: "same-origin-default-anonymous", base: "same-origin", credentials: "anonymous" },
+      { id: "same-origin-use-credentials", base: "same-origin", credentials: "use-credentials" },
+      {
+        id: "external-a-default-anonymous",
+        base: "external-a",
+        credentials: "anonymous",
+        holdStylesheet: true,
+      },
+      { id: "external-a-use-credentials", base: "external-a", credentials: "use-credentials" },
+      { id: "external-b-default-anonymous", base: "external-b", credentials: "anonymous" },
+      { id: "external-b-use-credentials", base: "external-b", credentials: "use-credentials" },
+    ];
+    const validCorsSamples = new Map<string, GeneratedAssetProviderEvent>();
+
+    await mkdir(diagnosticsDirectory, { recursive: true });
+
+    expect(provider.externalAOrigin).not.toBe(provider.appOrigin);
+    expect(provider.externalBOrigin).not.toBe(provider.appOrigin);
+    expect(provider.externalAOrigin).not.toBe(provider.externalBOrigin);
+
+    async function runBrowserScenario(
+      engineName: string,
+      browserVersion: string,
+      browser: Browser,
+      input: GeneratedAssetScenarioInput,
+      mode: "positive" | "cors-denial" | "csp-denial",
+      validCorsSample?: GeneratedAssetProviderEvent,
+    ): Promise<readonly GeneratedAssetProviderEvent[]> {
+      const scenario = await provider.configure(input);
+      const context = await browser.newContext();
+      let pageForDiagnostics: Page | undefined;
+      let navigation: Promise<BrowserResponse | null> | undefined;
+      let recorder: GeneratedAssetDiagnosticRecorder | undefined;
+      let failure: string | null = null;
+      let primaryError: unknown;
+      let hasPrimaryError = false;
+      let observations: Record<string, unknown> = {};
+      let mainDocumentStatus: number | null = null;
+      let mainDocumentPolicy: string | null = null;
+      let generatedStylesheetURLs: readonly string[] = [];
+      const cleanupErrors: string[] = [];
+      const flushErrors: string[] = [];
+      const finalizationCauses: unknown[] = [];
+
+      try {
+        const page = await context.newPage();
+
+        pageForDiagnostics = page;
+        await installGeneratedAssetBrowserAudit(page);
+
+        const cookieSeed = await page.goto(scenario.cookieSeedURL, {
+          waitUntil: "load",
+          timeout: 20_000,
+        });
+
+        expect(cookieSeed?.status()).toBe(200);
+
+        const seededCookie = (await context.cookies(scenario.assetRoot)).find(
+          (cookie) =>
+            cookie.name === "hesperia-generated-assets" &&
+            cookie.value === "present" &&
+            cookie.path === scenario.assetRootPath,
+        );
+
+        expect(seededCookie).toBeDefined();
+
+        recorder = await recordGeneratedAssetBrowserEvents(page, scenario, capture);
+        const applicationUrl = new URL("/", scenario.appOrigin).href;
+
+        if (mode === "positive" && input.holdStylesheet) {
+          navigation = page.goto(applicationUrl, { waitUntil: "load", timeout: 30_000 });
+          void navigation.catch(() => undefined);
+          await scenario.waitForStylesheetRequest();
+
+          const held = await readGeneratedAssetBrowserState(page);
+          const heldApplicationVisible = await page.locator("#asset-proof").isVisible();
+
+          observations = { ...observations, heldStylesheetState: held, heldApplicationVisible };
+          expect(heldApplicationVisible).toBe(false);
+          expect(held.committedEffects).toBe(0);
+          scenario.releaseStylesheet();
+          const response = await navigation;
+
+          mainDocumentStatus = response?.status() ?? null;
+        } else {
+          const response = await page.goto(applicationUrl, { waitUntil: "load", timeout: 30_000 });
+
+          mainDocumentStatus = response?.status() ?? null;
+
+          const headers = await response?.allHeaders();
+
+          mainDocumentPolicy = headers?.["content-security-policy"] ?? null;
+        }
+
+        if (mode === "positive") {
+          await page.locator("#asset-proof").waitFor({ state: "visible", timeout: 20_000 });
+
+          const beforeDynamic = await readGeneratedAssetBrowserState(page);
+
+          generatedStylesheetURLs = beforeDynamic.generatedStylesheets.map((link) => link.href);
+
+          expect(beforeDynamic.staticEvaluations).toBe(1);
+          expect(beforeDynamic.dynamicEvaluations).toBe(0);
+          expect(beforeDynamic.committedEffects).toBeGreaterThan(0);
+          expect(beforeDynamic.color).toBe("rgb(17, 34, 51)");
+          expect(beforeDynamic.importedCssValue).toBe("loaded");
+          expect(beforeDynamic.generatedStylesheets.length).toBeGreaterThan(0);
+          expect(beforeDynamic.generatedStylesheets.every((link) => link.hasSheet)).toBe(true);
+          const nativeMediaStyles = capture.inventory.hosting.assets.filter(
+            (asset) =>
+              asset.path.startsWith("/assets/native-css/") &&
+              asset.path.endsWith("/native-media.css"),
+          );
+          expect(nativeMediaStyles).toHaveLength(1);
+          const nativeMediaUrl = new URL(nativeMediaStyles[0]!.path.slice(1), scenario.assetRoot)
+            .href;
+
+          expect(
+            beforeDynamic.generatedStylesheets.some((link) => link.href === nativeMediaUrl),
+          ).toBe(true);
+          expect(
+            beforeDynamic.generatedStylesheets.every(
+              (link) => link.crossOrigin === (link.href === nativeMediaUrl ? "anonymous" : null),
+            ),
+          ).toBe(true);
+          expect(beforeDynamic.authoredStylesheet).toMatchObject({
+            href: "/asset-controls.css",
+            crossOrigin: "anonymous",
+            integrity: "sha256-+8chqzQauzujwYKmYR0FNA5nwYVFTQ2VriPj6QW5qJ4=",
+            decorationColor: "rgb(91, 37, 119)",
+          });
+
+          const initialRequests = recorder.events.filter((event) => event.kind === "request");
+          const staticModule = beforeDynamic.moduleEvaluations.find(
+            (module) => module.kind === "static",
+          );
+
+          expect(staticModule).toBeDefined();
+          expect(new URL(staticModule!.url).origin).toBe(scenario.assetOrigin);
+          expect(initialRequests.some((event) => event.url === staticModule!.url)).toBe(true);
+          expect(
+            recorder.events.some(
+              (event) =>
+                event.kind === "request" &&
+                event.url === new URL("startup.js", scenario.assetRoot).href,
+            ),
+          ).toBe(true);
+
+          const activationEventStart = recorder.events.length;
+
+          await page.locator("#load-dynamic").click();
+          await page.waitForFunction(
+            () =>
+              document.querySelector("#dynamic-proof")?.textContent ===
+              "DYNAMIC_MODULE_READY:STATIC_MODULE_READY:1",
+            undefined,
+            { timeout: 20_000 },
+          );
+          const svgURL = new URL(svgAssetPin.path.slice(1), scenario.assetRoot).href;
+
+          await page.waitForFunction(
+            (url: string) =>
+              performance.getEntriesByType("resource").some((resource) => resource.name === url),
+            svgURL,
+            { timeout: 20_000 },
+          );
+
+          const finalState = await readGeneratedAssetBrowserState(page);
+          const dynamicModule = finalState.moduleEvaluations.find(
+            (module) => module.kind === "dynamic",
+          );
+          const activationRequests = recorder.events.slice(activationEventStart);
+
+          expect(dynamicModule).toBeDefined();
+          expect(new URL(dynamicModule!.url).origin).toBe(scenario.assetOrigin);
+          expect(finalState.backgroundImage).toContain(svgURL);
+          expect(
+            activationRequests.some(
+              (event) => event.kind === "request" && event.url === dynamicModule!.url,
+            ),
+          ).toBe(true);
+
+          const fontState = await page.evaluate(async () => {
+            const faces = await document.fonts.load('100px "HesperiaProof"', "\uE000");
+            const canvas = document.createElement("canvas");
+            const context = canvas.getContext("2d");
+
+            if (!context) throw new Error("Canvas 2D text metrics are unavailable");
+
+            context.font = '100px "HesperiaProof"';
+
+            return {
+              faceStatuses: faces.map((face) => face.status),
+              check: document.fonts.check('100px "HesperiaProof"', "\uE000"),
+              width: context.measureText("\uE000").width,
+            };
+          });
+          const completedState = await readGeneratedAssetBrowserState(page);
+
+          expect(fontState.faceStatuses).toContain("loaded");
+          expect(fontState.check).toBe(true);
+          expect(Math.abs(fontState.width - 73.3)).toBeLessThan(0.05);
+          expect(completedState.dynamicEvaluations).toBe(1);
+
+          const nextRouteLink = page.locator("#next-route-link");
+          const authoredLiteralHref = await nextRouteLink.getAttribute("href");
+          const preservedLiteralURL = await page.locator("#literal-url-proof").getAttribute("href");
+
+          expect(authoredLiteralHref).toBe("/next");
+          expect(preservedLiteralURL).toBe("https://literal.invalid/preserved?x=1");
+
+          const earlierPreloads = await page
+            .locator('link[rel="modulepreload"]')
+            .evaluateAll((links) => links.map((link) => (link as HTMLLinkElement).href));
+
+          await nextRouteLink.click();
+          await page.locator("#next-proof").waitFor({ state: "visible", timeout: 20_000 });
+
+          const routePreloads = (
+            await page.locator('link[rel="modulepreload"]').evaluateAll((links) =>
+              links.map((link) => {
+                const preload = link as HTMLLinkElement;
+                return { href: preload.href, credentials: preload.crossOrigin };
+              }),
+            )
+          ).filter((preload) => !earlierPreloads.includes(preload.href));
+          const nextRouteModules = await Promise.all(
+            [...capture.inventory.files]
+              .filter(([path]) => /\.m?js$/u.test(path))
+              .map(async ([path, blob]) =>
+                (await blob.text()).includes("GENERATED_ASSET_NEXT_ROUTE_READY")
+                  ? new URL(path.slice(1), scenario.assetRoot).href
+                  : undefined,
+              ),
+          );
+          const nextRouteModule = nextRouteModules.find((path) => path !== undefined);
+          expect(nextRouteModules.filter((path) => path !== undefined)).toHaveLength(1);
+          if (!nextRouteModule) throw new Error("The next route module was not emitted");
+
+          expect(earlierPreloads).not.toContain(nextRouteModule);
+          expect(routePreloads).toContainEqual({
+            href: nextRouteModule,
+            credentials: input.credentials,
+          });
+
+          for (const preload of routePreloads) {
+            expect(preload.href.startsWith(scenario.assetRoot + "assets/")).toBe(true);
+            expect(preload.credentials).toBe(input.credentials);
+          }
+
+          const nextRouteURL = new URL(page.url());
+
+          expect(nextRouteURL.origin).toBe(scenario.appOrigin);
+          expect(nextRouteURL.pathname).toBe("/next");
+          expect(await page.locator("#next-proof").textContent()).toBe(
+            "GENERATED_ASSET_NEXT_ROUTE_READY",
+          );
+
+          observations = {
+            ...observations,
+            beforeDynamic,
+            finalState: completedState,
+            fontState,
+            routeNavigation: {
+              authoredLiteralHref,
+              preservedLiteralURL,
+              destinationOrigin: nextRouteURL.origin,
+              destinationPath: nextRouteURL.pathname,
+              destinationText: "GENERATED_ASSET_NEXT_ROUTE_READY",
+            },
+          };
+        } else {
+          const deniedState = await readGeneratedAssetBrowserState(page);
+
+          expect(deniedState.hasApplication).toBe(false);
+          expect(deniedState.staticEvaluations).toBe(0);
+          expect(deniedState.dynamicEvaluations).toBe(0);
+          expect(deniedState.committedEffects).toBe(0);
+          expect(
+            recorder.events.some(
+              (event) =>
+                event.kind === "request" &&
+                event.origin === scenario.appOrigin &&
+                event.path?.startsWith("/_hesperia/"),
+            ),
+          ).toBe(false);
+
+          if (mode === "cors-denial") {
+            const moduleResponses = scenario.providerEvents.filter(
+              (event) => event.kind === "asset" && (event.contentType ?? "").includes("javascript"),
+            );
+            const failures = recorder.events.filter(
+              (event) => event.kind === "requestfailed" && event.origin === scenario.assetOrigin,
+            );
+
+            expect(moduleResponses.length).toBeGreaterThan(0);
+            expect(failures.length).toBeGreaterThan(0);
+
+            if (input.corsPolicy === "wrong-origin")
+              expect(
+                moduleResponses.every(
+                  (event) => event.allowOrigin === "https://wrong-origin.invalid",
+                ),
+              ).toBe(true);
+            else {
+              expect(
+                moduleResponses.every((event) => event.allowOrigin === scenario.appOrigin),
+              ).toBe(true);
+              expect(moduleResponses.every((event) => event.allowCredentials === null)).toBe(true);
+              expect(moduleResponses.every((event) => event.syntheticCookiePresent)).toBe(true);
+            }
+
+            expect(
+              scenario.applicationEvents.some(
+                (event) => event.kind === "unclaimed" && event.path.includes("_hesperia/assets"),
+              ),
+            ).toBe(false);
+          } else {
+            expect(mainDocumentPolicy).toContain("script-src 'self'");
+            expect(scenario.providerEvents.some((event) => event.kind === "asset")).toBe(false);
+            expect(deniedState.policyViolations.length).toBeGreaterThan(0);
+            expect(
+              deniedState.policyViolations.some((event) => {
+                try {
+                  return (
+                    new URL(event.blockedURI, scenario.appOrigin).origin === scenario.assetOrigin &&
+                    (event.effectiveDirective === "script-src-elem" ||
+                      event.violatedDirective.startsWith("script-src"))
+                  );
+                } catch {
+                  return false;
+                }
+              }),
+            ).toBe(true);
+
+            expect(validCorsSample).toMatchObject({
+              origin: scenario.appOrigin,
+              allowOrigin: scenario.appOrigin,
+              allowCredentials: "true",
+            });
+          }
+
+          observations = { ...observations, deniedState };
+        }
+
+        await recorder.flush();
+
+        const responseRows = recorder.events.filter((event) => event.kind === "response");
+        const bodyMismatches = responseRows.filter(
+          (event) => event.expectedSha256 !== null && event.bodySha256 !== event.expectedSha256,
+        );
+        const responseReadErrors = responseRows.filter((event) => event.bodyReadError !== null);
+        const headerReadErrors = responseRows.filter((event) => event.headersReadError !== null);
+
+        if (mode === "positive") {
+          const moduleEvents = scenario.providerEvents.filter(
+            (event) =>
+              event.kind === "asset" &&
+              (event.contentType ?? "").includes("javascript") &&
+              event.responseStatus === 200,
+          );
+          const nativeResources = scenario.providerEvents.filter(
+            (event) =>
+              event.kind === "asset" &&
+              ((event.contentType ?? "").startsWith("text/css") ||
+                (event.contentType ?? "").startsWith("font/") ||
+                (event.contentType ?? "").startsWith("image/")),
+          );
+          const expectedModuleCookie =
+            scenario.sameOrigin || input.credentials === "use-credentials";
+          const selectedRootRequests = recorder.events.filter(
+            (event) => event.kind === "request" && event.origin === scenario.assetOrigin,
+          );
+          const pinnedManagedResponses = responseRows.filter(
+            (event) => event.expectedSha256 !== null && event.origin === scenario.assetOrigin,
+          );
+          const javascriptResponses = pinnedManagedResponses.filter((event) =>
+            event.expectedContentType?.includes("javascript"),
+          );
+          const stylesheetResponses = pinnedManagedResponses.filter((event) =>
+            event.expectedContentType?.startsWith("text/css"),
+          );
+          const svgURL = new URL(svgAssetPin.path.slice(1), scenario.assetRoot).href;
+          const fontURL = new URL(fontAssetPin.path.slice(1), scenario.assetRoot).href;
+          const authoredStylesheetURL = new URL("/asset-controls.css", scenario.appOrigin).href;
+          const svgResponses = pinnedManagedResponses.filter((event) => event.url === svgURL);
+          const fontResponses = pinnedManagedResponses.filter((event) => event.url === fontURL);
+          const authoredStylesheetResponses = responseRows.filter(
+            (event) => event.url === authoredStylesheetURL,
+          );
+
+          expect(moduleEvents.length).toBeGreaterThan(0);
+          expect(
+            moduleEvents.every((event) => event.syntheticCookiePresent === expectedModuleCookie),
+          ).toBe(true);
+          expect(
+            nativeResources.some((event) => (event.contentType ?? "").startsWith("text/css")),
+          ).toBe(true);
+          expect(
+            nativeResources.some((event) => (event.contentType ?? "").startsWith("font/")),
+          ).toBe(true);
+          expect(
+            nativeResources.some((event) => (event.contentType ?? "").startsWith("image/")),
+          ).toBe(true);
+          expect(javascriptResponses.length).toBeGreaterThan(0);
+          expect(stylesheetResponses.length).toBeGreaterThan(0);
+          expect(generatedStylesheetURLs.length).toBeGreaterThan(0);
+          expect(svgResponses.length).toBeGreaterThan(0);
+          expect(fontResponses.length).toBeGreaterThan(0);
+          expect(selectedRootRequests.some((event) => event.url === svgURL)).toBe(true);
+          expect(selectedRootRequests.some((event) => event.url === fontURL)).toBe(true);
+          expect(
+            recorder.events.some(
+              (event) => event.kind === "request" && event.url === authoredStylesheetURL,
+            ),
+          ).toBe(true);
+          expect(authoredStylesheetResponses.length).toBeGreaterThan(0);
+          expect(
+            authoredStylesheetResponses.every(
+              (event) =>
+                event.expectedSha256 === authoredStylesheetPin?.sha256 &&
+                event.bodySha256 === authoredStylesheetPin?.sha256,
+            ),
+          ).toBe(true);
+          expect(svgResponses.every((event) => event.bodySha256 === svgSourceSha256)).toBe(true);
+          expect(fontResponses.every((event) => event.bodySha256 === fontSourceSha256)).toBe(true);
+          for (const stylesheetURL of generatedStylesheetURLs) {
+            expect(new URL(stylesheetURL).origin).toBe(scenario.assetOrigin);
+            expect(selectedRootRequests.some((event) => event.url === stylesheetURL)).toBe(true);
+            expect(stylesheetResponses.some((event) => event.url === stylesheetURL)).toBe(true);
+          }
+          expect(
+            pinnedManagedResponses.every(
+              (event) => event.bodySha256 !== null && event.bodySha256 === event.expectedSha256,
+            ),
+          ).toBe(true);
+
+          if (!scenario.sameOrigin) {
+            expect(
+              moduleEvents.every(
+                (event) =>
+                  event.origin === scenario.appOrigin &&
+                  event.allowOrigin === scenario.appOrigin &&
+                  event.allowCredentials === "true",
+              ),
+            ).toBe(true);
+            const fontRequests = nativeResources.filter((event) =>
+              (event.contentType ?? "").startsWith("font/"),
+            );
+
+            expect(fontRequests.every((event) => !event.syntheticCookiePresent)).toBe(true);
+          }
+
+          expect(bodyMismatches).toStrictEqual([]);
+          expect(responseReadErrors).toStrictEqual([]);
+          expect(headerReadErrors).toStrictEqual([]);
+          expect(recorder.events.filter((event) => event.kind === "observererror")).toStrictEqual(
+            [],
+          );
+          expect(
+            scenario.providerEvents
+              .filter((event) => event.kind === "asset")
+              .every((event) => event.responseStatus === 200),
+          ).toBe(true);
+        }
+
+        expect(mainDocumentStatus).toBe(200);
+        expect(recorder.overflow()).toBe(false);
+        expect(scenario.eventOverflow()).toBe(false);
+      } catch (error) {
+        failure = error instanceof Error ? error.message : String(error);
+        primaryError = error;
+        hasPrimaryError = true;
+      } finally {
+        let finalState: Awaited<ReturnType<typeof readGeneratedAssetBrowserState>> | null = null;
+
+        try {
+          scenario.releaseStylesheet();
+        } catch (error) {
+          cleanupErrors.push(error instanceof Error ? error.message : String(error));
+          finalizationCauses.push(error);
+        }
+
+        if (navigation) {
+          const navigationResult = await Promise.allSettled([navigation]);
+
+          if (navigationResult[0]?.status === "rejected") {
+            const error = navigationResult[0].reason;
+
+            cleanupErrors.push(error instanceof Error ? error.message : String(error));
+            finalizationCauses.push(error);
+          }
+        }
+
+        if (pageForDiagnostics) {
+          try {
+            finalState = await readGeneratedAssetBrowserState(pageForDiagnostics);
+          } catch (error) {
+            cleanupErrors.push(error instanceof Error ? error.message : String(error));
+            finalizationCauses.push(error);
+          }
+        }
+
+        try {
+          await context.close();
+        } catch (error) {
+          cleanupErrors.push(error instanceof Error ? error.message : String(error));
+          finalizationCauses.push(error);
+        } finally {
+          if (recorder) {
+            try {
+              await recorder.flush();
+            } catch (error) {
+              flushErrors.push(error instanceof Error ? error.message : String(error));
+              finalizationCauses.push(error);
+            }
+          }
+
+          const diagnostic = {
+            kind: "generated-assets-browser-observation",
+            version: 1,
+            runId,
+            scenario: {
+              id: input.id,
+              mode,
+              base: input.base,
+              resolvedModuleCredentials: input.credentials,
+              corsPolicy: scenario.corsPolicy,
+              appOrigin: scenario.appOrigin,
+              assetOrigin: scenario.assetOrigin,
+              assetRoot: scenario.assetRoot,
+              sameOrigin: scenario.sameOrigin,
+              cookiePath: scenario.assetRootPath,
+            },
+            browser: { engine: engineName, version: browserVersion },
+            build: {
+              completedRecordVersion: 4,
+              captureMode: capture.inventory.hosting.mode,
+              assetPins: capturedAssetPins,
+            },
+            observations: { ...observations, finalState },
+            provider: {
+              applicationEvents: scenario.applicationEvents,
+              assetEvents: scenario.providerEvents,
+              overflow: scenario.eventOverflow(),
+            },
+            browserEvents: recorder?.events ?? [],
+            browserEventsOverflow: recorder?.overflow() ?? false,
+            validCorsSample: validCorsSample ?? null,
+            cleanupErrors,
+            flushErrors,
+            failure,
+          };
+          const safeName = `${runId}-${engineName}-${input.id.replace(/[^a-z0-9-]/giu, "-")}.json`;
+
+          try {
+            await writeFile(
+              join(diagnosticsDirectory, safeName),
+              JSON.stringify(diagnostic, null, 2) + "\n",
+            );
+          } catch (error) {
+            cleanupErrors.push(error instanceof Error ? error.message : String(error));
+            finalizationCauses.push(error);
+          }
+        }
+      }
+
+      if (hasPrimaryError) {
+        if (finalizationCauses.length)
+          throw new AggregateError(
+            [primaryError, ...finalizationCauses],
+            "Generated-asset browser scenario and evidence cleanup failed",
+          );
+
+        throw primaryError;
+      }
+
+      if (finalizationCauses.length)
+        throw new AggregateError(
+          finalizationCauses,
+          "Generated-asset browser evidence cleanup failed",
+        );
+
+      return [...scenario.providerEvents];
+    }
+
+    for (const [engineName, engine] of [
+      ["chromium", chromium],
+      ["firefox", firefox],
+      ["webkit", webkit],
+    ] as const) {
+      const browser = await engine.launch(browserLaunchOptions(engineName));
+
+      try {
+        const browserVersion = browser.version();
+
+        for (const input of positiveInputs) {
+          const events = await runBrowserScenario(
+            engineName,
+            browserVersion,
+            browser,
+            input,
+            "positive",
+          );
+
+          if (input.id === "external-a-default-anonymous") {
+            const sample = events.find(
+              (event) =>
+                event.kind === "asset" &&
+                (event.contentType ?? "").includes("javascript") &&
+                event.allowOrigin === provider.appOrigin &&
+                event.allowCredentials === "true",
+            );
+
+            expect(sample).toBeDefined();
+
+            if (sample) validCorsSamples.set(engineName, sample);
+          }
+        }
+
+        await runBrowserScenario(
+          engineName,
+          browserVersion,
+          browser,
+          {
+            id: "deny-wrong-cors-origin",
+            base: "external-a",
+            credentials: "anonymous",
+            corsPolicy: "wrong-origin",
+          },
+          "cors-denial",
+        );
+        await runBrowserScenario(
+          engineName,
+          browserVersion,
+          browser,
+          {
+            id: "deny-missing-allow-credentials",
+            base: "external-a",
+            credentials: "use-credentials",
+            corsPolicy: "missing-credentials",
+          },
+          "cors-denial",
+        );
+        await runBrowserScenario(
+          engineName,
+          browserVersion,
+          browser,
+          {
+            id: "deny-csp-script-source",
+            base: "external-a",
+            credentials: "anonymous",
+            corsPolicy: "allow",
+            denyAssetScripts: true,
+          },
+          "csp-denial",
+          validCorsSamples.get(engineName),
+        );
+      } finally {
+        await browser.close();
+      }
+    }
+  } finally {
+    await provider.close();
+  }
+}, 120_000);

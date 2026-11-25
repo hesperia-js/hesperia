@@ -296,7 +296,9 @@ describe("createHost", () => {
 
     expect(wrapperSource).toContain('import { start } from "./assets/nested/start.js";');
 
-    expect(wrapperSource).toContain('await start("/dashboard");');
+    expect(wrapperSource).toContain(
+      'await start("/dashboard", {"root":{"kind":"path","pathname":"/dashboard/_hesperia/"},"moduleCredentials":"anonymous","credentials":"same-origin"});',
+    );
 
     for (const [path, source] of sources) {
       const relative = path.slice("/assets/".length);
@@ -313,6 +315,44 @@ describe("createHost", () => {
     expect(rootHost.mount).toEqual({ pathname: "/", assetPath: "/_hesperia" });
 
     expect(await rootAsset?.text()).toBe(sources.get("/assets/nested/start.js"));
+  });
+
+  test("selects a separate origin for captured generated resources and leaves the app mount intact", async () => {
+    const { build } = await fixture("/");
+    const selection = {
+      baseURL: "https://static.example.test/deploy",
+      moduleCredentials: "use-credentials",
+    } as const;
+    const host = await createHost(build, { mountURL: "/app", generatedAssets: selection });
+    const document = host.handle(
+      new Request("https://app.example.test/app/page", {
+        headers: { accept: "text/html" },
+      }),
+    );
+
+    expect(await document?.text()).toContain(
+      '<script type="module" crossorigin="use-credentials" src="https://static.example.test/deploy/startup.js">',
+    );
+
+    const wrapper = host.handle(new Request("https://static.example.test/deploy/startup.js"));
+
+    expect(await wrapper?.text()).toContain(
+      'await start("/app", {"root":{"kind":"url","href":"https://static.example.test/deploy/"},"moduleCredentials":"use-credentials","credentials":"include"});',
+    );
+
+    const asset = host.handle(
+      new Request("https://static.example.test/deploy/assets/runtime/chunk.js"),
+    );
+
+    expect(await asset?.text()).toBe(sources.get("/assets/runtime/chunk.js"));
+
+    expect(
+      host.handle(new Request("https://app.example.test/deploy/assets/runtime/chunk.js")),
+    ).toBeUndefined();
+    expect(
+      host.handle(new Request("https://app.example.test/app/_hesperia/assets/runtime/chunk.js"))
+        ?.status,
+    ).toBe(404);
   });
 
   test("captures record, map and selection before its first asynchronous digest", async () => {
