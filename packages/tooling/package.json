@@ -31,7 +31,7 @@
     "./bin": "./dist/cli.js"
   },
   "scripts": {
-    "build": "bunx tsc -p tsconfig.build.json"
+    "build": "bunx --bun --no-install tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@hesperia/compiler": "workspace:*",
