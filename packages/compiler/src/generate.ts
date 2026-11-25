@@ -1,5 +1,10 @@
 import { print } from "esrap";
 import ts from "esrap/languages/ts";
+import {
+  normalizeChannelProjectDefaults,
+  snapshotChannelProjectDefaults,
+  type ChannelProjectDefaults,
+} from "hesperia/runtime";
 import { isCanonicalChild } from "./ir.ts";
 import { collectFiniteImportConstants, enumerateFiniteImportSpecifiers } from "./finite-imports.ts";
 import {
@@ -76,8 +81,10 @@ interface GeneratedOptions {
   readonly bindingAliases?: ReadonlyMap<string, string>;
   /** Lower finite dynamic imports only for browser project emission. */
   readonly browserTarget?: boolean;
-  /** Register a permissive embedded-document policy on this project's definitions. */
+  /** Associate the embedded-document permission with this project's definitions. */
   readonly allowUnsafeEmbed?: boolean;
+  /** Complete project channel fallback pair; omission uses the runtime's built-in defaults. */
+  readonly channelDefaults?: ChannelProjectDefaults;
   readonly styleRuntimeModule?: string;
   readonly styleEntryId?: string;
   readonly stylePreloadEntry?: boolean;
@@ -98,8 +105,9 @@ interface SourcePositions {
   readonly lineStarts: readonly number[];
 }
 
-type IndexedGeneratedOptions = Omit<GeneratedOptions, "source"> & {
+type IndexedGeneratedOptions = Omit<GeneratedOptions, "source" | "channelDefaults"> & {
   readonly source: SourcePositions;
+  readonly channelDefaults: ChannelProjectDefaults;
 };
 
 const EMPTY_SOURCE_POSITIONS: SourcePositions = { source: "", lineStarts: [0] };
@@ -110,12 +118,17 @@ export function generateModule(
   options: GeneratedOptions,
 ): { code: string; map: unknown; styleOwners: readonly { id: string; name?: string }[] } {
   const sourcePositions = createSourcePositions(options.source);
+  const channelDefaults =
+    options.channelDefaults === undefined
+      ? normalizeChannelProjectDefaults()
+      : snapshotChannelProjectDefaults(options.channelDefaults);
   const runtime = identifier("_$", { start: 0, end: 0 }, sourcePositions);
   const styleOwners = new Map<string, string | undefined>();
   let generationOptions: IndexedGeneratedOptions =
     options.browserTarget === true
       ? {
           ...options,
+          channelDefaults,
           source: sourcePositions,
           styleOwners,
           finiteImportConstants: collectFiniteImportConstants(module),
@@ -123,6 +136,7 @@ export function generateModule(
         }
       : {
           ...options,
+          channelDefaults,
           source: sourcePositions,
           styleOwners,
         };
@@ -1193,11 +1207,13 @@ function generateChild(
     ...options,
     nativeContextTag: child.tag,
     nativeContextNamespace:
-      child.namespace === "svg"
-        ? "http://www.w3.org/2000/svg"
-        : child.namespace === "mathml"
-          ? "http://www.w3.org/1998/Math/MathML"
-          : "http://www.w3.org/1999/xhtml",
+      child.namespace === "terminal"
+        ? undefined
+        : child.namespace === "svg"
+          ? "http://www.w3.org/2000/svg"
+          : child.namespace === "mathml"
+            ? "http://www.w3.org/1998/Math/MathML"
+            : "http://www.w3.org/1999/xhtml",
   };
   const children = array(
     child.children.map((item) => generateChild(item, childOptions, owner)),
@@ -1211,7 +1227,7 @@ function generateChild(
     children,
   ];
 
-  if (child.namespace !== "html")
+  if (child.namespace !== "html" && child.namespace !== "terminal")
     args.push(
       literal(
         child.namespace === "svg"
@@ -2377,29 +2393,50 @@ function projectPolicyDefinition(
   options: IndexedGeneratedOptions,
   span: SourceSpan,
 ): GeneratedNode {
-  const policy = options.allowUnsafeEmbed
-    ? call(
-        optionsRuntime(options),
-        "registerProjectPolicy",
+  const policy = call(
+    optionsRuntime(options),
+    "registerProjectPolicy",
+    [
+      definition,
+      object(
         [
-          definition,
-          object(
-            [
-              property(
-                "allowUnsafeEmbed",
-                literal(true, span, options.source),
-                span,
-                options.source,
-              ),
-            ],
+          property(
+            "allowUnsafeEmbed",
+            literal(options.allowUnsafeEmbed === true, span, options.source),
+            span,
+            options.source,
+          ),
+          property(
+            "channelDefaults",
+            object(
+              [
+                property(
+                  "sendTimeoutMs",
+                  literal(options.channelDefaults.sendTimeoutMs, span, options.source),
+                  span,
+                  options.source,
+                ),
+                property(
+                  "maxPendingSends",
+                  literal(options.channelDefaults.maxPendingSends, span, options.source),
+                  span,
+                  options.source,
+                ),
+              ],
+              span,
+              options.source,
+            ),
             span,
             options.source,
           ),
         ],
         span,
         options.source,
-      )
-    : definition;
+      ),
+    ],
+    span,
+    options.source,
+  );
 
   if (!options.styleRuntimeName || !options.styleEntryId) return policy;
 

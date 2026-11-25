@@ -37,7 +37,7 @@ test("emitted startup document resolves its entry from the selected mount at dee
 });
 
 test("compiled startup remains import-safe and takes the host-selected mount", () => {
-  const source = browserStartupSource(true);
+  const source = browserStartupSource(true, { sendTimeoutMs: 1_250, maxPendingSends: 8 });
   const startDeclaration = source.indexOf("export async function start(mountPath: string)");
   const bootstrapCall = source.indexOf("await bootstrapApplication(window");
 
@@ -45,7 +45,9 @@ test("compiled startup remains import-safe and takes the host-selected mount", (
 
   expect(bootstrapCall).toBeGreaterThan(startDeclaration);
 
-  expect(source).toContain("}, { mountPath });");
+  expect(source).toContain(
+    '}, { mountPath, channelDefaults: {"sendTimeoutMs":1250,"maxPendingSends":8} });',
+  );
 
   expect(source).not.toContain("/dashboard");
 });

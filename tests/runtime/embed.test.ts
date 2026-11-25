@@ -23,6 +23,7 @@ import type { EmbedProps } from "../../packages/hesperia/src/embed.ts";
 import type { RouteTable } from "../../packages/hesperia/src/routing/route-table.ts";
 import { installHistoryCloneAdapter } from "../routing/history-platform.ts";
 
+const channelDefaults = { sendTimeoutMs: 10_000, maxPendingSends: 64 };
 const windows: Window[] = [];
 const supportedSandboxTokens = new Set([
   "allow-downloads",
@@ -232,7 +233,10 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const definition =
     options.allowUnsafeEmbed === undefined
       ? Root
-      : registerProjectPolicy(Root, { allowUnsafeEmbed: options.allowUnsafeEmbed });
+      : registerProjectPolicy(Root, {
+          allowUnsafeEmbed: options.allowUnsafeEmbed,
+          channelDefaults,
+        });
   const app = mount(target, definition, {}, { onError: (error) => errors.push(error) });
   return {
     window,
@@ -346,17 +350,27 @@ test("a detached-document Embed publishes its native wrapper and still guards or
 test("root registration is same-identity, idempotent, and rejects conflicts", () => {
   const Root = defineComponent(() => null);
 
-  expect(registerProjectPolicy(Root, { allowUnsafeEmbed: true })).toBe(Root);
+  expect(registerProjectPolicy(Root, { allowUnsafeEmbed: true, channelDefaults })).toBe(Root);
 
-  expect(registerProjectPolicy(Root, { allowUnsafeEmbed: true })).toBe(Root);
+  expect(registerProjectPolicy(Root, { allowUnsafeEmbed: true, channelDefaults })).toBe(Root);
 
-  expect(() => registerProjectPolicy(Root, { allowUnsafeEmbed: false })).toThrow(
+  expect(() => registerProjectPolicy(Root, { allowUnsafeEmbed: false, channelDefaults })).toThrow(
     "conflicting project policies",
   );
 
   expect(() =>
-    registerProjectPolicy(Root, { allowUnsafeEmbed: "true" as unknown as boolean }),
+    registerProjectPolicy(Root, {
+      allowUnsafeEmbed: "true" as unknown as boolean,
+      channelDefaults,
+    }),
   ).toThrow("allowUnsafeEmbed must be a boolean");
+
+  expect(() =>
+    registerProjectPolicy(Root, {
+      allowUnsafeEmbed: true,
+      channelDefaults: { ...channelDefaults, maxPendingSends: 8 },
+    }),
+  ).toThrow("conflicting project policies");
 });
 
 test("missing policy is strict, allow-scripts stays opaque, and sandbox tokens normalize case", () => {
@@ -429,7 +443,7 @@ test("separate roots keep separate project policies and nested registrations can
         "embed",
       ),
     ),
-    { allowUnsafeEmbed: true },
+    { allowUnsafeEmbed: true, channelDefaults },
   );
   const Root = defineComponent((owner) => component(owner, Elevated, {}, "elevated"));
   const nested = mount(
@@ -495,7 +509,7 @@ test("bootstrap installs the compiled shell policy before the shell body runs", 
         ]),
       ]),
     ),
-    { allowUnsafeEmbed: true },
+    { allowUnsafeEmbed: true, channelDefaults },
   );
   const app = await bootstrapApplication(window as unknown as globalThis.Window, {
     configuration: () => ({}),
@@ -541,7 +555,10 @@ test("unsupported or unauthorized sandbox tokens fault before either source is a
       "embed",
     ),
   );
-  const unsupportedRoot = registerProjectPolicy(Unsupported, { allowUnsafeEmbed: true });
+  const unsupportedRoot = registerProjectPolicy(Unsupported, {
+    allowUnsafeEmbed: true,
+    channelDefaults,
+  });
   const unsupported = mount(
     unsupportedTarget as unknown as HTMLElement,
     unsupportedRoot,
@@ -588,7 +605,7 @@ test("missing sandbox token support produces a typed fault instead of a native T
         "embed",
       ),
     ),
-    { allowUnsafeEmbed: true },
+    { allowUnsafeEmbed: true, channelDefaults },
   );
   const app = mount(
     target as unknown as HTMLElement,

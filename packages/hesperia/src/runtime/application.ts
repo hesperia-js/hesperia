@@ -16,7 +16,11 @@ import {
   registerOwnerDisposalPromiseAlias,
   RenderFault,
 } from "./owner.ts";
-import { installRootProjectPolicy } from "./project-policy.ts";
+import {
+  installRootProjectPolicy,
+  projectPolicyForDefinition,
+  type ChannelProjectDefaults,
+} from "./project-policy.ts";
 import { internalStyleBindingFor } from "./style.ts";
 import { reserveNavigation } from "../routing/navigation-api.ts";
 
@@ -34,6 +38,8 @@ export interface ApplicationModules {
 
 /** Private generated-startup options bound before authored modules are loaded. */
 export interface BootstrapApplicationOptions {
+  /** @internal Generated project fallbacks, checked against the compiled shell. */
+  readonly channelDefaults?: ChannelProjectDefaults;
   /** Mounted route prefix used by the Navigation facade. Defaults to `/`. */
   readonly mountPath?: string;
 }
@@ -63,7 +69,11 @@ export async function bootstrapApplication(
     const [shell, table] = await Promise.all([modules.shell(), modules.routes()]);
     runtime = createRuntimeRoot(window.document);
 
-    installRootProjectPolicy(runtime.owner, shell as Component<unknown>);
+    installRootProjectPolicy(
+      runtime.owner,
+      shell as Component<unknown>,
+      projectPolicyForDefinition(shell, options.channelDefaults),
+    );
 
     const outlet = window.document.createDocumentFragment();
     const host = createRouteHost(runtime, outlet);

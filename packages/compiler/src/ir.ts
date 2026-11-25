@@ -393,9 +393,9 @@ export interface CanonicalElement {
   readonly kind: "element";
   /** Deterministic semantic occurrence assigned during canonicalization. */
   readonly occurrence: string;
-  /** Native tag spelling; namespace determines which DOM creation operation is used. */
+  /** Native tag spelling within the selected compiler profile. */
   readonly tag: string;
-  readonly namespace: "html" | "svg" | "mathml";
+  readonly namespace: "html" | "svg" | "mathml" | "terminal";
   /** Attribute, property, binding, and listener operations in source order. */
   readonly attributes: readonly CanonicalAttribute[];
   /** Children in rendered order, including structural regions. */

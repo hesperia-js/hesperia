@@ -32,6 +32,7 @@ test("editor uses the configured import declaration and maps authored cursor pos
     };
     const prepared = await preparePluginEditor(new Map([[filename, authored]]), root, {
       allowUnsafeHTML: false,
+      channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
       mountURL: "/",
       resolutionOverrides: { browser: {} },
       plugins: [plugin],
@@ -161,6 +162,7 @@ test("editor mappings retain authored identity across source order and transform
       ];
       const prepared = await preparePluginEditor(new Map([[filename, authored]]), root, {
         allowUnsafeHTML: false,
+        channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
         mountURL: "/",
         resolutionOverrides: { browser: {} },
         plugins,
@@ -266,6 +268,7 @@ export { count, photo, labelUpper, photoValue };`;
 
     const prepared = await preparePluginEditor(new Map([[filename, authored]]), root, {
       allowUnsafeHTML: false,
+      channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
       mountURL: "/",
       resolutionOverrides: { browser: {} },
     });

@@ -13,6 +13,7 @@ import {
 } from "./checking.ts";
 import { relative } from "node:path";
 import { sealProjectTypingEvidence } from "./typing-inputs.ts";
+import { checkedObjectProfileDiagnostics, inheritTarget, targetFor } from "./terminal-cli.ts";
 
 /**
  * Compile one module, obtaining declared prop mappings from the native TypeScript checker.
@@ -28,10 +29,13 @@ export async function compile(
   options: CompileOptions = {},
 ): Promise<CompileResult> {
   const filename = options.filename ?? "module.tsx";
-  const session = await openCheckingProject([{ filename, source }], {
+  const checkingOptions: ProjectCheckingOptions = {
     allowUnsafeHTML: options.allowUnsafeHTML,
+    channelDefaults: options.channelDefaults,
     documentShell: options.documentShell,
-  });
+  };
+  inheritTarget(options, checkingOptions);
+  const session = await openCheckingProject([{ filename, source }], checkingOptions);
 
   try {
     return emitAnalysis(session.analyses.get(filename) ?? analyzeModule(source, options), options);
@@ -77,29 +81,44 @@ export function emitCheckingSession(
 ): ProjectCompilation {
   const checking = session.result;
   const emitted = new Map<string, CompileResult>();
+  const profileDiagnostics = checkedObjectProfileDiagnostics(session, options);
+  if (profileDiagnostics.length)
+    return {
+      checking: { ...checking, diagnostics: [...checking.diagnostics, ...profileDiagnostics] },
+      modules: emitted,
+    };
+
+  const browser = targetFor(options).kind === "browser";
   const emissionErrors = new Map<string, Readonly<CompileResult["diagnostics"]>>();
 
   if (!checking.diagnostics.some((item) => item.severity === "error")) {
     for (const [filename, analysis] of session.analyses) {
-      const result = emitAnalysis(analysis, {
+      const moduleOptions: CompileOptions = {
         filename,
         allowUnsafeHTML: options.allowUnsafeHTML,
         allowUnsafeEmbed: options.allowUnsafeEmbed,
+        channelDefaults: options.channelDefaults,
         documentShell: options.documentShell,
         browserTarget: options.browserTarget,
         runtimeModule: options.runtimeModule,
-        styleRuntimeModule:
-          options.styledEntryIds?.has(filename) || options.styleShellEntryId === filename
-            ? options.styleRuntimeModule
-            : undefined,
-        styleEntryId:
-          options.styledEntryIds?.has(filename) || options.styleShellEntryId === filename
-            ? styleIdentity(filename, options.styleIdentityRoot)
-            : undefined,
-        stylePreloadEntry: options.styledEntryIds?.has(filename) ?? false,
-        styleIdentity: styleIdentity(filename, options.styleIdentityRoot),
-      });
+        ...(browser
+          ? {
+              styleRuntimeModule:
+                options.styledEntryIds?.has(filename) || options.styleShellEntryId === filename
+                  ? options.styleRuntimeModule
+                  : undefined,
+              styleEntryId:
+                options.styledEntryIds?.has(filename) || options.styleShellEntryId === filename
+                  ? styleIdentity(filename, options.styleIdentityRoot)
+                  : undefined,
+              stylePreloadEntry: options.styledEntryIds?.has(filename) ?? false,
+              styleIdentity: styleIdentity(filename, options.styleIdentityRoot),
+            }
+          : {}),
+      };
+      inheritTarget(options, moduleOptions);
 
+      const result = emitAnalysis(analysis, moduleOptions);
       emitted.set(filename, result);
 
       const errors = result.diagnostics.filter(

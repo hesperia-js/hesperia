@@ -1182,6 +1182,7 @@ test("every returned body gets a syntax gate even when it is unreferenced", asyn
     root,
     {
       allowUnsafeHTML: false,
+      channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
       mountURL: "/",
       resolutionOverrides: { browser: {} },
       plugins: [
@@ -1247,6 +1248,7 @@ test("unmapped PostCSS warnings report a filename without a guessed CSS span", a
 
   const diagnostics = await checkSources(new Map([[importer, source]]), root, {
     allowUnsafeHTML: false,
+    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/",
     resolutionOverrides: { browser: {} },
     plugins: [await insertGeneratedCssLine(), warnPostcssNode("comment", "generated-line warning")],
@@ -1284,6 +1286,7 @@ test("mapped PostCSS warnings keep their authored CSS span in project diagnostic
 
   const diagnostics = await checkSources(new Map([[importer, source]]), root, {
     allowUnsafeHTML: false,
+    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/",
     resolutionOverrides: { browser: {} },
     plugins: [await insertGeneratedCssLine(), warnPostcssNode("rule", "mapped-rule warning")],
@@ -1320,6 +1323,7 @@ test("filename-only plugin errors retain their severity and omit a source span",
 
   const diagnostics = await checkSources(new Map([[importer, source]]), root, {
     allowUnsafeHTML: false,
+    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/",
     resolutionOverrides: { browser: {} },
     plugins: [
@@ -1372,6 +1376,7 @@ test("generated application stylesheet failures retain their authored origin", a
 
   const diagnostics = await checkSources(new Map([[filename, source]]), root, {
     allowUnsafeHTML: false,
+    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/",
     resolutionOverrides: { browser: {} },
     plugins: [
@@ -1418,6 +1423,7 @@ async function checkThrownHook(
 
   return checkSources(new Map([[filename, source]]), root, {
     allowUnsafeHTML: false,
+    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/",
     resolutionOverrides: { browser: {} },
     plugins: [plugin],
@@ -1506,6 +1512,7 @@ test("a thrown generateStyles hook uses a filename-only plugin source fallback",
     root,
     {
       allowUnsafeHTML: false,
+      channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
       mountURL: "/",
       resolutionOverrides: { browser: {} },
       plugins: [
@@ -1675,6 +1682,7 @@ test("returned bodies cannot hide unresolved private imports", async () => {
     root,
     {
       allowUnsafeHTML: false,
+      channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
       mountURL: "/",
       resolutionOverrides: { browser: {} },
       plugins: [
@@ -1727,6 +1735,7 @@ test("referenced declarations require a browser body", async () => {
     root,
     {
       allowUnsafeHTML: false,
+      channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
       mountURL: "/",
       resolutionOverrides: { browser: {} },
       plugins: [

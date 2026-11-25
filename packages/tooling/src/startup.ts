@@ -1,3 +1,5 @@
+import type { ChannelProjectDefaults } from "hesperia/runtime";
+
 /** Virtual module identities used only by the browser build plugin. */
 export const startupModules = Object.freeze({
   shell: "hesperia-app-shell",
@@ -8,9 +10,11 @@ export const startupModules = Object.freeze({
 /**
  * Generate an import-safe startup module with authored modules behind explicit loaders.
  * The caller chooses the mount and starts the application after importing this module.
+ * @param channelDefaults The resolved fallbacks shared with this project's compiled definitions.
  */
 export function browserStartupSource(
   hasConfiguration: boolean,
+  channelDefaults: ChannelProjectDefaults,
   runtimeModule = "hesperia/runtime",
 ): string {
   return `import { bootstrapApplication } from ${JSON.stringify(runtimeModule)};
@@ -19,7 +23,7 @@ export async function start(mountPath: string): Promise<void> {
     configuration: ${hasConfiguration ? `() => import(${JSON.stringify(startupModules.configuration)}).then(module => module.default)` : "() => ({})"},
     shell: () => import(${JSON.stringify(startupModules.shell)}).then(module => module.default),
     routes: () => import(${JSON.stringify(startupModules.routes)}).then(module => module.default),
-  }, { mountPath });
+  }, { mountPath, channelDefaults: ${JSON.stringify(channelDefaults)} });
 }
 `;
 }

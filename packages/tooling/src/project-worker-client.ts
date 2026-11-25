@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { snapshotChannelProjectDefaults } from "hesperia/runtime";
 import { ProjectError, type BrowserBuild, type PreparedPluginEditorWire } from "./project.ts";
 import { decodePublicValue } from "./public-values.ts";
 import type { PluginWatch } from "./plugins.ts";
@@ -376,10 +377,13 @@ export async function editorInProjectProcess(
     },
     signal,
   )) as PreparedPluginEditorWire;
+  const channelDefaults = snapshotChannelProjectDefaults(wire.configuration.channelDefaults);
+
   return {
     ...wire,
     configuration: {
       ...wire.configuration,
+      channelDefaults,
       ...(wire.publicData
         ? {
             public: decodePublicValue(wire.publicData) as Readonly<
