@@ -467,9 +467,15 @@ interface GeneratedAssetAuditState {
   readonly committedEffects: number;
 }
 
+interface GeneratedAssetStartupScriptError {
+  readonly url: string;
+  readonly crossOrigin: string | null;
+}
+
 interface GeneratedAssetBrowserAudit {
   readonly policyViolations: GeneratedAssetPolicyViolation[];
   readonly moduleEvaluations: GeneratedAssetModuleEvaluation[];
+  readonly startupScriptErrors: GeneratedAssetStartupScriptError[];
 }
 
 interface GeneratedAssetDiagnosticRecorder {
@@ -642,8 +648,8 @@ async function recordGeneratedAssetBrowserEvents(
   };
 }
 
-async function installGeneratedAssetBrowserAudit(page: Page): Promise<void> {
-  await page.addInitScript(() => {
+async function installGeneratedAssetBrowserAudit(page: Page, startupURL: string): Promise<void> {
+  await page.addInitScript((expectedStartupURL: string) => {
     const audited = window as typeof window & {
       __generatedAssetAudit?: GeneratedAssetAuditState;
       __generatedAssetBrowserAudit?: GeneratedAssetBrowserAudit;
@@ -654,7 +660,30 @@ async function installGeneratedAssetBrowserAudit(page: Page): Promise<void> {
       dynamicEvaluations: 0,
       committedEffects: 0,
     };
-    audited.__generatedAssetBrowserAudit = { policyViolations: [], moduleEvaluations: [] };
+    audited.__generatedAssetBrowserAudit = {
+      policyViolations: [],
+      moduleEvaluations: [],
+      startupScriptErrors: [],
+    };
+
+    window.addEventListener(
+      "error",
+      (event) => {
+        const target = event.target;
+
+        if (
+          event.isTrusted &&
+          target instanceof HTMLScriptElement &&
+          target.type === "module" &&
+          target.src === expectedStartupURL
+        )
+          audited.__generatedAssetBrowserAudit?.startupScriptErrors.push({
+            url: target.src,
+            crossOrigin: target.getAttribute("crossorigin"),
+          });
+      },
+      true,
+    );
 
     window.addEventListener("securitypolicyviolation", (event) => {
       audited.__generatedAssetBrowserAudit?.policyViolations.push({
@@ -673,7 +702,7 @@ async function installGeneratedAssetBrowserAudit(page: Page): Promise<void> {
         url: detail.url,
       });
     });
-  });
+  }, startupURL);
 }
 
 async function readGeneratedAssetBrowserState(page: Page): Promise<{
@@ -698,6 +727,7 @@ async function readGeneratedAssetBrowserState(page: Page): Promise<{
   } | null;
   readonly policyViolations: readonly GeneratedAssetPolicyViolation[];
   readonly moduleEvaluations: readonly GeneratedAssetModuleEvaluation[];
+  readonly startupScriptErrors: readonly GeneratedAssetStartupScriptError[];
 }> {
   return page.evaluate(() => {
     const audited = window as typeof window & {
@@ -743,6 +773,7 @@ async function readGeneratedAssetBrowserState(page: Page): Promise<{
         : null,
       policyViolations: audited.__generatedAssetBrowserAudit?.policyViolations ?? [],
       moduleEvaluations: audited.__generatedAssetBrowserAudit?.moduleEvaluations ?? [],
+      startupScriptErrors: audited.__generatedAssetBrowserAudit?.startupScriptErrors ?? [],
     };
   });
 }
@@ -865,7 +896,9 @@ test("one captured browser graph serves native generated resources at same-origi
         const page = await context.newPage();
 
         pageForDiagnostics = page;
-        await installGeneratedAssetBrowserAudit(page);
+        const startupURL = new URL("startup.js", scenario.assetRoot).href;
+
+        await installGeneratedAssetBrowserAudit(page, startupURL);
 
         const cookieSeed = await page.goto(scenario.cookieSeedURL, {
           waitUntil: "load",
@@ -928,6 +961,7 @@ test("one captured browser graph serves native generated resources at same-origi
           expect(beforeDynamic.staticEvaluations).toBe(1);
           expect(beforeDynamic.dynamicEvaluations).toBe(0);
           expect(beforeDynamic.committedEffects).toBeGreaterThan(0);
+          expect(beforeDynamic.startupScriptErrors).toStrictEqual([]);
           expect(beforeDynamic.color).toBe("rgb(17, 34, 51)");
           expect(beforeDynamic.importedCssValue).toBe("loaded");
           expect(beforeDynamic.generatedStylesheets.length).toBeGreaterThan(0);
@@ -966,9 +1000,7 @@ test("one captured browser graph serves native generated resources at same-origi
           expect(initialRequests.some((event) => event.url === staticModule!.url)).toBe(true);
           expect(
             recorder.events.some(
-              (event) =>
-                event.kind === "request" &&
-                event.url === new URL("startup.js", scenario.assetRoot).href,
+              (event) => event.kind === "request" && event.url === startupURL,
             ),
           ).toBe(true);
 
@@ -1291,6 +1323,7 @@ test("one captured browser graph serves native generated resources at same-origi
         } else {
           const deniedState = await readGeneratedAssetBrowserState(page);
 
+          observations = { ...observations, deniedState };
           expect(deniedState.hasApplication).toBe(false);
           expect(deniedState.staticEvaluations).toBe(0);
           expect(deniedState.dynamicEvaluations).toBe(0);
@@ -1312,8 +1345,28 @@ test("one captured browser graph serves native generated resources at same-origi
               (event) => event.kind === "requestfailed" && event.origin === scenario.assetOrigin,
             );
 
+            observations = { ...observations, corsRequestFailures: failures };
             expect(moduleResponses.length).toBeGreaterThan(0);
-            expect(failures.length).toBeGreaterThan(0);
+            expect(
+              moduleResponses.some(
+                (event) =>
+                  event.path === new URL(startupURL).pathname &&
+                  event.origin === scenario.appOrigin &&
+                  event.responseStatus === 200,
+              ),
+            ).toBe(true);
+            expect(
+              recorder.events.some(
+                (event) =>
+                  event.kind === "request" &&
+                  event.url === startupURL &&
+                  event.resourceType === "script",
+              ),
+            ).toBe(true);
+            expect(deniedState.startupScriptErrors).toContainEqual({
+              url: startupURL,
+              crossOrigin: input.credentials,
+            });
 
             if (input.corsPolicy === "wrong-origin")
               expect(
@@ -1358,8 +1411,6 @@ test("one captured browser graph serves native generated resources at same-origi
               allowCredentials: "true",
             });
           }
-
-          observations = { ...observations, deniedState };
         }
 
         await recorder.flush();

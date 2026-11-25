@@ -1,4 +1,4 @@
 #!/usr/bin/env bun
-import { startLanguageServer } from "./server.ts";
+import { invokeLanguageServer } from "#hesperia-cli-main";
 
-startLanguageServer();
+invokeLanguageServer();
