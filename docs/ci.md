@@ -253,9 +253,11 @@ transform, source-map, population, and canonical-map checks still apply. It
 measures its own support code before creating the platform receipt. The
 aggregate also runs after a producer failure to report invalid or missing inputs;
 the verification result requires every producer and aggregate to succeed.
-Artifact names and execution binding include the attempt: rerun the complete workflow when new
-coverage evidence is needed. Rerunning only failed jobs cannot combine retained
-successful groups from an earlier attempt.
+Artifact names and execution binding include the attempt. Each platform
+downloads and checks for all four group manifests before installing workspace
+dependencies. After fixing any failed groups, choose **Re-run all jobs** to
+collect coverage from one attempt. A failed-jobs-only rerun leaves previously
+successful groups in the earlier attempt.
 
 After both platform aggregates succeed, CI downloads their separate artifacts
 and runs:
