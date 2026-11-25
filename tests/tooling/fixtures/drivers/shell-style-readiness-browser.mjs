@@ -36,13 +36,23 @@ for (const engine of [chromium, firefox, webkit]) {
       await page.route("**/_hesperia/startup.js", async (route) => {
         const response = await route.fetch();
         const html = await response.text();
+        const calls = [...html.matchAll(/^await (start\(.*\));$/gmu)];
+        const startup = calls[0];
 
+        if (calls.length !== 1 || !startup?.[1]) {
+          await route.abort();
+
+          throw new Error("The emitted startup wrapper must contain one awaited start call");
+        }
+
+        const body = html.replace(
+          startup[0],
+          `window.fixtureStartup = "pending"; ${startup[1]}.then(() => window.fixtureStartup = "ready", error => { window.fixtureStartup = "failed"; window.fixtureError = String(error); });`,
+        );
         await route.fulfill({
           response,
-          body: html.replace(
-            'await start("/");',
-            'window.fixtureStartup = "pending"; start("/").then(() => window.fixtureStartup = "ready", error => { window.fixtureStartup = "failed"; window.fixtureError = String(error); });',
-          ),
+          body,
+          headers: { ...response.headers(), "content-length": String(Buffer.byteLength(body)) },
         });
       });
 

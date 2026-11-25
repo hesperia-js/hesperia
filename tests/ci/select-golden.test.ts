@@ -86,7 +86,7 @@ async function removeRepoFile(repo: string, path: string): Promise<void> {
   await rm(join(repo, path), { force: true });
 }
 
-test("selects a real fixture change or falls back for stale reader contracts", async () => {
+test("selects a real fixture change or falls back for stale or unreviewed reader contracts", async () => {
   const repo = await mkdtemp(join(tmpdir(), "hesperia-ci-real-selector-"));
   const workspace = resolve(import.meta.dir, "../..");
 
@@ -117,7 +117,9 @@ test("selects a real fixture change or falls back for stale reader contracts", a
 
     if (result.fallbackReasons.length > 0) {
       for (const reason of result.fallbackReasons) {
-        expect(reason).toMatch(/^golden input reader contract is stale in (base|head): /u);
+        expect(reason).toMatch(
+          /^golden input reader (?:contract is stale in (?:base|head):|has no reviewed input contract:) /u,
+        );
       }
 
       const catalog = JSON.parse(await readFile(join(repo, "golden/catalog.json"), "utf8")) as {

@@ -1017,6 +1017,8 @@ test("one captured browser graph serves native generated resources at same-origi
           });
           const completedState = await readGeneratedAssetBrowserState(page);
 
+          observations = { ...observations, fontState };
+
           expect(fontState.faceStatuses).toContain("loaded");
           expect(fontState.check).toBe(true);
           expect(Math.abs(fontState.width - 73.3)).toBeLessThan(0.05);
