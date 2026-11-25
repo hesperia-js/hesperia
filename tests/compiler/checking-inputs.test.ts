@@ -629,6 +629,39 @@ export function Page(props: Component.Props<{ item: Sequence }>) { return <span>
   });
 }, 120_000);
 
+test("typing evidence refuses to join a component whose JSX props fail checking", async () => {
+  const source = `import type { Component } from "hesperia";
+function View(props: Component.Props<{ label: string }>) { return <span>{props.label()}</span>; }
+export function App() { return <View label={12} />; }`;
+  const invalid = await captureAuthoredPropEvidence("invalid-component-props.tsx", source);
+
+  expect(
+    invalid.diagnostics.some((item) => item.code === "TS2769" && item.severity === "error"),
+  ).toBe(true);
+  expect(invalid.evidence.checkingHasErrors).toBe(true);
+  expect(invalid.module.sourceJoin).toBe(false);
+  expect(invalid.module.emittedModuleAvailable).toBe(false);
+  expect(invalid.module.components).toHaveLength(1);
+  expect(invalid.module.components[0]).toMatchObject({
+    emittedComponentJoin: "ambiguous",
+    props: { kind: "unproved", reason: "ambiguous-join" },
+  });
+
+  const valid = await captureAuthoredPropEvidence(
+    "valid-component-props.tsx",
+    source.replace("label={12}", 'label={"checked"}'),
+  );
+
+  expect(valid.diagnostics).toEqual([]);
+  expect(valid.module.sourceJoin).toBe(true);
+  expect(valid.module.emittedModuleAvailable).toBe(true);
+  expect(valid.module.components).toHaveLength(1);
+  expect(valid.module.components[0]).toMatchObject({
+    emittedComponentJoin: "matched",
+    props: { kind: "props" },
+  });
+}, 120_000);
+
 test("typing evidence rejects inconsistent mapped checking diagnostics", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-typing-diagnostics-"));
   const filename = join(root, "entry.ts");
