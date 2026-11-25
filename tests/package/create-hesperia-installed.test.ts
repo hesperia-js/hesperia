@@ -818,6 +818,17 @@ AbortSignal.prototype.addEventListener = function (type, ...args) {
       >;
       workspaceRemovable = cancelledResult.retirement === "complete";
 
+      if (cancelled.exitCode !== 130) {
+        const { status } = cancelledResult;
+        const knownStatus = status === "created" || status === "failed" || status === "cancelled";
+        console.error("Creator JSON cancellation unexpected exit", {
+          exitCode: cancelled.exitCode,
+          status: knownStatus ? status : "unknown",
+          reportedInstallation: Object.hasOwn(cancelledResult, "installation"),
+          reportedInstaller: Object.hasOwn(cancelledResult, "installer"),
+        });
+      }
+
       expect(cancelled.exitCode).toBe(130);
       expect(cancelled.output).not.toContain("Choose a host integration:");
       expect(cancelled.output).toContain("Creation cancelled.");
