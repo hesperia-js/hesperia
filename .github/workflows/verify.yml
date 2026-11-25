@@ -358,12 +358,23 @@ jobs:
           ref: ${{ needs.checks.outputs.revision }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/setup
       - name: "Download this platform's original groups"
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
           pattern: "hesperia-coverage-group-${{ matrix.platform }}-*-${{ github.run_attempt }}"
           path: .coverage-groups
+      - name: "Check coverage groups before setup"
+        shell: bash
+        run: |
+          shopt -s nullglob
+          manifests=(.coverage-groups/*/coverage-group.json)
+          if (( ${#manifests[@]} != 4 )); then
+            printf 'Expected four coverage group manifests from attempt %s, found %s.\n' \
+              "$GITHUB_RUN_ATTEMPT" "${#manifests[@]}" >&2
+            printf 'After fixing any failed groups, use Re-run all jobs to collect coverage from one attempt.\n' >&2
+            exit 1
+          fi
+      - uses: ./.github/actions/setup
       - name: "Admit all four groups and capture aggregate support"
         run: "bun run scripts/ci/coverage-owner-launcher.ts scripts/ci/run-final-coverage.ts -- --aggregate .coverage-groups"
       - name: "Retain final and original coverage evidence"
@@ -391,7 +402,6 @@ jobs:
           ref: ${{ needs.checks.outputs.revision }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/setup
       - name: "Download Windows coverage evidence"
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
@@ -402,6 +412,7 @@ jobs:
         with:
           name: "hesperia-coverage-ubuntu-24.04-${{ github.run_attempt }}"
           path: .coverage-artifacts/linux
+      - uses: ./.github/actions/setup
       - name: "Check combined Windows and Linux coverage"
         run: "bun run scripts/ci/run-combined-coverage.ts --windows-root .coverage-artifacts/windows --linux-root .coverage-artifacts/linux --output .hesperia/coverage/combined"
       - name: "Retain combined coverage report"
