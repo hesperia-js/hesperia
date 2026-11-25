@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat, mkdir, open, readFile, readdir, rmdir, stat, unlink } from "node:fs/promises";
 import { basename, dirname, join, parse, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { creatorTemplateRoot } from "#hesperia-package-resources";
 import { elysiaTemplate } from "./templates/elysia.ts";
 import { frontendTemplate } from "./templates/frontend.ts";
 
@@ -104,7 +104,6 @@ type InstallOutcome =
   | { readonly status: "failed"; readonly message: string }
   | { readonly status: "cancelled"; readonly stop: CreatorInstallerStop };
 
-const templateRoot = fileURLToPath(new URL("../templates/", import.meta.url));
 const projectNamePlaceholder = "HESPERIA_PROJECT_NAME";
 const projectNameFiles = new Set(["package.json", "app.tsx", "README.md"]);
 const installerStopTimeoutMs = 5_000;
@@ -490,7 +489,7 @@ export async function executeCreator(
       await ensureDirectoryChain(dirname(filename), ownedDirectories);
       checkCancellation(options.signal);
 
-      const source = join(templateRoot, template.variant, template.assetPath);
+      const source = join(creatorTemplateRoot, template.variant, template.assetPath);
       const sourceContents = await readFile(source);
       checkCancellation(options.signal);
       let contents: string | Uint8Array = sourceContents;

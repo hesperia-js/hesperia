@@ -149,11 +149,7 @@ describe("browser module resolution integration", () => {
 
     expect(runtimeEdge).toBeDefined();
 
-    const startupSource = browserStartupSource(
-      false,
-      { sendTimeoutMs: 10_000, maxPendingSends: 64 },
-      runtimeEdge.specifier,
-    );
+    const startupSource = browserStartupSource(false, runtimeEdge.specifier);
     const startupOptions = {
       filename: join(root, startupRecord.filename),
       browserTarget: true,

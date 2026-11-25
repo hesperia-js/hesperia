@@ -1,5 +1,5 @@
-/** Browser namespaces and the terminal namespace used by the creator integration. */
-export type Namespace = "html" | "svg" | "mathml" | "terminal";
+/** Native namespaces understood by the direct-DOM compiler profile. */
+export type Namespace = "html" | "svg" | "mathml";
 
 /** Context needed to resolve the namespace of a literal JSX subtree. */
 export interface NamespaceContext {
@@ -21,8 +21,6 @@ export interface NamespaceContext {
  * mode, where a new `svg` or `math` root starts its own foreign namespace.
  */
 export function namespaceForTag(parent: NamespaceContext, tag: string): NamespaceContext {
-  if (parent.namespace === "terminal") return { namespace: "terminal", tag };
-
   const normalized = tag.toLowerCase();
 
   if (

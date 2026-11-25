@@ -783,7 +783,6 @@ test("language server skips a worker when its source read was superseded", async
         root: projectRoot,
         configuration: {
           allowUnsafeHTML: false,
-          channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
           mountURL: "/",
           resolutionOverrides: { browser: {} },
         },

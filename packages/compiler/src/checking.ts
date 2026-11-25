@@ -14,18 +14,9 @@ import {
   unprovedRenderedPropDiagnostics,
 } from "./props-analysis.ts";
 import { createOperationCallAnalyzer } from "./operation-call-analysis.ts";
-import {
-  inheritTarget,
-  targetFor,
-  TERMINAL_CHECKING_IMPORT_REPLACEMENTS,
-  terminalCheckingModuleDeclarations,
-  terminalJsxDeclarations,
-  terminalOptionDiagnostics,
-} from "./terminal-cli.ts";
 import { generatePageDeclarations, PAGE_DECLARATION_MARKER } from "./page-types.ts";
 import { analyzeBrowserCapabilities } from "./capability-analysis.ts";
 import { ModuleResolver, type ProjectResolutionOverrides } from "./module-resolution.ts";
-import type { ChannelProjectDefaults } from "hesperia/runtime";
 import { CheckingInputSnapshot, type CapturedCheckingInput } from "./checking-inputs.ts";
 import { normalizeFilename as normalize } from "./utils.ts";
 import {
@@ -66,8 +57,6 @@ export interface ProjectCheckingOptions {
   readonly allowUnsafeHTML?: boolean;
   /** Associate the embedded-document permission with emitted definitions. */
   readonly allowUnsafeEmbed?: boolean;
-  /** Complete project channel fallback pair; omission uses 10000 ms and 64 unfinished sends. */
-  readonly channelDefaults?: ChannelProjectDefaults;
   /** Enable document-shell validation for the project's root app module. */
   readonly documentShell?: boolean;
   /** Prove that browser entries do not reach host-only capabilities. */
@@ -196,8 +185,6 @@ async function createCheckingSession(
     options = snapshotProjectCheckingOptions(options);
   }
 
-  const terminal = targetFor(options).kind === "terminal-cli";
-  const targetDiagnostics = terminalOptionDiagnostics(options);
   const root = resolve(options.root ?? process.cwd());
   const population = nativePopulation(captured, root);
   const typingHost = captureTypingEvidence ? new TypingHostObservationRecorder() : undefined;
@@ -245,7 +232,7 @@ async function createCheckingSession(
       ((options.root === undefined && modules.length === 1) ||
         normalize(modulePaths[index]!) === normalize(join(root, "app.tsx")));
     const pageRouteContext = pageDeclarations.contexts.get(normalize(modulePaths[index]!));
-    const resolvedImportReplacements =
+    const importReplacements =
       resolution && options.resolutionOverrides
         ? checkingImportReplacements(
             module.filename,
@@ -254,45 +241,38 @@ async function createCheckingSession(
             resolution,
           )
         : undefined;
-    const importReplacements = terminal
-      ? { ...resolvedImportReplacements, ...TERMINAL_CHECKING_IMPORT_REPLACEMENTS }
-      : resolvedImportReplacements;
-    const analysisOptions = {
-      filename: module.filename,
-      allowUnsafeHTML: options.allowUnsafeHTML,
-      documentShell,
-    };
-    inheritTarget(options, analysisOptions);
     const analysis = /\.(?:ts|tsx|mts)$/u.test(module.filename)
-      ? analyzeModule(module.source, analysisOptions)
+      ? analyzeModule(module.source, {
+          filename: module.filename,
+          allowUnsafeHTML: options.allowUnsafeHTML,
+          documentShell,
+        })
       : undefined;
-    const nativeEventHandlers =
-      analysis && !terminal
-        ? analyzeNativeEventOptions(analysis.result.ir).contexts.flatMap((context) => {
-            if (!analysis.mapOffset) return [];
+    const nativeEventHandlers = analysis
+      ? analyzeNativeEventOptions(analysis.result.ir).contexts.flatMap((context) => {
+          if (!analysis.mapOffset) return [];
 
-            return [
-              {
-                ...context,
-                span: {
-                  start: analysis.mapOffset(context.span.start),
-                  end: analysis.mapOffset(context.span.end),
-                },
-                attributeSpan: {
-                  start: analysis.mapOffset(context.attributeSpan.start),
-                  end: analysis.mapOffset(context.attributeSpan.end),
-                },
+          return [
+            {
+              ...context,
+              span: {
+                start: analysis.mapOffset(context.span.start),
+                end: analysis.mapOffset(context.span.end),
               },
-            ];
-          })
-        : [];
+              attributeSpan: {
+                start: analysis.mapOffset(context.attributeSpan.start),
+                end: analysis.mapOffset(context.attributeSpan.end),
+              },
+            },
+          ];
+        })
+      : [];
     const view = checkingView(
       module.source,
       module.filename,
       options.allowUnsafeHTML === true,
-      terminal || pageRouteContext || importReplacements || nativeEventHandlers.length
+      pageRouteContext || importReplacements || nativeEventHandlers.length
         ? {
-            ...(terminal ? { terminalCli: true } : {}),
             ...(pageRouteContext ? { pageRouteContext } : {}),
             ...(importReplacements ? { importReplacements } : {}),
             ...(nativeEventHandlers.length ? { nativeEventHandlers } : {}),
@@ -338,12 +318,8 @@ async function createCheckingSession(
     files.set(pageDeclarationPath, pageDeclarations.declaration.source);
 
   const jsxPath = join(root, ".hesperia", "jsx.d.ts");
-  files.set(normalize(jsxPath), terminal ? terminalJsxDeclarations() : jsxDeclarations());
-  const terminalModulesPath = terminal
-    ? join(root, ".hesperia", "terminal-modules.d.ts")
-    : undefined;
-  if (terminalModulesPath)
-    files.set(normalize(terminalModulesPath), terminalCheckingModuleDeclarations());
+
+  files.set(normalize(jsxPath), jsxDeclarations());
 
   const configPath = join(root, ".hesperia", "check.tsconfig.json");
   const authorConfig = join(root, "tsconfig.json");
@@ -497,7 +473,6 @@ async function createCheckingSession(
         allowImportingTsExtensions: true,
         noEmit: true,
         jsx: "preserve",
-        ...(terminal ? { lib: ["ESNext"] } : {}),
         ...(resolution
           ? {
               customConditions: resolution.activeConditions.filter(
@@ -528,7 +503,6 @@ async function createCheckingSession(
           .filter((file) => file.filename.endsWith(".d.ts"))
           .map((file) => virtualPath(file.filename, root)),
         jsxPath,
-        ...(terminalModulesPath ? [terminalModulesPath] : []),
       ],
       include: [],
       exclude: [],
@@ -565,7 +539,7 @@ async function createCheckingSession(
         message: `TypeScript could not create a project for ${modules[0]?.filename ?? root}`,
       };
       const result: ProjectCheckingResult = {
-        diagnostics: [...targetDiagnostics, diagnostic],
+        diagnostics: [diagnostic],
         modules: modules.map((module) => ({
           filename: module.filename,
           diagnostics: [diagnostic],
@@ -573,7 +547,7 @@ async function createCheckingSession(
         checkingInputs: checkingInputs.captured,
         snapshotId: snapshot.id,
       };
-      const session: CheckingSession = {
+      return {
         analyses,
         project,
         views,
@@ -583,11 +557,9 @@ async function createCheckingSession(
           return { ...result, checkingInputs: checkingInputs.captured };
         },
       };
-      inheritTarget(options, session);
-      return session;
     }
 
-    const analyzeOperationCalls = terminal ? undefined : await createOperationCallAnalyzer(project);
+    const analyzeOperationCalls = await createOperationCallAnalyzer(project);
 
     for (let index = 0; index < modules.length; index++) {
       const module = modules[index]!;
@@ -613,11 +585,9 @@ async function createCheckingSession(
         analysis.result.ir,
         analysis.mapOffset,
       );
-      const operationCalls = analyzeOperationCalls
-        ? await analyzeOperationCalls(modulePaths[index]!, view.mapOffset)
-        : { bySpan: {}, diagnostics: [] };
+      const operationCalls = await analyzeOperationCalls(modulePaths[index]!, view.mapOffset);
 
-      const checkedAnalysis: ModuleAnalysis = {
+      analyses.set(module.filename, {
         ...analysis,
         componentProps,
         operationCalls,
@@ -630,9 +600,7 @@ async function createCheckingSession(
             ...operationCalls.diagnostics,
           ],
         },
-      };
-      inheritTarget(analysis, checkedAnalysis);
-      analyses.set(module.filename, checkedAnalysis);
+      });
 
       viewDiagnostics.set(module.filename, [
         ...(viewDiagnostics.get(module.filename) ?? []).filter(
@@ -701,7 +669,7 @@ async function createCheckingSession(
     }
 
     const result: ProjectCheckingResult = {
-      diagnostics: [...targetDiagnostics, ...checked.flatMap((module) => module.diagnostics)],
+      diagnostics: checked.flatMap((module) => module.diagnostics),
       modules: checked,
       checkingInputs: checkingInputs.captured,
       snapshotId: snapshot.id,
@@ -723,7 +691,6 @@ async function createCheckingSession(
         return value;
       },
     };
-    inheritTarget(options, session);
     associateResult = issueNativeCheckingOrigin(
       project,
       session,
@@ -835,7 +802,7 @@ function snapshotVirtualModules(modules: readonly VirtualModule[]): readonly Vir
 }
 
 function snapshotProjectCheckingOptions(options: ProjectCheckingOptions): ProjectCheckingOptions {
-  const snapshot = Object.freeze({
+  return Object.freeze({
     ...options,
     ...(options.additionalFiles
       ? { additionalFiles: snapshotVirtualModules(options.additionalFiles) }
@@ -852,8 +819,6 @@ function snapshotProjectCheckingOptions(options: ProjectCheckingOptions): Projec
       : {}),
     ...(options.styledEntryIds ? { styledEntryIds: new Set(options.styledEntryIds) } : {}),
   });
-  inheritTarget(options, snapshot);
-  return snapshot;
 }
 
 function checkingImportReplacements(

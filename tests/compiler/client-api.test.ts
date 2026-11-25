@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { compile } from "../../packages/compiler/src/index.ts";
-import { registerProjectPolicy } from "../../packages/hesperia/src/runtime/project-policy.ts";
 
 const clientApiFixtures = join(import.meta.dir, "fixtures/applications/client-api");
 
@@ -57,7 +56,6 @@ test("captured navigation marker values bind the owner and preserve reassignment
   const owner = {};
 
   const runtime = {
-    registerProjectPolicy,
     defineComponent(factory: (owner: object) => unknown) {
       return () => factory(owner);
     },

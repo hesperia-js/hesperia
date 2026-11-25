@@ -124,10 +124,7 @@ const Root = defineComponent((owner) => {
   ];
 });
 
-const definition = registerProjectPolicy(Root, {
-  allowUnsafeEmbed: true,
-  channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
-});
+const definition = registerProjectPolicy(Root, { allowUnsafeEmbed: true });
 application = mount(
   document.querySelector("#app")!,
   definition,

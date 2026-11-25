@@ -2,7 +2,6 @@ import { parseSync } from "oxc-parser";
 import { transformSync } from "oxc-transform";
 import remapping from "@jridgewell/remapping";
 import { originalPositionFor, TraceMap, type SourceMapInput } from "@jridgewell/trace-mapping";
-import type { ChannelProjectDefaults } from "hesperia/runtime";
 import { canonicalize } from "./canonical.ts";
 import {
   validateComponentBindingReads,
@@ -27,13 +26,6 @@ import type { OperationCallAnalysis } from "./operation-call-analysis.ts";
 import { resolveModuleSemantics, type ModuleSemantics } from "./semantics.ts";
 import { lfLineStarts as lineStarts } from "./utils.ts";
 import { checkedAnalysisOrigin } from "./checking-origin.ts";
-import {
-  checkedObjectProfileDiagnostics,
-  inheritTarget,
-  targetFor,
-  terminalModuleDiagnostics,
-  terminalOptionDiagnostics,
-} from "./terminal-cli.ts";
 
 interface SourceMap {
   readonly version: 3;
@@ -55,8 +47,6 @@ export interface CompileOptions {
   readonly allowUnsafeHTML?: boolean;
   /** Associate the project's embedded-document permission with compiled definitions. */
   readonly allowUnsafeEmbed?: boolean;
-  /** Complete project channel fallback pair; omission uses 10000 ms and 64 unfinished sends. */
-  readonly channelDefaults?: ChannelProjectDefaults;
   /** Permit the validated whole-document root shell in this module. */
   readonly documentShell?: boolean;
   /** Enable finite dynamic-import lowering for browser bundlers. */
@@ -113,11 +103,7 @@ export interface ModuleAnalysis {
 /** Share compiler validation and authored diagnostics with checking and editor snapshots. */
 export function analyzeModule(source: string, options: CompileOptions = {}): ModuleAnalysis {
   const filename = options.filename ?? "module.tsx";
-  const diagnostics = terminalOptionDiagnostics(options);
-
-  if (diagnostics.length)
-    return retainAnalysisTarget({ result: failedResult(filename, diagnostics) }, options);
-
+  const diagnostics: CompilerDiagnostic[] = [];
   const normalized = transformSync(filename, source, {
     lang: filename.endsWith(".tsx") ? "tsx" : "ts",
     jsx: "preserve",
@@ -128,7 +114,7 @@ export function analyzeModule(source: string, options: CompileOptions = {}): Mod
   diagnostics.push(...oxcDiagnostics(normalized.errors));
 
   if (diagnostics.some((item) => item.severity === "error"))
-    return retainAnalysisTarget({ result: failedResult(filename, diagnostics) }, options);
+    return { result: failedResult(filename, diagnostics) };
 
   const authoredOffset = offsetMapper(normalized.code, source, normalized.map);
   const parsed = parseSync(filename, normalized.code, {
@@ -143,20 +129,11 @@ export function analyzeModule(source: string, options: CompileOptions = {}): Mod
   );
 
   if (diagnostics.some((item) => item.severity === "error"))
-    return retainAnalysisTarget({ result: failedResult(filename, diagnostics) }, options);
+    return { result: failedResult(filename, diagnostics) };
 
-  const terminal = targetFor(options).kind === "terminal-cli";
-  const ir = canonicalize(parsed.program, filename, {
-    documentShell: options.documentShell,
-    terminalCli: terminal,
-  });
+  const ir = canonicalize(parsed.program, filename, { documentShell: options.documentShell });
 
   diagnostics.push(...ir.diagnostics.map((item) => mapDiagnostic(item, authoredOffset)));
-
-  if (terminal)
-    diagnostics.push(
-      ...terminalModuleDiagnostics(ir).map((item) => mapDiagnostic(item, authoredOffset)),
-    );
 
   diagnostics.push(
     ...validateComponentBindingReads(ir).map((item) => mapDiagnostic(item, authoredOffset)),
@@ -177,7 +154,7 @@ export function analyzeModule(source: string, options: CompileOptions = {}): Mod
 
   const semanticHash = sha256(encodeCanonicalModule(ir));
   const semantics = resolveModuleSemantics(ir);
-  const analysis: ModuleAnalysis = {
+  return {
     normalized,
     authoredSourceDigest: sha256(source),
     mapOffset: authoredOffset,
@@ -191,12 +168,6 @@ export function analyzeModule(source: string, options: CompileOptions = {}): Mod
       debug: authoredDebug(ir, authoredOffset),
     },
   };
-  return retainAnalysisTarget(analysis, options);
-}
-
-function retainAnalysisTarget(analysis: ModuleAnalysis, options: CompileOptions): ModuleAnalysis {
-  inheritTarget(options, analysis);
-  return analysis;
 }
 
 /** Emit one already analyzed canonical snapshot through esrap and Oxc browser lowering. */
@@ -205,10 +176,6 @@ export function emitAnalysis(
   options: CompileOptions = {},
 ): CompileResult {
   const { result, normalized } = analysis;
-  const profileDiagnostics = checkedObjectProfileDiagnostics(analysis, options);
-  if (profileDiagnostics.length)
-    return { ...result, code: "", diagnostics: [...result.diagnostics, ...profileDiagnostics] };
-
   const pendingRendered = unprovedRenderedPropDiagnostics(undefined, result.ir, analysis.mapOffset);
   const renderedProof =
     pendingRendered.length > 0 && checkedAnalysisOrigin(analysis)
@@ -226,11 +193,7 @@ export function emitAnalysis(
     return { ...result, code: "", diagnostics: inputDiagnostics };
 
   const filename = options.filename ?? "module.tsx";
-  const profile = targetFor(options);
-  const runtimeModule =
-    profile.kind === "terminal-cli"
-      ? profile.runtimeModule
-      : (options.runtimeModule ?? "hesperia/runtime");
+  const runtimeModule = options.runtimeModule ?? "hesperia/runtime";
   const ir = attachCheckedMetadata(
     result.ir,
     analysis.componentProps,
@@ -239,12 +202,6 @@ export function emitAnalysis(
     renderedProof,
   );
   const diagnostics = [...inputDiagnostics, ...obsoleteNavigationDiagnostics(ir)];
-  if (profile.kind === "terminal-cli")
-    diagnostics.push(
-      ...terminalModuleDiagnostics(ir, true).map((item) =>
-        mapDiagnostic(item, analysis.mapOffset ?? ((offset) => offset)),
-      ),
-    );
   const clientBindings = resolveClientBindings(ir);
   const generated = generateModule(ir, {
     filename,
@@ -253,7 +210,6 @@ export function emitAnalysis(
     clientBindings,
     browserTarget: options.browserTarget,
     allowUnsafeEmbed: options.allowUnsafeEmbed,
-    channelDefaults: options.channelDefaults,
     styleRuntimeModule: options.styleRuntimeModule,
     styleEntryId: options.styleEntryId,
     stylePreloadEntry: options.stylePreloadEntry,

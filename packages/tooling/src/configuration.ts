@@ -3,7 +3,6 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { snapshotProductionTarget, type ProductionTargetV1 } from "@hesperia/hosting";
 import { canonicalizeMountURL } from "@hesperia/hosting/internal";
-import { normalizeChannelProjectDefaults, type ChannelProjectDefaults } from "hesperia/runtime";
 import type {
   BrowserResolutionOverrides,
   ProjectResolutionOverrides,
@@ -11,9 +10,6 @@ import type {
 import type { Plugin } from "./plugins.ts";
 import { projectPublicValues, type PublicValue } from "./public-values.ts";
 import { isMissingFile, isNonArrayObject } from "./utils.ts";
-
-/** Optional project fallbacks for channel sends. */
-export type ChannelProjectConfiguration = Readonly<Partial<ChannelProjectDefaults>>;
 
 /** Settings authored in exactly one TypeScript or JSON project configuration file. */
 export interface ProjectConfigurationInput<
@@ -29,8 +25,6 @@ export interface ProjectConfigurationInput<
   readonly target?: ProductionTargetV1;
   /** Server-only module specifier for dataBindingForRequest; absent by default. */
   readonly serverDataBinding?: string;
-  /** Channel send fallbacks captured into compiled project policy. */
-  readonly channels?: ChannelProjectConfiguration;
   /** Exact browser import replacements. */
   readonly resolutionOverrides?: ProjectResolutionOverrides;
   /** Plugin instances invoked in this order. TypeScript configuration only. */
@@ -58,8 +52,6 @@ export interface ProjectConfiguration {
   readonly target?: ProductionTargetV1;
   /** Captured server supplier module specifier, without loading the module. */
   readonly serverDataBinding?: string;
-  /** Immutable channel fallbacks, including built-ins for omitted settings. */
-  readonly channelDefaults: ChannelProjectDefaults;
   /** Exact browser import names mapped to packages or project-config-relative modules. */
   readonly resolutionOverrides: ProjectResolutionOverrides;
   /** Configured plugin instances, kept in the project process. */
@@ -136,7 +128,6 @@ export async function readConfiguration(root: string): Promise<ProjectConfigurat
       allowUnsafeHTML: false,
       allowUnsafeEmbed: false,
       mountURL: "/",
-      channelDefaults: normalizeChannelProjectDefaults(),
       resolutionOverrides: { browser: {} },
     });
 
@@ -210,31 +201,10 @@ export async function readConfiguration(root: string): Promise<ProjectConfigurat
     }
   }
 
-  let channelDefaults: ChannelProjectDefaults;
-
-  try {
-    const descriptor = Reflect.getOwnPropertyDescriptor(value, "channels");
-
-    if (descriptor && !("value" in descriptor))
-      throw new TypeError("channels must be an own data property");
-
-    channelDefaults = normalizeChannelProjectDefaults(descriptor?.value);
-  } catch (cause) {
-    const reason = cause instanceof Error ? cause.message : String(cause);
-    const filename = jsonPresent ? jsonFile : tsFile;
-
-    throw new TypeError(`Invalid channels configuration in ${filename}: ${reason}`, { cause });
-  }
-
   const entries: [string, unknown][] = [];
 
   for (const name of Reflect.ownKeys(value)) {
-    if (
-      typeof name === "string" &&
-      name !== "serverDataBinding" &&
-      name !== "target" &&
-      name !== "channels"
-    ) {
+    if (typeof name === "string" && name !== "serverDataBinding" && name !== "target") {
       const descriptor = Reflect.getOwnPropertyDescriptor(value, name);
 
       if (descriptor?.enumerable) entries.push([name, Reflect.get(value, name)]);
@@ -287,7 +257,6 @@ export async function readConfiguration(root: string): Promise<ProjectConfigurat
     allowUnsafeHTML: (value as { allowUnsafeHTML?: boolean }).allowUnsafeHTML ?? false,
     allowUnsafeEmbed: (value as { allowUnsafeEmbed?: boolean }).allowUnsafeEmbed ?? false,
     mountURL,
-    channelDefaults,
     ...(target ? { target } : {}),
     ...(serverDataBinding === undefined ? {} : { serverDataBinding }),
     resolutionOverrides: { browser: Object.freeze({ ...overrides }) },

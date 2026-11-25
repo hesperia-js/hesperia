@@ -389,7 +389,6 @@ describe("project commands", () => {
 
     const diagnostics = await checkSources(new Map([[filename, authored]]), root, {
       allowUnsafeHTML: false,
-      channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
       mountURL: "/",
       resolutionOverrides: { browser: {} },
       plugins: [plugin],

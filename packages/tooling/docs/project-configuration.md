@@ -20,24 +20,6 @@ export default defineConfig({
 
 The defaults are `allowUnsafeHTML: false`, `allowUnsafeEmbed: false`, `mountURL: "/"`, and an empty `resolutionOverrides.browser` map. Unknown settings fail validation. Browser resolution overrides match exact import names and are checked as browser code after replacement. See [getting started](https://github.com/hesperia-js/hesperia/blob/main/docs/getting-started.md) for an override example and [environment values](https://github.com/hesperia-js/hesperia/blob/main/packages/hesperia/docs/env.md) for environment loading and exposure rules.
 
-## Channel send defaults
-
-Use `channels` in either project configuration file to set fallbacks for channel sends:
-
-```json
-{
-  "channels": {
-    "sendTimeoutMs": 10000,
-    "maxPendingSends": 64
-  }
-}
-```
-
-- `sendTimeoutMs` is the overall timeout in milliseconds for an admitted send. It must be finite and positive. A setting on the individual send takes precedence, followed by the channel declaration, then the project fallback.
-- `maxPendingSends` limits unfinished sends per shared channel operation. It must be a positive safe integer. The channel declaration takes precedence over the project fallback.
-
-Omit either field to use its built-in value shown above. The check and build commands reject invalid values and unknown fields. The browser build carries the validated pair in its compiled project policy.
-
 ## Production target
 
 To produce a target-bound browser/static build, declare the target in the project configuration:

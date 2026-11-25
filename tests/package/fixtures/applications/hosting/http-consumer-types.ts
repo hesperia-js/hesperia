@@ -30,7 +30,6 @@ const selection: HostSelection = { mountURL: "/dashboard" };
 
 const configuration: ProjectConfiguration = {
   allowUnsafeHTML: false,
-  channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
   mountURL: "/",
   resolutionOverrides: { browser: {} },
 };

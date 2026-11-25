@@ -1,6 +1,4 @@
 export { compile } from "./project-compilation.ts";
-/** @internal Fixed creator profile used by the captured frontend build. */
-export { openTerminalCliProject, emitTerminalCliSession } from "./terminal-cli.ts";
 export type { CompileOptions, CompileResult } from "./compilation.ts";
 export { checkProjectModules, checkVirtualModule } from "./checking.ts";
 export type {

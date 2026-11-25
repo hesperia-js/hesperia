@@ -1,26 +1,17 @@
 import { Embed } from "hesperia/embed";
 import { mount } from "hesperia";
 import * as client from "hesperia/client";
-import { component, defineComponent, registerProjectPolicy } from "hesperia/runtime";
+import { registerProjectPolicy } from "hesperia/runtime";
 
 function Unsafe() {
   return <Embed name="unsafe" sandbox="allow-scripts allow-same-origin" srcdoc="<p>unsafe</p>" />;
 }
 
-const RegisteredChild = registerProjectPolicy(
-  defineComponent((owner) =>
-    component(
-      owner,
-      Embed,
-      { name: "nested", sandbox: "allow-scripts allow-same-origin", srcdoc: "<p>nested</p>" },
-      "nested-embed",
-    ),
-  ),
-  {
-    allowUnsafeEmbed: true,
-    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
-  },
-);
+function PermissiveChild() {
+  return <Embed name="nested" sandbox="allow-scripts allow-same-origin" srcdoc="<p>nested</p>" />;
+}
+
+const RegisteredChild = registerProjectPolicy(PermissiveChild, { allowUnsafeEmbed: true });
 
 function NestedRoot() {
   return <RegisteredChild />;

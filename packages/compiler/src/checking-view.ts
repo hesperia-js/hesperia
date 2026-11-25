@@ -25,8 +25,6 @@ interface Piece {
 
 /** Compiler-only route context used to specialize trusted Page.Props types. */
 export interface CheckingViewOptions {
-  /** @internal Use the compiler-owned creator terminal intrinsic namespace. */
-  readonly terminalCli?: boolean;
   readonly pageRouteContext?: string;
   /** Exact import and export source replacements used by project resolution overrides. */
   readonly importReplacements?: Readonly<Record<string, string>>;
@@ -343,7 +341,7 @@ export function checkingView(
 
   const result = diagnostics.some((item) => item.code === "HES-OXC" && item.severity === "error")
     ? copy(0, source.length)
-    : range(0, source.length, root, { namespace: options.terminalCli ? "terminal" : "html" });
+    : range(0, source.length, root, { namespace: "html" });
   const reverse = new Map<number, number>();
 
   for (let offset = 0; offset < result.offsets.length; offset++) {

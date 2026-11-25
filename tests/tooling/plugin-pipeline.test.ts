@@ -277,7 +277,6 @@ test("an authored TypeScript error survives a source transform that removes it",
   };
   const diagnostics = await checkSources(new Map([[filename, authored]]), root, {
     allowUnsafeHTML: false,
-    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/",
     resolutionOverrides: { browser: {} },
     plugins: [plugin],
@@ -587,7 +586,6 @@ test("multi-stage source-map diagnostics keep their authored spans", async () =>
   const badSpan = authored.indexOf("broken");
   const diagnostics = await checkSources(new Map([[filename, authored]]), root, {
     allowUnsafeHTML: false,
-    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/",
     resolutionOverrides: { browser: {} },
     plugins: mappedSourceStages(filename, vendor, "export const vendorValue = 2;"),
@@ -626,7 +624,6 @@ test("a cross-source diagnostic keeps its error without highlighting transformed
   };
   const diagnostics = await checkSources(new Map([[filename, authored]]), root, {
     allowUnsafeHTML: false,
-    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/",
     resolutionOverrides: { browser: {} },
     plugins: [plugin],
@@ -669,7 +666,6 @@ test("a foreign source without original text retains its diagnostic without a sp
   };
   const diagnostics = await checkSources(new Map([[filename, authored]]), root, {
     allowUnsafeHTML: false,
-    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/",
     resolutionOverrides: { browser: {} },
     plugins: [plugin],
