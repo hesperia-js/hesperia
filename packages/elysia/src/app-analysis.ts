@@ -1,6 +1,5 @@
 import { realpathSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { SymbolFlags, TypeFlags, type Symbol, type Type } from "typescript/unstable/async";
 import {
   NodeFlags,
@@ -10,6 +9,7 @@ import {
   type SourceFile,
 } from "typescript/unstable/ast";
 import type { PluginProjectInput, PluginProjectResult } from "@hesperia/tooling/project-service";
+import { elysiaDeclarationCandidates } from "#hesperia-elysia-resources";
 import { appRoutesModuleId, type AppRouteFact } from "./route-facts.ts";
 
 export { appRoutesModuleId } from "./route-facts.ts";
@@ -93,13 +93,8 @@ interface ExportAssignmentNode extends Node {
 
 type PackageFunctionOrigin = "verified" | "mutable-alias" | "unresolved-alias" | "none";
 
-const packageDirectory = dirname(fileURLToPath(import.meta.url));
 const packageClientDeclarations = new Set(
-  [
-    resolve(packageDirectory, "client.ts"),
-    resolve(packageDirectory, "client.d.ts"),
-    resolve(packageDirectory, "../dist/client.d.ts"),
-  ].map(comparableSourcePath),
+  elysiaDeclarationCandidates("client", import.meta.url).map(comparableSourcePath),
 );
 
 interface ImportTypeNode extends Node {
