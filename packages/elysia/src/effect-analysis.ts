@@ -1,6 +1,5 @@
-import { dirname, resolve as resolvePath } from "node:path";
+import { resolve as resolvePath } from "node:path";
 import { realpathSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import remapping, { type SourceMapInput } from "@jridgewell/remapping";
 import { SymbolFlags, type Symbol } from "typescript/unstable/async";
 import {
@@ -27,6 +26,7 @@ import { typeNodeReferencesValue } from "./app-analysis.ts";
 import { appEffectsModuleId } from "./effect-facts.ts";
 import type { ConfiguredAppBinding } from "./app-analysis.ts";
 import type { AppRouteFact } from "./route-facts.ts";
+import { elysiaDeclarationCandidates } from "#hesperia-elysia-resources";
 
 interface CallNode extends Node {
   readonly expression: Node;
@@ -78,13 +78,8 @@ export interface ConfiguredEffectExports extends Pick<
 }
 
 const emptyCode = "export const effects = Object.freeze([]);\n";
-const packageDirectory = dirname(fileURLToPath(import.meta.url));
 const helperDeclarations = new Set(
-  [
-    resolvePath(packageDirectory, "effects.ts"),
-    resolvePath(packageDirectory, "effects.d.ts"),
-    resolvePath(packageDirectory, "../dist/effects.d.ts"),
-  ].map(pathKey),
+  elysiaDeclarationCandidates("effects", import.meta.url).map(pathKey),
 );
 
 /**
