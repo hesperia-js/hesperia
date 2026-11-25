@@ -2,6 +2,7 @@ import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { afterEach, expect, test } from "bun:test";
 import {
   chromium,
+  errors as playwrightErrors,
   firefox,
   webkit,
   type Browser,
@@ -977,12 +978,74 @@ test("one captured browser graph serves native generated resources at same-origi
           );
           const svgURL = new URL(svgAssetPin.path.slice(1), scenario.assetRoot).href;
 
-          await page.waitForFunction(
-            (url: string) =>
-              performance.getEntriesByType("resource").some((resource) => resource.name === url),
-            svgURL,
-            { timeout: 20_000 },
-          );
+          try {
+            await page.waitForFunction(
+              (url: string) =>
+                performance.getEntriesByType("resource").some((resource) => resource.name === url),
+              svgURL,
+              { timeout: 20_000 },
+            );
+          } catch (waitError) {
+            if (waitError instanceof playwrightErrors.TimeoutError) {
+              let timer: ReturnType<typeof setTimeout> | undefined;
+
+              try {
+                const resourceTiming = await Promise.race([
+                  page.evaluate(
+                    ({ expectedURL, origins }) => {
+                      const resources = performance.getEntriesByType("resource").filter((entry) => {
+                        try {
+                          return origins.includes(new URL(entry.name).origin);
+                        } catch {
+                          return false;
+                        }
+                      });
+                      const matches = resources.filter((entry) => entry.name === expectedURL);
+                      const sample = resources.slice(-80).map((entry) => {
+                        const resource = entry as PerformanceResourceTiming;
+
+                        return {
+                          name: resource.name,
+                          initiatorType: resource.initiatorType,
+                          startTime: resource.startTime,
+                          duration: resource.duration,
+                          responseEnd: resource.responseEnd,
+                          transferSize: resource.transferSize,
+                        };
+                      });
+
+                      return {
+                        expectedURL,
+                        documentURL: location.href,
+                        isTopLevel: window.top === window,
+                        timeOrigin: performance.timeOrigin,
+                        fixtureOriginResourceCount: resources.length,
+                        expectedNameMatchCount: matches.length,
+                        expectedNameMatches: matches.slice(-80).map((entry) => entry.name),
+                        sample,
+                        truncated: resources.length > sample.length,
+                      };
+                    },
+                    { expectedURL: svgURL, origins: [scenario.appOrigin, scenario.assetOrigin] },
+                  ),
+                  new Promise<never>((_, reject) => {
+                    timer = setTimeout(
+                      () => reject(new Error("Resource timing diagnostic timed out")),
+                      3_000,
+                    );
+                  }),
+                ]);
+
+                observations = { ...observations, resourceTiming };
+              } catch (error) {
+                observations = { ...observations, resourceTiming: { error: String(error) } };
+              } finally {
+                if (timer !== undefined) clearTimeout(timer);
+              }
+            }
+
+            throw waitError;
+          }
 
           const finalState = await readGeneratedAssetBrowserState(page);
           const dynamicModule = finalState.moduleEvaluations.find(
