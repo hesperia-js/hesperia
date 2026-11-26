@@ -13,6 +13,7 @@ import {
   createHost,
   createTargetedHost,
   type ApplicationHost,
+  type CapturedBuild,
   type HostingAssetRecord,
   type HostingPublicFileRecord,
   type HostingRecordV1,
@@ -27,12 +28,16 @@ import {
   BROWSER_STATIC_ROUTING_ASSET,
   BROWSER_MODULE_PRELOADS_ASSET,
   createRetainedManagedHost,
+  readBrowserStaticRouting,
   readCompletedBuildDirectory,
   relativeGeneratedRequestPath,
   snapshotHostSelection,
 } from "@hesperia/hosting/internal";
 import { prepareDevelopmentBuild, ProjectError, type BrowserBuild } from "./project.ts";
-import { readRetainedManagedHistory } from "./targeted-publication.ts";
+import {
+  assertRetainedBrowserAssetDestination,
+  readRetainedManagedHistory,
+} from "./targeted-publication.ts";
 import { isMissingFile } from "./utils.ts";
 
 /** A local server handle owns its file watchers and connected development clients. */
@@ -73,16 +78,12 @@ export async function previewProject(
     const hasBoundOrigin =
       selected?.applicationOrigin !== undefined ||
       ("deployment" in build && build.deployment.version === 2);
-    const construct = async (
-      choice: HostSelection | undefined,
-    ): Promise<{
-      readonly host: ApplicationHost;
-      readonly inventory: PreviewInventory;
-    }> => {
+    const construct = async (choice: HostSelection | undefined): Promise<PreviewCapture> => {
       if ("control" in build) {
         if (
           build.control.kind !== "browser" ||
-          build.control.productionTarget.declaration.runtime !== "browser"
+          build.control.productionTarget.declaration.runtime !== "browser" ||
+          "serverFiles" in build.inventory
         )
           throw new ProjectError("Preview requires a browser/static target");
 
@@ -94,7 +95,11 @@ export async function previewProject(
 
         if (resource.kind !== "browser") throw new ProjectError("Preview requires a browser host");
 
-        return { host: resource.host, inventory: build.inventory };
+        return {
+          host: resource.host,
+          inventory: build.inventory,
+          routingInventory: build.inventory,
+        };
       }
 
       if ("serverFiles" in build) throw new ProjectError("Preview requires a browser build");
@@ -111,13 +116,7 @@ export async function previewProject(
       current = await construct(previewSelection);
     }
 
-    handle = await previewWithRetainedAssets(
-      output,
-      current.host,
-      current.inventory,
-      resources,
-      previewOrigin,
-    );
+    handle = await previewWithRetainedAssets(output, current, resources, previewOrigin);
   } catch (cause) {
     const failures: unknown[] = [cause];
 
@@ -175,17 +174,27 @@ interface PreviewInventory {
   readonly publicFiles?: ReadonlyMap<string, Blob>;
 }
 
+interface PreviewCapture {
+  readonly host: ApplicationHost;
+  readonly inventory: PreviewInventory;
+  readonly routingInventory?: CapturedBuild;
+}
+
 async function previewWithRetainedAssets(
   output: string,
-  current: ApplicationHost,
-  inventory: PreviewInventory,
+  { host: current, inventory, routingInventory }: PreviewCapture,
   resources: TargetedHostResource[],
   previewOrigin: string,
 ): Promise<ApplicationHost["handle"]> {
   const retained = new Map<string, Map<string, RetainedPreviewAsset>>();
   const currentRoot = current.generatedAssets.root;
+  const history = await readRetainedManagedHistory(output);
+  const routing =
+    routingInventory && history.length > 0
+      ? await readBrowserStaticRouting(routingInventory)
+      : undefined;
 
-  for (const capture of await readRetainedManagedHistory(output)) {
+  for (const capture of history) {
     const resource = await createRetainedManagedHost(
       capture.inventory,
       capture.deployment?.version === 2 ? { applicationOrigin: previewOrigin } : undefined,
@@ -211,6 +220,15 @@ async function previewWithRetainedAssets(
         continue;
 
       const pathname = directory + asset.path.slice(1);
+
+      if (routing)
+        assertRetainedBrowserAssetDestination(
+          routing,
+          current.mount.pathname,
+          { pathname, origin: absolute?.origin ?? previewOrigin },
+          previewOrigin,
+        );
+
       let origins = retained.get(pathname);
 
       if (!origins) {

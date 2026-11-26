@@ -343,6 +343,39 @@ describe("project commands", () => {
     } finally {
       await replacement.close();
     }
+
+    const collidingRoute = join(root, "src/routes", earlierPath.slice(1));
+    await mkdir(collidingRoute, { recursive: true });
+    await writeFile(
+      join(collidingRoute, "+page.tsx"),
+      "export default function Page() { return <main>Authored route</main>; }",
+    );
+    const colliding = await prepareBuild(root);
+    const recordPath = join(root, ".hesperia/build/hesperia-build.json");
+    const previous = await readFile(recordPath);
+
+    await expect(
+      writeBuild(root, colliding, { generatedAssets: { baseURL: "/second-assets" } }),
+    ).rejects.toThrow(`Retained generated asset collides with application path: ${earlierPath}`);
+    expect(await readFile(recordPath)).toEqual(previous);
+
+    const overlappingPreview = await captureRejection(
+      previewProject(root, 0, { mountURL: earlierPath }).then((preview) => preview.close()),
+    );
+    expect(overlappingPreview).toMatchObject({
+      message: `Retained generated asset collides with application path: ${earlierPath}`,
+    });
+
+    const retainedPreview = await previewProject(root, 0);
+    try {
+      const response = await fetch(new URL(earlierPath, retainedPreview.url));
+      expect(response.status).toBe(200);
+      expect(await response.arrayBuffer()).toEqual(
+        await first.files.get(earlierModule.path)!.arrayBuffer(),
+      );
+    } finally {
+      await retainedPreview.close();
+    }
   });
 
   test("checks imported modules outside src in the same source snapshot", async () => {

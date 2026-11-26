@@ -685,58 +685,61 @@ test("a targeted host rejects a generated startup on its checked page destinatio
   }
 });
 
-test("a targeted host serves a recorded page under an unowned custom generated assets path", async () => {
-  const root = await filesystem.mkdtemp(join(tmpdir(), "hesperia-targeted-prefix-"));
+test.each(["/dashboard/", "http://localhost/dashboard/"])(
+  "a targeted host serves a recorded page under an unowned generated path (%s)",
+  async (baseURL) => {
+    const root = await filesystem.mkdtemp(join(tmpdir(), "hesperia-targeted-prefix-"));
 
-  try {
-    const written = await targetedFixture(root);
-    const routing = {
-      ...browserRouting(),
-      pages: [
-        {
-          id: "assets/page",
-          pattern: "/assets/page",
-          segments: [
-            { kind: "static", value: "assets" },
-            { kind: "static", value: "page" },
-          ],
-        },
-      ],
-    };
-    await writeTargetedRouting(written, routing);
+    try {
+      const written = await targetedFixture(root);
+      const routing = {
+        ...browserRouting(),
+        pages: [
+          {
+            id: "assets/page",
+            pattern: "/assets/page",
+            segments: [
+              { kind: "static", value: "assets" },
+              { kind: "static", value: "page" },
+            ],
+          },
+        ],
+      };
+      await writeTargetedRouting(written, routing);
 
-    const resource = await createTargetedHost(await readTargetedBuild(root), {
-      generatedAssets: { baseURL: "/dashboard/" },
-    });
+      const resource = await createTargetedHost(await readTargetedBuild(root), {
+        generatedAssets: { baseURL },
+      });
 
-    if (resource.kind !== "browser") throw new Error("Expected the browser host");
+      if (resource.kind !== "browser") throw new Error("Expected the browser host");
 
-    const page = resource.host.handle(
-      new Request("http://localhost/dashboard/assets/page", { headers: { accept: "text/html" } }),
-    );
+      const page = resource.host.handle(
+        new Request("http://localhost/dashboard/assets/page", { headers: { accept: "text/html" } }),
+      );
 
-    expect(page?.status).toBe(200);
-    expect(await page?.text()).toContain("/dashboard/startup.js");
-    expect(
-      resource.host.handle(new Request("http://localhost/dashboard/assets/missing.js"))?.status,
-    ).toBe(404);
-    expect(
-      resource.host.handle(new Request("http://localhost/dashboard/assets/%2Fsecret.js"))?.status,
-    ).toBe(404);
-    expect(
-      resource.host.handle(
-        new Request("http://localhost/dashboard/assets/startup.mjs", { method: "POST" }),
-      )?.status,
-    ).toBe(405);
-    expect(
-      resource.host.handle(new Request("http://localhost/dashboard/_hesperia/assets/missing.js"))
-        ?.status,
-    ).toBe(404);
-    await resource.close();
-  } finally {
-    await filesystem.rm(root, { recursive: true, force: true });
-  }
-});
+      expect(page?.status).toBe(200);
+      expect(await page?.text()).toContain(`${baseURL}startup.js`);
+      expect(
+        resource.host.handle(new Request("http://localhost/dashboard/assets/missing.js"))?.status,
+      ).toBe(404);
+      expect(
+        resource.host.handle(new Request("http://localhost/dashboard/assets/%2Fsecret.js"))?.status,
+      ).toBe(404);
+      expect(
+        resource.host.handle(
+          new Request("http://localhost/dashboard/assets/startup.mjs", { method: "POST" }),
+        )?.status,
+      ).toBe(405);
+      expect(
+        resource.host.handle(new Request("http://localhost/dashboard/_hesperia/assets/missing.js"))
+          ?.status,
+      ).toBe(404);
+      await resource.close();
+    } finally {
+      await filesystem.rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("a targeted browser host snapshots and serves an explicit preview mount", async () => {
   const root = await filesystem.mkdtemp(join(tmpdir(), "hesperia-targeted-preview-"));

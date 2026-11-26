@@ -162,10 +162,9 @@ function respondToStaticRequest(
 ): Response | undefined {
   const url = new URL(request.url);
   const pathname = url.pathname;
+  const onApplicationOrigin = applicationOrigin === undefined || url.origin === applicationOrigin;
   const generated =
-    generatedAssets.root.kind === "path" &&
-    applicationOrigin !== undefined &&
-    url.origin !== applicationOrigin
+    generatedAssets.root.kind === "path" && !onApplicationOrigin
       ? undefined
       : relativeGeneratedRequestPath(url, generatedAssets);
 
@@ -184,11 +183,7 @@ function respondToStaticRequest(
 
     if (asset) return staticResponse(request, asset.blob, asset.contentType);
 
-    if (
-      (generatedAssets.root.kind === "path" ||
-        (applicationOrigin !== undefined && url.origin === applicationOrigin)) &&
-      !isWithinPathname(pathname, assetPath)
-    ) {
+    if (onApplicationOrigin && !isWithinPathname(pathname, assetPath)) {
       if (isWithinPathname(pathname, mountPathname)) {
         const publicPath = mountPathname === "/" ? pathname : pathname.slice(mountPathname.length);
         const publicFile = publicFiles.get(publicPath);
@@ -206,7 +201,7 @@ function respondToStaticRequest(
     return new Response(null, { status: 404 });
   }
 
-  if (applicationOrigin !== undefined && url.origin !== applicationOrigin) return undefined;
+  if (!onApplicationOrigin) return undefined;
 
   if (isWithinPathname(pathname, assetPath)) return new Response(null, { status: 404 });
 

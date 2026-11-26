@@ -58,7 +58,7 @@ The current build does not resolve or run this supplier. A future server produce
 
 For a browser/static production target, pass `generatedAssets.baseURL` to `writeBuild` to publish with a different generated asset base. Use a directory pathname on the application origin or an absolute HTTP(S) directory URL. Publication reuses the compiled modules and emitted assets and generates new startup wiring for the selected base. The application mount, page URLs, and captured public-file URLs keep their own locations.
 
-Supply `applicationOrigin` if an absolute asset base overlaps an application pathname and the host needs to tell the two origins apart. Use one HTTP(S) origin, such as `https://www.example.test`, including the port if needed. Supply the origin without credentials, path, query, or fragment. Admission rejects an actual generated resource that shares a public file or captured page URL on that origin. A separate asset origin can use the same pathname.
+Supply `applicationOrigin` if an absolute asset base overlaps an application pathname and the host needs to tell the two origins apart. Use one HTTP(S) origin, such as `https://www.example.test`, including the port if needed. Supply the origin without credentials, path, query, or fragment. Admission rejects an actual generated resource that shares a public file or captured page URL on that origin. A separate asset origin can use the same pathname. A later publication cannot claim a URL still owned by a retained generated asset. Preview refuses an overlapping mount before serving requests.
 
 ```ts
 import { prepareBuild, writeBuild } from "@hesperia/tooling/project-service";

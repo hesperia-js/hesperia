@@ -16,6 +16,9 @@ import { type CapturedBuild, type HostSelection } from "@hesperia/hosting";
 import {
   createBrowserArtifacts,
   BROWSER_MODULE_PRELOADS_ASSET,
+  BROWSER_STATIC_ROUTING_ASSET,
+  classifyBrowserStaticPath,
+  type BrowserStaticRoutingV1,
   encodeTargetedControlRecord,
   createHostForDeployment,
   readBrowserStaticRouting,
@@ -300,7 +303,7 @@ export async function publishTargetedBuild(
       publication.deployment,
     );
     const staticFiles = staticTarget
-      ? await browserStaticFiles(captured.inventory, deployment)
+      ? await browserStaticFiles(captured.inventory, deployment, publication.history)
       : undefined;
 
     if (staticFiles)
@@ -657,12 +660,59 @@ function staticManagedPath(path: string): string {
   return `_hesperia/assets/${path.slice("/assets/".length).split("/").map(decodeURIComponent).join("/")}`;
 }
 
+export function assertRetainedBrowserAssetDestination(
+  routing: BrowserStaticRoutingV1,
+  mountPathname: string,
+  destination: { readonly pathname: string; readonly origin: string | undefined },
+  applicationOrigin: string | undefined,
+): void {
+  if (
+    destination.origin !== undefined &&
+    applicationOrigin !== undefined &&
+    destination.origin !== applicationOrigin
+  )
+    return;
+
+  const url = new URL(destination.origin ?? applicationOrigin ?? "https://hesperia.invalid");
+  url.pathname = destination.pathname;
+  const location = classifyBrowserStaticPath(routing, url, mountPathname);
+
+  if (location.kind === "page" || location.kind === "public")
+    throw new TypeError(`Retained generated asset collides with application path: ${url.pathname}`);
+}
+
 async function browserStaticFiles(
   inventory: CapturedBuild,
   deployment: ResolvedDeployment,
+  history: readonly RetainedManagedBuild[],
 ): Promise<Map<string, Blob>> {
   const routing = await readBrowserStaticRouting(inventory);
   const host = await createHostForDeployment(inventory, deployment, routing);
+  const applicationOrigin = deployment.version === 2 ? deployment.applicationOrigin : undefined;
+
+  for (const capture of history) {
+    const previous = capture.deployment ?? resolveCapturedDeployment(capture.inventory);
+    const root = previous.generatedAssets.root;
+    const absolute = root.kind === "url" ? new URL(root.href) : undefined;
+    const directory = root.kind === "path" ? root.pathname : absolute!.pathname;
+    const origin =
+      absolute?.origin ?? (previous.version === 2 ? previous.applicationOrigin : undefined);
+
+    for (const asset of capture.inventory.hosting.assets) {
+      if (
+        asset.path === BROWSER_STATIC_ROUTING_ASSET ||
+        asset.path === BROWSER_MODULE_PRELOADS_ASSET
+      )
+        continue;
+
+      assertRetainedBrowserAssetDestination(
+        routing,
+        host.mount.pathname,
+        { pathname: directory + asset.path.slice(1), origin },
+        applicationOrigin,
+      );
+    }
+  }
 
   if (
     host.mount.pathname !== deployment.mountPathname ||
