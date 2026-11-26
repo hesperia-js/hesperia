@@ -25,6 +25,7 @@ import {
   runtimeKeyRegistry,
   scanRouteFiles,
   requestTypingEvidenceCapture,
+  requestCheckingCancellation,
   registerMappedProjectCompilation,
   type CompilerDiagnostic,
   type VirtualModule,
@@ -2096,16 +2097,19 @@ async function configuredCompilation(
   signal?.throwIfAborted();
   const originalChecking = await checkProjectModules(
     [...prepared.sources].map(([filename, source]) => ({ filename, source: source.current })),
-    {
-      root,
-      ...configuration,
-      documentShell: true,
-      browserTarget: false,
-      resolution,
-      resolutionOverrides: configuration.resolutionOverrides,
-      additionalFiles,
-      checkingRoots,
-    },
+    requestCheckingCancellation(
+      {
+        root,
+        ...configuration,
+        documentShell: true,
+        browserTarget: false,
+        resolution,
+        resolutionOverrides: configuration.resolutionOverrides,
+        additionalFiles,
+        checkingRoots,
+      },
+      signal,
+    ),
   );
   signal?.throwIfAborted();
   const originalTypeDiagnostics = originalChecking.modules.flatMap((module) =>
@@ -2143,6 +2147,7 @@ async function configuredCompilation(
     checkingRoots,
   };
   if (development) requestTypingEvidenceCapture(checkingOptions);
+  requestCheckingCancellation(checkingOptions, signal);
   signal?.throwIfAborted();
   const session = await openCheckingProject(
     [...sources].map(([filename, source]) => ({ filename, source })),

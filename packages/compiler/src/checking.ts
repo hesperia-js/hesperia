@@ -165,6 +165,17 @@ export interface CheckingSession {
  * @returns A promise for the checking session after its diagnostics and component prop metadata
  * have been queried.
  */
+const checkingCancellationRequests = new WeakMap<ProjectCheckingOptions, AbortSignal>();
+
+/** @internal Bind cancellation to one actual Tooling checker options object. */
+export function requestCheckingCancellation<T extends ProjectCheckingOptions>(
+  options: T,
+  signal: AbortSignal | undefined,
+): T {
+  if (signal) checkingCancellationRequests.set(options, signal);
+  return options;
+}
+
 export function openCheckingProject(
   modules: readonly VirtualModule[],
   options: ProjectCheckingOptions = {},
@@ -178,6 +189,7 @@ async function createCheckingSession(
   options: ProjectCheckingOptions,
   captured: CapturedCheckingModules | undefined,
 ): Promise<CheckingSession> {
+  const signal = checkingCancellationRequests.get(options);
   const captureTypingEvidence = hasRequestedTypingEvidenceCapture(options);
 
   if (captureTypingEvidence) {
@@ -526,7 +538,9 @@ async function createCheckingSession(
   };
 
   try {
+    signal?.throwIfAborted();
     snapshot = await api.updateSnapshot({ openProjects: [configPath] });
+    signal?.throwIfAborted();
     const project =
       snapshot.getProject(configPath) ??
       (await snapshot.getDefaultProjectForFile(modulePaths[0] ?? configPath));
@@ -789,6 +803,7 @@ async function createCheckingSession(
       });
     }
 
+    signal?.throwIfAborted();
     throw error;
   }
 }
