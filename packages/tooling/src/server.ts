@@ -221,13 +221,12 @@ async function previewWithRetainedAssets(
 
       const pathname = directory + asset.path.slice(1);
 
-      if (routing)
-        assertRetainedBrowserAssetDestination(
-          routing,
-          current.mount.pathname,
-          { pathname, origin: absolute?.origin ?? previewOrigin },
-          previewOrigin,
-        );
+      assertRetainedBrowserAssetDestination(
+        routing,
+        current.mount,
+        { pathname, origin: absolute?.origin ?? previewOrigin },
+        previewOrigin,
+      );
 
       let origins = retained.get(pathname);
 

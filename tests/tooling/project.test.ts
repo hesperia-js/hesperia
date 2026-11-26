@@ -376,6 +376,44 @@ describe("project commands", () => {
     } finally {
       await retainedPreview.close();
     }
+
+    await writeFile(join(root, "hesperia.config.json"), "{}");
+    const legacy = await prepareBuild(root);
+    await expect(writeBuild(root, legacy)).rejects.toThrow(
+      "Retained generated asset collides with application path",
+    );
+    expect(await readFile(recordPath)).toEqual(previous);
+
+    await writeFile(
+      join(root, "hesperia.config.json"),
+      JSON.stringify({ mountURL: "/legacy-next" }),
+    );
+    const disjointLegacy = await prepareBuild(root);
+    await writeBuild(root, disjointLegacy);
+    const legacyPreview = await previewProject(root, 0);
+    try {
+      const page = await fetch(new URL("/legacy-next", legacyPreview.url), {
+        headers: { accept: "text/html" },
+      });
+      await page.text();
+      expect(page.status).toBe(200);
+      expect(page.headers.get("content-type")).toContain("text/html");
+
+      const retained = await fetch(new URL(earlierPath, legacyPreview.url));
+      expect(retained.status).toBe(200);
+      expect(await retained.arrayBuffer()).toEqual(
+        await first.files.get(earlierModule.path)!.arrayBuffer(),
+      );
+    } finally {
+      await legacyPreview.close();
+    }
+
+    const overlappingLegacyPreview = await captureRejection(
+      previewProject(root, 0, { mountURL: "/" }).then((preview) => preview.close()),
+    );
+    expect(overlappingLegacyPreview).toMatchObject({
+      message: expect.stringContaining("Retained generated asset collides with application path"),
+    });
   });
 
   test("checks imported modules outside src in the same source snapshot", async () => {

@@ -98,6 +98,7 @@ import {
 } from "./style-plan.ts";
 import { buildRouteStyleMetadata } from "./route-style-topology.ts";
 import {
+  assertRetainedBrowserAssetsFit,
   publishTargetedBuild,
   withBuildPublication,
   type BuildPublication,
@@ -1916,18 +1917,15 @@ export async function writeBuild(
   )
     throw new ProjectError("Deployment selection requires a browser/static production target");
 
-  if (snapshot.version === 2) {
-    await createHost({
-      hosting: snapshot.hosting,
-      files: assets,
-      publicFiles: snapshot.publicFiles,
-    });
-  } else {
-    await createHost({ hosting: snapshot.hosting, files: assets });
-  }
+  const host = await createHost(
+    snapshot.version === 2
+      ? { hosting: snapshot.hosting, files: assets, publicFiles: snapshot.publicFiles }
+      : { hosting: snapshot.hosting, files: assets },
+  );
 
   return withBuildPublication(root, async (publication) => {
     const { output, previousDirectory, retainedCaptureIds } = publication;
+    assertRetainedBrowserAssetsFit(host.mount, undefined, undefined, publication.history);
     await cleanUnpublishedCaptures(publication);
 
     const capturesDirectory = join(output, ".captures");

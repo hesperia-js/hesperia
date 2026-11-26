@@ -12,7 +12,7 @@ import {
   type FileHandle,
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { type CapturedBuild, type HostSelection } from "@hesperia/hosting";
+import { type ApplicationHost, type CapturedBuild, type HostSelection } from "@hesperia/hosting";
 import {
   createBrowserArtifacts,
   BROWSER_MODULE_PRELOADS_ASSET,
@@ -661,8 +661,8 @@ function staticManagedPath(path: string): string {
 }
 
 export function assertRetainedBrowserAssetDestination(
-  routing: BrowserStaticRoutingV1,
-  mountPathname: string,
+  routing: BrowserStaticRoutingV1 | undefined,
+  mount: ApplicationHost["mount"],
   destination: { readonly pathname: string; readonly origin: string | undefined },
   applicationOrigin: string | undefined,
 ): void {
@@ -675,21 +675,29 @@ export function assertRetainedBrowserAssetDestination(
 
   const url = new URL(destination.origin ?? applicationOrigin ?? "https://hesperia.invalid");
   url.pathname = destination.pathname;
-  const location = classifyBrowserStaticPath(routing, url, mountPathname);
 
-  if (location.kind === "page" || location.kind === "public")
-    throw new TypeError(`Retained generated asset collides with application path: ${url.pathname}`);
+  if (routing) {
+    const location = classifyBrowserStaticPath(routing, url, mount.pathname);
+    if (location.kind !== "page" && location.kind !== "public") return;
+  } else {
+    const { pathname } = url;
+    const inMount =
+      mount.pathname === "/" ||
+      pathname === mount.pathname ||
+      pathname.startsWith(mount.pathname + "/");
+    const managed = pathname === mount.assetPath || pathname.startsWith(mount.assetPath + "/");
+    if (!inMount || managed) return;
+  }
+
+  throw new TypeError(`Retained generated asset collides with application path: ${url.pathname}`);
 }
 
-async function browserStaticFiles(
-  inventory: CapturedBuild,
-  deployment: ResolvedDeployment,
+export function assertRetainedBrowserAssetsFit(
+  mount: ApplicationHost["mount"],
+  routing: BrowserStaticRoutingV1 | undefined,
+  applicationOrigin: string | undefined,
   history: readonly RetainedManagedBuild[],
-): Promise<Map<string, Blob>> {
-  const routing = await readBrowserStaticRouting(inventory);
-  const host = await createHostForDeployment(inventory, deployment, routing);
-  const applicationOrigin = deployment.version === 2 ? deployment.applicationOrigin : undefined;
-
+): void {
   for (const capture of history) {
     const previous = capture.deployment ?? resolveCapturedDeployment(capture.inventory);
     const root = previous.generatedAssets.root;
@@ -707,12 +715,23 @@ async function browserStaticFiles(
 
       assertRetainedBrowserAssetDestination(
         routing,
-        host.mount.pathname,
+        mount,
         { pathname: directory + asset.path.slice(1), origin },
         applicationOrigin,
       );
     }
   }
+}
+
+async function browserStaticFiles(
+  inventory: CapturedBuild,
+  deployment: ResolvedDeployment,
+  history: readonly RetainedManagedBuild[],
+): Promise<Map<string, Blob>> {
+  const routing = await readBrowserStaticRouting(inventory);
+  const host = await createHostForDeployment(inventory, deployment, routing);
+  const applicationOrigin = deployment.version === 2 ? deployment.applicationOrigin : undefined;
+  assertRetainedBrowserAssetsFit(host.mount, routing, applicationOrigin, history);
 
   if (
     host.mount.pathname !== deployment.mountPathname ||
