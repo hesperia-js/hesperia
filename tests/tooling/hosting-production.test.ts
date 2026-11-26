@@ -440,6 +440,10 @@ interface GeneratedAssetBrowserEvent {
   readonly expectedContentType?: string | null;
   readonly allowOrigin?: string | null;
   readonly allowCredentials?: string | null;
+  readonly vary?: string | null;
+  readonly cacheControl?: string | null;
+  readonly contentLength?: string | null;
+  readonly bodyLength?: number | null;
   readonly contentSecurityPolicy?: string | null;
   readonly bodySha256?: string | null;
   readonly expectedSha256?: string | null;
@@ -572,6 +576,7 @@ async function recordGeneratedAssetBrowserEvents(
 
           const expected = assetPins.get(url.href) ?? publicPins.get(url.href);
           let bodySha256: string | null = null;
+          let bodyLength: number | null = null;
           let bodyReadError: string | null = null;
           const declaredLength = Number(headers["content-length"]);
 
@@ -581,6 +586,7 @@ async function recordGeneratedAssetBrowserEvents(
             try {
               const body = new Uint8Array(await response.body());
 
+              bodyLength = body.byteLength;
               bodySha256 = body.byteLength <= responseBodyLimit ? sha256(body) : null;
               if (body.byteLength > responseBodyLimit)
                 bodyReadError = `Response exceeds ${responseBodyLimit} byte diagnostic body limit`;
@@ -600,6 +606,10 @@ async function recordGeneratedAssetBrowserEvents(
             expectedContentType: expected?.contentType ?? null,
             allowOrigin: headers["access-control-allow-origin"] ?? null,
             allowCredentials: headers["access-control-allow-credentials"] ?? null,
+            vary: headers.vary ?? null,
+            cacheControl: headers["cache-control"] ?? null,
+            contentLength: headers["content-length"] ?? null,
+            bodyLength,
             contentSecurityPolicy: headers["content-security-policy"] ?? null,
             bodySha256,
             expectedSha256: expected?.sha256 ?? null,
@@ -778,6 +788,280 @@ async function readGeneratedAssetBrowserState(page: Page): Promise<{
   });
 }
 
+interface NativeCredentialReferenceStage {
+  readonly stage: "script" | "preload";
+  readonly entryURL: string;
+  readonly requests: GeneratedAssetProviderEvent[];
+  readonly responses: Array<{
+    readonly url: string;
+    readonly status: number;
+    readonly contentType: string | null;
+    readonly allowOrigin: string | null;
+    readonly allowCredentials: string | null;
+    readonly vary: string | null;
+    readonly cacheControl: string | null;
+    readonly contentLength: string | null;
+    readonly bodyLength: number;
+    readonly bodySha256: string;
+  }>;
+  seed?: {
+    readonly noPriorCookie: boolean;
+    readonly responseMatches: boolean;
+    readonly cookiePresent: boolean;
+  };
+  overflow?: boolean;
+  state?: {
+    readonly entry: boolean;
+    readonly static: boolean;
+    readonly dynamic: boolean;
+    readonly complete: boolean;
+    readonly scripts: Array<{ readonly src: string; readonly crossOrigin: string | null }>;
+    readonly preloads: Array<{ readonly href: string; readonly crossOrigin: string | null }>;
+  };
+}
+
+async function readNativeCredentialReference(
+  browser: Browser,
+  scenario: GeneratedAssetScenario,
+  stages: NativeCredentialReferenceStage[],
+): Promise<boolean> {
+  const referenceSources = {
+    "entry.mjs":
+      'import "./static.mjs"; globalThis.__hesperiaNativeReferenceEntry = true; await import("./dynamic.mjs"); globalThis.__hesperiaNativeReferenceComplete = true;\n',
+    "static.mjs": "globalThis.__hesperiaNativeReferenceStatic = true;\n",
+    "dynamic.mjs": "globalThis.__hesperiaNativeReferenceDynamic = true;\n",
+  } as const;
+
+  for (const stage of ["script", "preload"] as const) {
+    const entryURL = new URL(`__hesperia-native-reference/${stage}/entry.mjs`, scenario.assetRoot)
+      .href;
+    const record: NativeCredentialReferenceStage = { stage, entryURL, requests: [], responses: [] };
+    const context = await browser.newContext();
+    const requestStart = scenario.nativeReferenceEvents.length;
+    let requestsCaptured = false;
+    const failures: unknown[] = [];
+
+    stages.push(record);
+
+    try {
+      const page = await context.newPage();
+      const existingCookies = (await context.cookies(scenario.assetRoot)).filter(
+        (cookie) => cookie.name === "hesperia-generated-assets",
+      );
+
+      const seed = await page.goto(scenario.cookieSeedURL, { waitUntil: "load", timeout: 20_000 });
+      const seedHeaders = (await seed?.headersArray())?.filter(
+        (header) => header.name.toLowerCase() === "set-cookie",
+      );
+      const expectedSeed = `hesperia-generated-assets=present; Path=${scenario.assetRootPath}; SameSite=Lax; HttpOnly`;
+
+      const cookiePresent = (await context.cookies(scenario.assetRoot)).some(
+        (cookie) =>
+          cookie.name === "hesperia-generated-assets" &&
+          cookie.value === "present" &&
+          cookie.path === scenario.assetRootPath,
+      );
+
+      record.seed = {
+        noPriorCookie: existingCookies.length === 0,
+        responseMatches:
+          seed?.status() === 200 &&
+          seed.url() === scenario.cookieSeedURL &&
+          seedHeaders?.length === 1 &&
+          seedHeaders[0]?.value === expectedSeed,
+        cookiePresent,
+      };
+      expect(record.seed).toStrictEqual({
+        noPriorCookie: true,
+        responseMatches: true,
+        cookiePresent: true,
+      });
+
+      const responses: Array<Promise<void>> = [];
+      let responseOverflow = false;
+      const expectedURLs = new Map(
+        Object.entries(referenceSources).map(
+          ([name, source]) =>
+            [new URL(name, entryURL).href, sha256(new TextEncoder().encode(source))] as const,
+        ),
+      );
+
+      page.on("response", (response) => {
+        if (!expectedURLs.has(response.url())) return;
+
+        if (responses.length >= 16) {
+          responseOverflow = true;
+
+          return;
+        }
+
+        responses.push(
+          (async () => {
+            const headers = await response.allHeaders();
+            const body = new Uint8Array(await response.body());
+
+            record.responses.push({
+              url: response.url(),
+              status: response.status(),
+              contentType: headers["content-type"] ?? null,
+              allowOrigin: headers["access-control-allow-origin"] ?? null,
+              allowCredentials: headers["access-control-allow-credentials"] ?? null,
+              vary: headers.vary ?? null,
+              cacheControl: headers["cache-control"] ?? null,
+              contentLength: headers["content-length"] ?? null,
+              bodyLength: body.byteLength,
+              bodySha256: sha256(body),
+            });
+          })(),
+        );
+      });
+
+      const entryResponse = page.waitForResponse((response) => response.url() === entryURL, {
+        timeout: 20_000,
+      });
+
+      void entryResponse.catch(() => undefined);
+
+      const documentResponse = await page.goto(scenario.nativeReferenceURL(stage), {
+        waitUntil: "load",
+        timeout: 30_000,
+      });
+
+      expect(documentResponse?.status()).toBe(200);
+      expect((await entryResponse).status()).toBe(200);
+      await page.waitForLoadState("networkidle", { timeout: 15_000 });
+
+      record.state = await page.evaluate(() => ({
+        entry: Reflect.get(globalThis, "__hesperiaNativeReferenceEntry") === true,
+        static: Reflect.get(globalThis, "__hesperiaNativeReferenceStatic") === true,
+        dynamic: Reflect.get(globalThis, "__hesperiaNativeReferenceDynamic") === true,
+        complete: Reflect.get(globalThis, "__hesperiaNativeReferenceComplete") === true,
+        scripts: [...document.querySelectorAll<HTMLScriptElement>('script[type="module"]')].map(
+          (element) => ({ src: element.src, crossOrigin: element.crossOrigin }),
+        ),
+        preloads: [...document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"]')].map(
+          (element) => ({ href: element.href, crossOrigin: element.crossOrigin }),
+        ),
+      }));
+
+      if (stage === "script") {
+        expect(record.state).toMatchObject({
+          entry: true,
+          static: true,
+          dynamic: true,
+          complete: true,
+        });
+        expect(record.state.scripts).toStrictEqual([
+          { src: entryURL, crossOrigin: scenario.credentials },
+        ]);
+        expect(record.state.preloads).toStrictEqual([]);
+      } else {
+        expect(record.state).toMatchObject({
+          entry: false,
+          static: false,
+          dynamic: false,
+          complete: false,
+        });
+        expect(record.state.scripts).toStrictEqual([]);
+        expect(record.state.preloads).toStrictEqual([
+          { href: entryURL, crossOrigin: scenario.credentials },
+        ]);
+      }
+
+      let drainTimer: ReturnType<typeof setTimeout> | undefined;
+
+      try {
+        await Promise.race([
+          Promise.all(responses),
+          new Promise<never>((_, reject) => {
+            drainTimer = setTimeout(
+              () => reject(new Error("Native reference response drain timed out")),
+              5_000,
+            );
+          }),
+        ]);
+      } finally {
+        if (drainTimer !== undefined) clearTimeout(drainTimer);
+      }
+
+      record.requests.push(...scenario.nativeReferenceEvents.slice(requestStart));
+      requestsCaptured = true;
+      record.overflow = responseOverflow;
+      expect(responseOverflow).toBe(false);
+      expect(
+        record.requests.every((event) =>
+          expectedURLs.has(new URL(event.path, scenario.assetOrigin).href),
+        ),
+      ).toBe(true);
+
+      const required = stage === "script" ? [...expectedURLs.keys()] : [entryURL];
+
+      for (const url of expectedURLs.keys()) {
+        const pathname = new URL(url).pathname;
+        const requests = record.requests.filter((event) => event.path === pathname);
+        const observed = record.responses.filter((response) => response.url === url);
+
+        if (!required.includes(url) && requests.length === 0) {
+          expect(observed).toHaveLength(0);
+
+          continue;
+        }
+
+        expect(requests.length).toBeGreaterThan(0);
+        expect(observed.length).toBeGreaterThan(0);
+        expect(
+          requests.every(
+            (event) =>
+              event.responseStatus === 200 &&
+              event.origin === scenario.appOrigin &&
+              event.allowOrigin === scenario.appOrigin &&
+              event.allowCredentials === "true" &&
+              (event.contentType ?? "").includes("javascript"),
+          ),
+        ).toBe(true);
+        expect(
+          observed.every(
+            (response) =>
+              response.status === 200 &&
+              response.bodySha256 === expectedURLs.get(url) &&
+              requests.every((event) => event.contentType === response.contentType) &&
+              response.allowOrigin === scenario.appOrigin &&
+              response.allowCredentials === "true" &&
+              response.vary === "Origin" &&
+              response.cacheControl === null &&
+              response.contentLength === String(response.bodyLength),
+          ),
+        ).toBe(true);
+      }
+    } catch (error) {
+      failures.push(error);
+    } finally {
+      if (!requestsCaptured)
+        record.requests.push(...scenario.nativeReferenceEvents.slice(requestStart));
+
+      try {
+        await context.close();
+      } catch (cleanupError) {
+        failures.push(cleanupError);
+      }
+    }
+
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1)
+      throw new AggregateError(failures, "Native reference and cleanup failed");
+  }
+
+  const requests = stages.flatMap((stage) => stage.requests);
+  const cookie = requests[0]?.syntheticCookiePresent;
+
+  if (cookie === undefined || !requests.every((event) => event.syntheticCookiePresent === cookie))
+    throw new Error(
+      "Native script and preload credentials are inconsistent; request attribution is unresolved",
+    );
+
+  return cookie;
+}
+
 test("one captured browser graph serves native generated resources at same-origin and external bases", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-generated-assets-browser-"));
 
@@ -888,6 +1172,10 @@ test("one captured browser graph serves native generated resources at same-origi
       let mainDocumentStatus: number | null = null;
       let mainDocumentPolicy: string | null = null;
       let generatedStylesheetURLs: readonly string[] = [];
+      let generatedInitialPreloads: readonly {
+        readonly href: string;
+        readonly credentials: string | null;
+      }[] = [];
       const cleanupErrors: string[] = [];
       const flushErrors: string[] = [];
       const finalizationCauses: unknown[] = [];
@@ -953,6 +1241,36 @@ test("one captured browser graph serves native generated resources at same-origi
 
         if (mode === "positive") {
           await page.locator("#asset-proof").waitFor({ state: "visible", timeout: 20_000 });
+
+          const initialModules = await page
+            .locator('script[type="module"][src]')
+            .evaluateAll((elements) =>
+              elements.map((element) => {
+                const script = element as HTMLScriptElement;
+
+                return { src: script.src, credentials: script.crossOrigin };
+              }),
+            );
+          const initialPreloads = await page
+            .locator('link[rel="modulepreload"]')
+            .evaluateAll((elements) =>
+              elements.map((element) => {
+                const preload = element as HTMLLinkElement;
+
+                return { href: preload.href, credentials: preload.crossOrigin };
+              }),
+            );
+
+          observations = { ...observations, initialModules, initialPreloads };
+          generatedInitialPreloads = initialPreloads;
+          expect(initialModules).toStrictEqual([
+            { src: startupURL, credentials: input.credentials },
+          ]);
+
+          for (const preload of initialPreloads) {
+            expect(preload.href.startsWith(scenario.assetRoot + "assets/")).toBe(true);
+            expect(preload.credentials).toBe(input.credentials);
+          }
 
           const beforeDynamic = await readGeneratedAssetBrowserState(page);
 
@@ -1434,8 +1752,6 @@ test("one captured browser graph serves native generated resources at same-origi
                 (event.contentType ?? "").startsWith("font/") ||
                 (event.contentType ?? "").startsWith("image/")),
           );
-          const expectedModuleCookie =
-            scenario.sameOrigin || input.credentials === "use-credentials";
           const selectedRootRequests = recorder.events.filter(
             (event) => event.kind === "request" && event.origin === scenario.assetOrigin,
           );
@@ -1458,9 +1774,72 @@ test("one captured browser graph serves native generated resources at same-origi
           );
 
           expect(moduleEvents.length).toBeGreaterThan(0);
-          expect(
-            moduleEvents.every((event) => event.syntheticCookiePresent === expectedModuleCookie),
-          ).toBe(true);
+
+          if (scenario.sameOrigin || input.credentials === "use-credentials") {
+            expect(moduleEvents.every((event) => event.syntheticCookiePresent)).toBe(true);
+          } else {
+            const nativeReference: NativeCredentialReferenceStage[] = [];
+
+            observations = { ...observations, nativeCredentialReference: nativeReference };
+
+            const expectedCookie = await readNativeCredentialReference(
+              browser,
+              scenario,
+              nativeReference,
+            );
+            const startupResponses = responseRows.filter((event) => event.url === startupURL);
+            const generatedPreloadResponses = responseRows.filter((event) =>
+              generatedInitialPreloads.some((preload) => preload.href === event.url),
+            );
+            const scriptReference = nativeReference.find((stage) => stage.stage === "script");
+            const preloadReference = nativeReference.find((stage) => stage.stage === "preload");
+            const scriptEntries =
+              scriptReference?.responses.filter(
+                (response) => response.url === scriptReference.entryURL,
+              ) ?? [];
+            const preloadEntries =
+              preloadReference?.responses.filter(
+                (response) => response.url === preloadReference.entryURL,
+              ) ?? [];
+
+            expect(startupResponses.length).toBeGreaterThan(0);
+            expect(generatedPreloadResponses.length).toBeGreaterThan(0);
+            expect(scriptEntries.length).toBeGreaterThan(0);
+            expect(preloadEntries.length).toBeGreaterThan(0);
+            expect(
+              startupResponses.every(
+                (response) =>
+                  response.status === 200 &&
+                  response.contentLength === String(response.bodyLength) &&
+                  scriptEntries.every(
+                    (reference) =>
+                      response.contentType === reference.contentType &&
+                      response.allowOrigin === reference.allowOrigin &&
+                      response.allowCredentials === reference.allowCredentials &&
+                      response.vary === reference.vary &&
+                      response.cacheControl === reference.cacheControl,
+                  ),
+              ),
+            ).toBe(true);
+            expect(
+              generatedPreloadResponses.every(
+                (response) =>
+                  response.status === 200 &&
+                  response.contentLength === String(response.bodyLength) &&
+                  preloadEntries.every(
+                    (reference) =>
+                      response.contentType === reference.contentType &&
+                      response.allowOrigin === reference.allowOrigin &&
+                      response.allowCredentials === reference.allowCredentials &&
+                      response.vary === reference.vary &&
+                      response.cacheControl === reference.cacheControl,
+                  ),
+              ),
+            ).toBe(true);
+            expect(
+              moduleEvents.every((event) => event.syntheticCookiePresent === expectedCookie),
+            ).toBe(true);
+          }
           expect(
             nativeResources.some((event) => (event.contentType ?? "").startsWith("text/css")),
           ).toBe(true);
@@ -1520,11 +1899,6 @@ test("one captured browser graph serves native generated resources at same-origi
                   event.allowCredentials === "true",
               ),
             ).toBe(true);
-            const fontRequests = nativeResources.filter((event) =>
-              (event.contentType ?? "").startsWith("font/"),
-            );
-
-            expect(fontRequests.every((event) => !event.syntheticCookiePresent)).toBe(true);
           }
 
           expect(bodyMismatches).toStrictEqual([]);
@@ -1618,6 +1992,7 @@ test("one captured browser graph serves native generated resources at same-origi
             provider: {
               applicationEvents: scenario.applicationEvents,
               assetEvents: scenario.providerEvents,
+              nativeReferenceEvents: scenario.nativeReferenceEvents,
               overflow: scenario.eventOverflow(),
             },
             browserEvents: recorder?.events ?? [],

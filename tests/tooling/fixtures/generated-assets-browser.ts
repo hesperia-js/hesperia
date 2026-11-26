@@ -60,7 +60,9 @@ export interface GeneratedAssetScenario {
   readonly corsPolicy: GeneratedAssetCorsPolicy;
   readonly applicationEvents: GeneratedAssetApplicationEvent[];
   readonly providerEvents: GeneratedAssetProviderEvent[];
+  readonly nativeReferenceEvents: GeneratedAssetProviderEvent[];
   readonly eventOverflow: () => boolean;
+  nativeReferenceURL(stage: "script" | "preload"): string;
   waitForStylesheetRequest(timeoutMs?: number): Promise<void>;
   releaseStylesheet(): void;
 }
@@ -95,6 +97,8 @@ interface ActiveScenario extends GeneratedAssetScenario {
   readonly stylesheetGate: Deferred;
   readonly applicationLog: BoundedRows<GeneratedAssetApplicationEvent>;
   readonly providerLog: BoundedRows<GeneratedAssetProviderEvent>;
+  readonly nativeReferenceLog: BoundedRows<GeneratedAssetProviderEvent>;
+  readonly nativeReferenceManagedType: string | undefined;
   stylesheetHeld: boolean;
 }
 
@@ -188,6 +192,40 @@ function responseWithHeaders(response: Response, headers: Headers): Response {
   });
 }
 
+function nativeReferenceSource(
+  active: ActiveScenario,
+  pathname: string,
+): { readonly source: string; readonly contentType: string } | undefined {
+  const prefix = `${active.assetRootPath}__hesperia-native-reference/`;
+
+  if (!pathname.startsWith(prefix)) return undefined;
+
+  const parts = pathname.slice(prefix.length).split("/");
+
+  if (parts.length !== 2 || (parts[0] !== "script" && parts[0] !== "preload")) return undefined;
+
+  const contentType =
+    parts[0] === "script" && parts[1] === "entry.mjs"
+      ? "text/javascript; charset=utf-8"
+      : active.nativeReferenceManagedType;
+
+  if (!contentType) throw new Error("The captured JavaScript media type is not unambiguous");
+
+  if (parts[1] === "entry.mjs")
+    return {
+      source:
+        'import "./static.mjs"; globalThis.__hesperiaNativeReferenceEntry = true; await import("./dynamic.mjs"); globalThis.__hesperiaNativeReferenceComplete = true;\n',
+      contentType,
+    };
+
+  if (parts[1] === "static.mjs")
+    return { source: "globalThis.__hesperiaNativeReferenceStatic = true;\n", contentType };
+  if (parts[1] === "dynamic.mjs")
+    return { source: "globalThis.__hesperiaNativeReferenceDynamic = true;\n", contentType };
+
+  return undefined;
+}
+
 async function providerResponse(
   active: ActiveScenario | undefined,
   request: Request,
@@ -195,7 +233,22 @@ async function providerResponse(
   appOrigin: string,
 ): Promise<Response> {
   const url = new URL(request.url);
-  const response = host?.handle(request);
+  const reference =
+    active && host && request.method === "GET"
+      ? nativeReferenceSource(active, url.pathname)
+      : undefined;
+  const referenceBlob =
+    reference === undefined
+      ? undefined
+      : new Blob([reference.source], { type: reference.contentType });
+  const response = referenceBlob
+    ? new Response(referenceBlob, {
+        headers: {
+          "content-type": referenceBlob.type,
+          "content-length": String(referenceBlob.size),
+        },
+      })
+    : host?.handle(request);
 
   if (!active || !response) {
     if (active)
@@ -254,7 +307,7 @@ async function providerResponse(
     append(active.providerLog, event);
     await active.stylesheetGate.promise;
     Object.assign(event, { released: true });
-  } else append(active.providerLog, event);
+  } else append(referenceBlob ? active.nativeReferenceLog : active.providerLog, event);
 
   return responseWithHeaders(response, headers);
 }
@@ -310,6 +363,22 @@ export async function createGeneratedAssetProviderFixture(
         }
 
         if (!scenario) return new Response("No active generated-asset scenario", { status: 503 });
+
+        if (url.pathname === "/__hesperia_native_reference" && request.method === "GET") {
+          const stage = url.searchParams.get("stage");
+
+          if (stage !== "script" && stage !== "preload") return new Response(null, { status: 404 });
+
+          const entry = `${scenario.assetRoot}__hesperia-native-reference/${stage}/entry.mjs`;
+          const element =
+            stage === "script"
+              ? `<script type="module" crossorigin="${scenario.credentials}" src="${entry}"></script>`
+              : `<link rel="modulepreload" crossorigin="${scenario.credentials}" href="${entry}">`;
+
+          return new Response(`<!doctype html><html><head>${element}</head><body></body></html>`, {
+            headers: { "content-type": "text/html; charset=utf-8" },
+          });
+        }
 
         if (url.origin === scenario.assetOrigin && url.pathname.startsWith(scenario.assetRootPath))
           return providerResponse(scenario, request, scenario.localAssetHost, appOrigin);
@@ -491,6 +560,12 @@ export async function createGeneratedAssetProviderFixture(
 
       const applicationEvents: GeneratedAssetApplicationEvent[] = [];
       const providerEvents: GeneratedAssetProviderEvent[] = [];
+      const nativeReferenceEvents: GeneratedAssetProviderEvent[] = [];
+      const managedJavaScriptTypes = new Set(
+        browserInventory.hosting.assets
+          .filter((asset) => asset.contentType.includes("javascript"))
+          .map((asset) => asset.contentType),
+      );
       const applicationLog: BoundedRows<GeneratedAssetApplicationEvent> = {
         rows: applicationEvents,
         overflow: false,
@@ -498,6 +573,11 @@ export async function createGeneratedAssetProviderFixture(
       };
       const providerLog: BoundedRows<GeneratedAssetProviderEvent> = {
         rows: providerEvents,
+        overflow: false,
+        bytes: 0,
+      };
+      const nativeReferenceLog: BoundedRows<GeneratedAssetProviderEvent> = {
+        rows: nativeReferenceEvents,
         overflow: false,
         bytes: 0,
       };
@@ -517,6 +597,7 @@ export async function createGeneratedAssetProviderFixture(
         corsPolicy: input.corsPolicy ?? "allow",
         applicationEvents,
         providerEvents,
+        nativeReferenceEvents,
         applicationHost,
         localAssetHost,
         externalAssetHost,
@@ -528,7 +609,18 @@ export async function createGeneratedAssetProviderFixture(
         stylesheetHeld: false,
         applicationLog,
         providerLog,
-        eventOverflow: () => applicationLog.overflow || providerLog.overflow,
+        nativeReferenceLog,
+        nativeReferenceManagedType:
+          managedJavaScriptTypes.size === 1 ? [...managedJavaScriptTypes][0] : undefined,
+        eventOverflow: () =>
+          applicationLog.overflow || providerLog.overflow || nativeReferenceLog.overflow,
+        nativeReferenceURL(stage) {
+          const url = new URL("/__hesperia_native_reference", applicationOrigin);
+
+          url.searchParams.set("stage", stage);
+
+          return url.href;
+        },
         async waitForStylesheetRequest(timeoutMs = 10_000) {
           let timeout: ReturnType<typeof setTimeout> | undefined;
 

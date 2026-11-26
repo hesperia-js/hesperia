@@ -334,7 +334,7 @@ export const app = new Elysia()
   }
 });
 
-test("configured Elysia effects preserve selector identity and publish only selected browser captures", async () => {
+async function configuredElysiaEffectsFixture() {
   const root = await mkdtemp(join(tmpdir(), "hesperia-configured-elysia-effects-"));
 
   roots.push(root);
@@ -452,8 +452,6 @@ export default function AppShell() {
 
   const runtime = globalThis as typeof globalThis & Record<string, unknown>;
 
-  const previousCapture = runtime[captureKey];
-
   const consume = async (
     build: Awaited<ReturnType<typeof buildInProjectProcess>>,
     label: string,
@@ -474,9 +472,16 @@ export default function AppShell() {
 
     expect(entry).toBeDefined();
 
-    await import(pathToFileURL(entry!).href);
+    const previousCapture = runtime[captureKey];
 
-    return runtime[captureKey];
+    try {
+      await import(pathToFileURL(entry!).href);
+
+      return runtime[captureKey];
+    } finally {
+      if (previousCapture === undefined) delete runtime[captureKey];
+      else runtime[captureKey] = previousCapture;
+    }
   };
 
   const expectBuildError = async (message: string, filename?: string) => {
@@ -501,79 +506,134 @@ export default function AppShell() {
     );
   };
 
-  try {
-    await writeServer([effect("select"), effect("alias"), effect("select", "invalidate")]);
+  return {
+    clientEffectsFilename,
+    clientPrefix,
+    consume,
+    effect,
+    expectBuildError,
+    privateCapture,
+    privateServer,
+    root,
+    selectorHelperFilename,
+    serverFilename,
+    serverPrefix,
+    writeConfiguration,
+    writeServer,
+  };
+}
 
-    await writeConfiguration();
+test("configured Elysia server effects preserve selector identity and publish only selected browser captures", async () => {
+  const {
+    consume,
+    effect,
+    expectBuildError,
+    privateCapture,
+    privateServer,
+    root,
+    selectorHelperFilename,
+    serverPrefix,
+    writeConfiguration,
+    writeServer,
+  } = await configuredElysiaEffectsFixture();
 
-    const serverBuild = await buildInProjectProcess(root, false);
+  await writeServer([effect("select"), effect("alias"), effect("select", "invalidate")]);
 
-    expect(await consume(serverBuild, "server")).toStrictEqual({
-      values: [
-        { on: "revalidate", value: { params: { id: `${serverPrefix}42` } } },
-        { on: "invalidate", value: { params: { id: `${serverPrefix}42` } } },
-      ],
-      sameSelector: true,
-    });
+  await writeConfiguration();
 
-    const files = new Map<string, string>();
+  const serverBuild = await buildInProjectProcess(root, false);
 
-    for (const [filename, blob] of serverBuild.files)
-      if (filename.endsWith(".js") || filename.endsWith(".js.map"))
-        files.set(filename, await blob.text());
+  expect(await consume(serverBuild, "server")).toStrictEqual({
+    values: [
+      { on: "revalidate", value: { params: { id: `${serverPrefix}42` } } },
+      { on: "invalidate", value: { params: { id: `${serverPrefix}42` } } },
+    ],
+    sameSelector: true,
+  });
 
-    const published = [...files.values()].join("\n");
+  const files = new Map<string, string>();
 
-    expect(published).not.toContain(privateCapture);
+  for (const [filename, blob] of serverBuild.files)
+    if (filename.endsWith(".js") || filename.endsWith(".js.map"))
+      files.set(filename, await blob.text());
 
-    expect(published).not.toContain(privateServer);
+  const published = [...files.values()].join("\n");
 
-    expect(published).not.toContain("R16_EFFECT_SERVER_MUST_NOT_EXECUTE");
+  expect(published).not.toContain(privateCapture);
 
-    const mappedSelectors: { source: string; line: number | null }[] = [];
+  expect(published).not.toContain(privateServer);
 
-    for (const [filename, code] of files) {
-      if (!filename.endsWith(".js")) continue;
+  expect(published).not.toContain("R16_EFFECT_SERVER_MUST_NOT_EXECUTE");
 
-      const mapText = files.get(`${filename}.map`);
+  const mappedSelectors: { source: string; line: number | null }[] = [];
 
-      if (!mapText) continue;
+  for (const [filename, code] of files) {
+    if (!filename.endsWith(".js")) continue;
 
-      const map = JSON.parse(mapText) as SourceMapInput & {
-        readonly sources?: readonly string[];
-        readonly sourcesContent?: readonly (string | null)[];
-      };
+    const mapText = files.get(`${filename}.map`);
 
-      for (const [index, source] of (map.sources ?? []).entries())
-        if (source.replaceAll("\\", "/").endsWith("/src/selectors.ts"))
-          expect(map.sourcesContent?.[index] ?? null).toBeNull();
+    if (!mapText) continue;
 
-      for (const match of code.matchAll(/\.params\.id\b/gu)) {
-        const preceding = code.slice(0, match.index);
+    const map = JSON.parse(mapText) as SourceMapInput & {
+      readonly sources?: readonly string[];
+      readonly sourcesContent?: readonly (string | null)[];
+    };
 
-        const lines = preceding.split("\n");
+    for (const [index, source] of (map.sources ?? []).entries())
+      if (source.replaceAll("\\", "/").endsWith("/src/selectors.ts"))
+        expect(map.sourcesContent?.[index] ?? null).toBeNull();
 
-        const position = originalPositionFor(new TraceMap(map), {
-          line: lines.length,
-          column: lines[lines.length - 1]!.length,
-        });
+    for (const match of code.matchAll(/\.params\.id\b/gu)) {
+      const preceding = code.slice(0, match.index);
 
-        if (position.source?.replaceAll("\\", "/").endsWith("/src/selectors.ts"))
-          mappedSelectors.push({ source: position.source, line: position.line });
-      }
+      const lines = preceding.split("\n");
+
+      const position = originalPositionFor(new TraceMap(map), {
+        line: lines.length,
+        column: lines[lines.length - 1]!.length,
+      });
+
+      if (position.source?.replaceAll("\\", "/").endsWith("/src/selectors.ts"))
+        mappedSelectors.push({ source: position.source, line: position.line });
     }
+  }
 
-    expect(mappedSelectors).toContainEqual(expect.objectContaining({ line: 4 }));
+  expect(mappedSelectors).toContainEqual(expect.objectContaining({ line: 4 }));
 
-    await writeServer([effect("select"), effect("sameText")]);
+  await writeServer([effect("select"), effect("sameText")]);
 
-    await expectBuildError("Conflicting server effect selectors");
+  await expectBuildError("Conflicting server effect selectors");
 
-    await writeServer([effect("select")]);
+  await writeServer([effect("select")]);
 
-    await writeFile(
-      clientEffectsFilename,
-      `
+  await writeConfiguration(false, true);
+
+  await expectBuildError(
+    `Selected effect dependency ${selectorHelperFilename} was transformed before checking; publishing the captured source would not preserve the checked selector.`,
+    selectorHelperFilename,
+  );
+}, 90_000);
+
+test("configured Elysia client effects override server selectors and reject invalid browser captures", async () => {
+  const {
+    clientEffectsFilename,
+    clientPrefix,
+    consume,
+    effect,
+    expectBuildError,
+    privateCapture,
+    root,
+    serverFilename,
+    serverPrefix,
+    writeConfiguration,
+    writeServer,
+  } = await configuredElysiaEffectsFixture();
+
+  await writeServer([effect("select")]);
+
+  await writeFile(
+    clientEffectsFilename,
+    `
 import { defineEdenEffect } from "@hesperia/elysia/effects";
 import type { App } from "./server";
 const prefix = ${JSON.stringify(clientPrefix)};
@@ -581,49 +641,49 @@ const select = (input: { readonly params: { readonly id: string } }) =>
   ({ params: { id: prefix + input.params.id } });
 export const effects = [${effect("select")}];
 `,
-    );
+  );
 
-    await writeConfiguration(true);
+  await writeConfiguration(true);
 
-    const clientBuild = await buildInProjectProcess(root, false);
+  const clientBuild = await buildInProjectProcess(root, false);
 
-    expect(clientBuild.diagnostics).toContainEqual(
-      expect.objectContaining({
-        severity: "warning",
-        message: expect.stringContaining("client effect overrides"),
-      }),
-    );
+  expect(clientBuild.diagnostics).toContainEqual(
+    expect.objectContaining({
+      severity: "warning",
+      message: expect.stringContaining("client effect overrides"),
+    }),
+  );
 
-    const warnings: unknown[][] = [];
+  const warnings: unknown[][] = [];
 
-    const originalWarn = console.warn;
+  const originalWarn = console.warn;
 
-    console.warn = (...args: unknown[]) => {
-      warnings.push(args);
-    };
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
 
-    try {
-      expect(await consume(clientBuild, "client")).toStrictEqual({
-        values: [{ on: "revalidate", value: { params: { id: `${clientPrefix}42` } } }],
-        sameSelector: false,
-      });
-    } finally {
-      console.warn = originalWarn;
-    }
+  try {
+    expect(await consume(clientBuild, "client")).toStrictEqual({
+      values: [{ on: "revalidate", value: { params: { id: `${clientPrefix}42` } } }],
+      sameSelector: false,
+    });
+  } finally {
+    console.warn = originalWarn;
+  }
 
-    expect(warnings).toContainEqual([expect.stringContaining("client effect overrides")]);
+  expect(warnings).toContainEqual([expect.stringContaining("client effect overrides")]);
 
-    const clientPublished = (
-      await Promise.all([...clientBuild.files.values()].map((blob) => blob.text()))
-    ).join("\n");
+  const clientPublished = (
+    await Promise.all([...clientBuild.files.values()].map((blob) => blob.text()))
+  ).join("\n");
 
-    expect(clientPublished).not.toContain(serverPrefix);
+  expect(clientPublished).not.toContain(serverPrefix);
 
-    expect(clientPublished).not.toContain(privateCapture);
+  expect(clientPublished).not.toContain(privateCapture);
 
-    await writeFile(
-      join(root, "hesperia.config.ts"),
-      `
+  await writeFile(
+    join(root, "hesperia.config.ts"),
+    `
 import { defineConfig } from "@hesperia/tooling";
 import { elysia } from "@hesperia/elysia";
 export default defineConfig({ plugins: [elysia({
@@ -631,40 +691,27 @@ export default defineConfig({ plugins: [elysia({
   clientEffectsModule: "./src/client-effects.ts",
 })] });
 `,
-    );
+  );
 
-    await expectBuildError(
-      "clientEffectsModule and clientEffectsExport must be configured together.",
-      serverFilename,
-    );
+  await expectBuildError(
+    "clientEffectsModule and clientEffectsExport must be configured together.",
+    serverFilename,
+  );
 
-    await writeConfiguration(true);
+  await writeConfiguration(true);
 
-    await writeFile(
-      clientEffectsFilename,
-      `
+  await writeFile(
+    clientEffectsFilename,
+    `
 import { defineEdenEffect } from "@hesperia/elysia/effects";
 import type { App } from "./server";
 const host = globalThis as unknown as { process: { env: { SECRET: string } } };
 const select = () => ({ params: { id: host.process.env.SECRET } });
 export const effects = [${effect("select")}];
 `,
-    );
+  );
 
-    await expectBuildError("host capability process");
-
-    await writeServer([effect("select")]);
-
-    await writeConfiguration(false, true);
-
-    await expectBuildError(
-      `Selected effect dependency ${selectorHelperFilename} was transformed before checking; publishing the captured source would not preserve the checked selector.`,
-      selectorHelperFilename,
-    );
-  } finally {
-    if (previousCapture === undefined) delete runtime[captureKey];
-    else runtime[captureKey] = previousCapture;
-  }
+  await expectBuildError("host capability process");
 }, 90_000);
 
 test("configured public Elysia analysis rejects reserved route segments and streaming success responses", async () => {
