@@ -30,7 +30,7 @@ import {
   relativeGeneratedRequestPath,
   snapshotHostSelection,
 } from "@hesperia/hosting/internal";
-import { prepareBuild, ProjectError, type BrowserBuild } from "./project.ts";
+import { prepareDevelopmentBuild, ProjectError, type BrowserBuild } from "./project.ts";
 import { readRetainedManagedHistory } from "./targeted-publication.ts";
 import { isMissingFile } from "./utils.ts";
 
@@ -301,7 +301,7 @@ export async function devProject(
       ? prepareRevision(root, signal)
       : existsSync(join(root, "hesperia.config.ts"))
         ? (await import("./project-worker-client.ts")).buildInProjectProcess(root, true, signal)
-        : prepareBuild(root, true);
+        : prepareDevelopmentBuild(root, signal);
 
   let build: BrowserBuild = await prepare();
   const initialCapture = developmentCapture(build);

@@ -5,6 +5,8 @@ export { analyzeModule, emitAnalysis } from "./compilation.ts";
 export type { CompileOptions, CompileResult, ModuleAnalysis } from "./compilation.ts";
 export type { CompilerDiagnostic } from "./ir.ts";
 export { checkProjectModules, openCheckingProject } from "./checking.ts";
+/** @internal Bind cancellation to the Tooling checker options object. */
+export { requestCheckingCancellation } from "./checking.ts";
 export type {
   CheckingSession,
   ProjectCheckingOptions,

@@ -25,6 +25,7 @@ import {
   runtimeKeyRegistry,
   scanRouteFiles,
   requestTypingEvidenceCapture,
+  requestCheckingCancellation,
   registerMappedProjectCompilation,
   type CompilerDiagnostic,
   type VirtualModule,
@@ -529,13 +530,35 @@ export async function prepareBuild(root: string, development = false): Promise<B
   return prepareBuildLocal(root, development);
 }
 
+/** @internal Recheck configuration routing while carrying the active development generation. */
+export async function prepareDevelopmentBuild(
+  root: string,
+  signal?: AbortSignal,
+): Promise<BrowserBuild> {
+  root = resolve(root);
+  signal?.throwIfAborted();
+
+  if (existsSync(join(root, "hesperia.config.ts"))) {
+    const { buildInProjectProcess } = await import("./project-worker-client.ts");
+    signal?.throwIfAborted();
+    return buildInProjectProcess(root, true, signal);
+  }
+
+  return prepareBuildLocal(root, true, signal);
+}
+
 /** Project-root worker entry; plugin closures never cross this boundary. */
-export async function prepareBuildLocal(root: string, development = false): Promise<BrowserBuild> {
+export async function prepareBuildLocal(
+  root: string,
+  development = false,
+  signal?: AbortSignal,
+): Promise<BrowserBuild> {
   const attemptWatches = createPluginWatchAccumulator();
 
   try {
-    return await prepareBuildLocalAttempt(root, development, attemptWatches);
+    return await prepareBuildLocalAttempt(root, development, attemptWatches, signal);
   } catch (error) {
+    if (signal?.aborted && error === signal.reason) throw error;
     if (attemptWatches.watches.length === 0) throw error;
 
     throw projectErrorWithWatches(error, attemptWatches.watches);
@@ -546,6 +569,7 @@ async function prepareBuildLocalAttempt(
   root: string,
   development: boolean,
   attemptWatches: ReturnType<typeof createPluginWatchAccumulator>,
+  signal?: AbortSignal,
 ): Promise<BrowserBuild> {
   root = resolve(root);
 
@@ -553,6 +577,7 @@ async function prepareBuildLocalAttempt(
     await withBuildPublication(root, cleanUnpublishedCaptures);
 
   const configuration = await readConfiguration(root);
+  signal?.throwIfAborted();
   let productionTarget:
     | Exclude<ResolvedProductionTarget, { readonly kind: "unavailable" }>
     | undefined;
@@ -572,6 +597,7 @@ async function prepareBuildLocalAttempt(
   }
 
   const authored = await readProject(root);
+  signal?.throwIfAborted();
   const projectRuntimeModule = `hesperia:compiler-runtime:project:${new Bun.CryptoHasher("sha256")
     .update(root)
     .digest("hex")
@@ -582,7 +608,9 @@ async function prepareBuildLocalAttempt(
     configuration,
     development,
     projectRuntimeModule,
+    signal,
   );
+  signal?.throwIfAborted();
   const sources = configured?.sources ?? authored;
   const resolution =
     configured?.resolution ??
@@ -2083,6 +2111,7 @@ async function configuredCompilation(
   configuration: ProjectConfiguration,
   development = false,
   runtimeModule?: string,
+  signal?: AbortSignal,
 ): Promise<ConfiguredCompilation> {
   const pipeline = new PluginPipeline(configuration.plugins, {
     allowUnsafeHTML: configuration.allowUnsafeHTML,
@@ -2144,19 +2173,24 @@ async function configuredCompilation(
     configuration.resolutionOverrides.browser,
     publicFilename ? new Map([["hesperia/config/public", publicFilename]]) : undefined,
   );
+  signal?.throwIfAborted();
   const originalChecking = await checkProjectModules(
     [...prepared.sources].map(([filename, source]) => ({ filename, source: source.current })),
-    {
-      root,
-      ...configuration,
-      documentShell: true,
-      browserTarget: false,
-      resolution,
-      resolutionOverrides: configuration.resolutionOverrides,
-      additionalFiles,
-      checkingRoots,
-    },
+    requestCheckingCancellation(
+      {
+        root,
+        ...configuration,
+        documentShell: true,
+        browserTarget: false,
+        resolution,
+        resolutionOverrides: configuration.resolutionOverrides,
+        additionalFiles,
+        checkingRoots,
+      },
+      signal,
+    ),
   );
+  signal?.throwIfAborted();
   const originalTypeDiagnostics = originalChecking.modules.flatMap((module) =>
     module.diagnostics
       .filter((item) => /^TS\d+$/u.test(item.code))
@@ -2192,12 +2226,15 @@ async function configuredCompilation(
     checkingRoots,
   };
   if (development) requestTypingEvidenceCapture(checkingOptions);
+  requestCheckingCancellation(checkingOptions, signal);
+  signal?.throwIfAborted();
   const session = await openCheckingProject(
     [...sources].map(([filename, source]) => ({ filename, source })),
     checkingOptions,
   );
 
   try {
+    signal?.throwIfAborted();
     const checkingSources = projectCheckingSources(transformed, projectSourceSnapshots);
     const projectBodies = await pipeline.analyzeProject(
       () =>
@@ -2212,6 +2249,7 @@ async function configuredCompilation(
       declarations,
       root,
     );
+    signal?.throwIfAborted();
 
     for (const body of projectBodies) {
       try {
