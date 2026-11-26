@@ -35,6 +35,7 @@ interface MarkerImports {
   readonly unsafeFunctions: ReadonlySet<string>;
   readonly clientNamespaces: ReadonlySet<string>;
   readonly documentShell: boolean;
+  readonly terminalCli?: boolean;
 }
 
 function node(value: unknown): AstNode | null {
@@ -70,6 +71,8 @@ function exportName(value: unknown): string | null {
 export interface CanonicalizeOptions {
   /** Permit the explicitly validated root document shell shape. */
   readonly documentShell?: boolean;
+  /** @internal Select the fixed creator terminal schema before canonical lowering. */
+  readonly terminalCli?: boolean;
 }
 
 /** Convert an Oxc AST into the tool-independent canonical render module. */
@@ -79,7 +82,11 @@ export function canonicalize(
   options: CanonicalizeOptions = {},
 ): CanonicalModule {
   const diagnostics: CompilerDiagnostic[] = [];
-  const markers = { ...markerImports(program), documentShell: options.documentShell === true };
+  const markers = {
+    ...markerImports(program),
+    documentShell: options.documentShell === true,
+    terminalCli: options.terminalCli === true,
+  };
   const body = list(program.body)
     .map((item) => statement(node(item), diagnostics, markers))
     .filter((item): item is CanonicalStatement => item !== null);
@@ -89,7 +96,9 @@ export function canonicalize(
   const resolved = resolveCanonicalModule({ version: 1, filename, body: marked, diagnostics });
   const validated = markers.documentShell ? validateDocumentShell(resolved) : resolved;
   const assigned = assignOccurrences(validated);
-  const nativeEvents = analyzeNativeEventOptions(assigned);
+  const nativeEvents = markers.terminalCli
+    ? { diagnostics: [] }
+    : analyzeNativeEventOptions(assigned);
   return {
     ...assigned,
     diagnostics: [...assigned.diagnostics, ...nativeEvents.diagnostics],
@@ -2878,13 +2887,21 @@ function jsxElement(
         kind: "dynamic",
         name: attrName,
         expression,
-        mode: attrName === "bind" ? "binding" : propertyName(attrName) ? "property" : "attribute",
+        mode:
+          attrName === "bind"
+            ? "binding"
+            : markers.terminalCli || propertyName(attrName)
+              ? "property"
+              : "attribute",
         span: span(attr),
       });
     }
   }
 
-  const namespaceContext = namespaceForTag(parentNamespace, name);
+  const namespaceContext = namespaceForTag(
+    markers.terminalCli ? { namespace: "terminal" } : parentNamespace,
+    name,
+  );
   const encodingAttribute = attributes.find(
     (attribute) => attribute.kind === "static" && attribute.name.toLowerCase() === "encoding",
   );
@@ -2935,9 +2952,9 @@ function jsxElement(
     };
   }
 
-  validateParserShape(name, input, diagnostics, markers.documentShell);
+  if (!markers.terminalCli) validateParserShape(name, input, diagnostics, markers.documentShell);
 
-  if (["iframe", "embed", "object"].includes(name.toLowerCase()))
+  if (!markers.terminalCli && ["iframe", "embed", "object"].includes(name.toLowerCase()))
     diagnostic(
       diagnostics,
       "HES-EMBED",
@@ -2945,7 +2962,7 @@ function jsxElement(
       input,
     );
 
-  return {
+  const element: CanonicalElement = {
     kind: "element",
     occurrence: "",
     tag: name,
@@ -2954,6 +2971,8 @@ function jsxElement(
     children,
     span: span(input),
   };
+
+  return element;
 }
 
 function renderedPropDiagnostic(

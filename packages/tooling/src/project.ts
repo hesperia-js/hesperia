@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import remapping, { type SourceMapInput } from "@jridgewell/remapping";
 import { parseSync } from "oxc-parser";
 import type { NodeHandle } from "typescript/unstable/async";
+import { normalizeChannelProjectDefaults } from "hesperia/runtime";
 import {
   generatedPositionFor,
   originalPositionFor,
@@ -307,6 +308,7 @@ export async function checkSources(
   root = process.cwd(),
   configuration: ProjectConfiguration = {
     allowUnsafeHTML: false,
+    channelDefaults: normalizeChannelProjectDefaults(),
     mountURL: "/",
     resolutionOverrides: { browser: {} },
   },
@@ -414,6 +416,7 @@ export async function preparePluginEditorWire(
     configuration: {
       allowUnsafeHTML: configuration.allowUnsafeHTML,
       allowUnsafeEmbed: configuration.allowUnsafeEmbed ?? false,
+      channelDefaults: configuration.channelDefaults,
       mountURL: configuration.mountURL,
       resolutionOverrides: configuration.resolutionOverrides,
     },
@@ -693,7 +696,11 @@ async function prepareBuildLocalAttempt(
   const routeTableEntrypoint = join(root, ".hesperia", "route-table.ts");
   const generatedRoot = join(root, ".hesperia", "generated");
   const startupEmission = emitGeneratedModule(
-    browserStartupSource(sources.has(configurationEntrypoint), projectRuntimeModule),
+    browserStartupSource(
+      sources.has(configurationEntrypoint),
+      configuration.channelDefaults,
+      projectRuntimeModule,
+    ),
     join(generatedRoot, "startup.js"),
     projectRuntimeModule,
   );
@@ -1344,6 +1351,7 @@ async function prepareBuildLocalAttempt(
       ? {
           allowUnsafeHTML: configuration.allowUnsafeHTML,
           allowUnsafeEmbed: configuration.allowUnsafeEmbed ?? false,
+          channelDefaults: configuration.channelDefaults,
           mountURL: configuration.mountURL,
           ...(configuration.target ? { target: configuration.target } : {}),
           resolutionOverrides: configuration.resolutionOverrides,
@@ -1605,6 +1613,7 @@ function styleSemanticKey(
     configuration: {
       allowUnsafeHTML: configuration.allowUnsafeHTML,
       allowUnsafeEmbed: configuration.allowUnsafeEmbed,
+      channelDefaults: configuration.channelDefaults,
       mountURL: configuration.mountURL,
       resolutionOverrides: configuration.resolutionOverrides,
       plugins: configuration.plugins?.map((plugin) => plugin.name),

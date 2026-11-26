@@ -323,6 +323,7 @@ test.each(["static", "dynamic"] as const)(
 
       const diagnostics = await checkSources(files, root, {
         allowUnsafeHTML: false,
+        channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
         mountURL: "/",
         resolutionOverrides: { browser: {} },
         plugins: [stylex()],
@@ -648,6 +649,7 @@ test.each(["mapped", "unmapped"] as const)(
 
     const diagnostics = await checkSources(new Map([[filename, source]]), root, {
       allowUnsafeHTML: false,
+      channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
       mountURL: "/",
       resolutionOverrides: { browser: {} },
       plugins: [
@@ -720,6 +722,7 @@ test("StyleX attrs work with static and reactive native class and style strings"
     root,
     {
       allowUnsafeHTML: false,
+      channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
       mountURL: "/",
       allowUnsafeEmbed: false,
       resolutionOverrides: { browser: {} },
@@ -743,6 +746,7 @@ test("StyleX attrs work with static and reactive native class and style strings"
     root,
     {
       allowUnsafeHTML: false,
+      channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
       mountURL: "/",
       allowUnsafeEmbed: false,
       resolutionOverrides: { browser: {} },
@@ -782,6 +786,7 @@ export function Card() {
 
   const diagnostics = await checkSources(new Map([[filename, source]]), root, {
     allowUnsafeHTML: false,
+    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/",
     allowUnsafeEmbed: false,
     resolutionOverrides: { browser: {} },

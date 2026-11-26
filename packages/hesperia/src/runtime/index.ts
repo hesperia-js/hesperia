@@ -30,8 +30,12 @@ export { createClient } from "../client.ts";
 export { bindImported, markImportedApi } from "../data/api.ts";
 export { registerModuleImport } from "../data/protocol.ts";
 export { bootstrapApplication } from "./application.ts";
-export { registerProjectPolicy } from "./project-policy.ts";
-export type { CompiledProjectPolicy } from "./project-policy.ts";
+export {
+  normalizeChannelProjectDefaults,
+  registerProjectPolicy,
+  snapshotChannelProjectDefaults,
+} from "./project-policy.ts";
+export type { ChannelProjectDefaults, CompiledProjectPolicy } from "./project-policy.ts";
 export { registerDeparture } from "../routing/navigation.ts";
 export { Owner, RenderFault } from "./owner.ts";
 export type { OwnerState, RuntimeContext } from "./owner.ts";

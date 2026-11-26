@@ -19,6 +19,7 @@ test("unsafe HTML and embedded documents require explicit boolean project permis
   expect(await readConfiguration(root)).toStrictEqual({
     allowUnsafeHTML: false,
     allowUnsafeEmbed: false,
+    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/",
     resolutionOverrides: { browser: {} },
   });
@@ -31,6 +32,7 @@ test("unsafe HTML and embedded documents require explicit boolean project permis
   expect(await readConfiguration(root)).toStrictEqual({
     allowUnsafeHTML: true,
     allowUnsafeEmbed: true,
+    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/",
     resolutionOverrides: { browser: {} },
   });
@@ -40,6 +42,7 @@ test("unsafe HTML and embedded documents require explicit boolean project permis
   expect(await readConfiguration(root)).toStrictEqual({
     allowUnsafeHTML: false,
     allowUnsafeEmbed: false,
+    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/",
     resolutionOverrides: { browser: {} },
   });
@@ -65,6 +68,23 @@ test("unsafe HTML and embedded documents require explicit boolean project permis
   await expect(readConfiguration(root)).rejects.toThrow();
 });
 
+test("resolves the complete channel defaults from project configuration", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-config-"));
+  roots.push(root);
+  const file = join(root, "hesperia.config.json");
+
+  await writeFile(file, JSON.stringify({ channels: { sendTimeoutMs: 1250 } }));
+  expect((await readConfiguration(root)).channelDefaults).toStrictEqual({
+    sendTimeoutMs: 1250,
+    maxPendingSends: 64,
+  });
+
+  await writeFile(file, JSON.stringify({ channels: { maxPendingSends: 0 } }));
+  await expect(readConfiguration(root)).rejects.toThrow(
+    "channels.maxPendingSends must be a positive safe integer",
+  );
+});
+
 test("reads exact browser resolution overrides, including relative module names", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-config-"));
 
@@ -86,6 +106,7 @@ test("reads exact browser resolution overrides, including relative module names"
   expect(await readConfiguration(root)).toStrictEqual({
     allowUnsafeHTML: false,
     allowUnsafeEmbed: false,
+    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/",
     resolutionOverrides: {
       browser: {
@@ -116,6 +137,7 @@ test("mountURL defaults and canonicalizes from JSON and TypeScript configuration
   expect(await readConfiguration(root)).toStrictEqual({
     allowUnsafeHTML: false,
     allowUnsafeEmbed: false,
+    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/dashboard",
     resolutionOverrides: { browser: {} },
   });
@@ -131,6 +153,7 @@ test("mountURL defaults and canonicalizes from JSON and TypeScript configuration
   expect(JSON.parse(defaultConfig.stdout)).toStrictEqual({
     allowUnsafeHTML: false,
     allowUnsafeEmbed: false,
+    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/",
     resolutionOverrides: { browser: {} },
   });
@@ -144,6 +167,7 @@ test("mountURL defaults and canonicalizes from JSON and TypeScript configuration
   expect(JSON.parse(unicodeConfig.stdout)).toStrictEqual({
     allowUnsafeHTML: false,
     allowUnsafeEmbed: false,
+    channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
     mountURL: "/%E6%9D%B1%E4%BA%AC/caf%C3%A9",
     resolutionOverrides: { browser: {} },
   });
@@ -194,12 +218,14 @@ console.log(JSON.stringify({ initial, unchanged, afterChange }));
     initial: {
       allowUnsafeHTML: true,
       allowUnsafeEmbed: true,
+      channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
       mountURL: "/first",
       resolutionOverrides: { browser: {} },
     },
     unchanged: {
       allowUnsafeHTML: true,
       allowUnsafeEmbed: true,
+      channelDefaults: { sendTimeoutMs: 10_000, maxPendingSends: 64 },
       mountURL: "/first",
       resolutionOverrides: { browser: {} },
     },
