@@ -455,6 +455,12 @@ test("packed hosting serves legacy mounts and renders a browser/static capture i
 
     await run(application, cli, "build");
 
+    await copyFile(
+      join(hostingFixtures, "read-targeted-build.ts"),
+      join(application, "read-targeted-build.ts"),
+    );
+    await run(application, "read-targeted-build.ts");
+
     preview = Bun.spawn(previewCommand, previewOptions);
 
     const targetedURL = await readPreviewURL(preview);
