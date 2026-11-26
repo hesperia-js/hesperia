@@ -485,6 +485,11 @@ interface GeneratedAssetBrowserAudit {
 interface GeneratedAssetDiagnosticRecorder {
   readonly events: GeneratedAssetBrowserEvent[];
   readonly overflow: () => boolean;
+  originalDocument(): Promise<{
+    readonly url: string;
+    readonly status: number;
+    readonly body: Uint8Array;
+  }>;
   flush(): Promise<void>;
 }
 
@@ -501,6 +506,10 @@ async function recordGeneratedAssetBrowserEvents(
   const publicPins = new Map<string, { readonly sha256: string; readonly contentType: string }>();
   let bytes = 0;
   let didOverflow = false;
+  let originalDocumentTask: Promise<void> | undefined;
+  let originalDocument:
+    | { readonly url: string; readonly status: number; readonly body: Uint8Array }
+    | undefined;
 
   for (const asset of capture.inventory.hosting.assets)
     assetPins.set(new URL(asset.path.slice(1), scenario.assetRoot).href, {
@@ -561,6 +570,11 @@ async function recordGeneratedAssetBrowserEvents(
       return;
     }
 
+    const isOriginalDocument =
+      originalDocumentTask === undefined &&
+      response.url() === new URL("/", scenario.appOrigin).href &&
+      response.request().isNavigationRequest() &&
+      response.request().frame() === page.mainFrame();
     responseTasks.push(
       (async () => {
         try {
@@ -588,6 +602,8 @@ async function recordGeneratedAssetBrowserEvents(
 
               bodyLength = body.byteLength;
               bodySha256 = body.byteLength <= responseBodyLimit ? sha256(body) : null;
+              if (isOriginalDocument && body.byteLength <= responseBodyLimit)
+                originalDocument = { url: url.href, status: response.status(), body };
               if (body.byteLength > responseBodyLimit)
                 bodyReadError = `Response exceeds ${responseBodyLimit} byte diagnostic body limit`;
             } catch (error) {
@@ -624,6 +640,8 @@ async function recordGeneratedAssetBrowserEvents(
         }
       })(),
     );
+
+    if (isOriginalDocument) originalDocumentTask = responseTasks[responseTasks.length - 1];
   });
 
   page.on("requestfailed", (request) => {
@@ -652,6 +670,31 @@ async function recordGeneratedAssetBrowserEvents(
   return {
     events,
     overflow: () => didOverflow,
+    async originalDocument() {
+      if (!originalDocumentTask)
+        throw new Error("Original application document response was not observed");
+
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+
+      try {
+        await Promise.race([
+          originalDocumentTask,
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error("Original application document observation timed out")),
+              5_000,
+            );
+          }),
+        ]);
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout);
+      }
+
+      if (!originalDocument)
+        throw new Error("Original application document response body was unavailable");
+
+      return originalDocument;
+    },
     async flush() {
       await Promise.all(responseTasks);
     },
@@ -1242,15 +1285,32 @@ test("one captured browser graph serves native generated resources at same-origi
         if (mode === "positive") {
           await page.locator("#asset-proof").waitFor({ state: "visible", timeout: 20_000 });
 
-          const initialModules = await page
-            .locator('script[type="module"][src]')
-            .evaluateAll((elements) =>
-              elements.map((element) => {
-                const script = element as HTMLScriptElement;
+          const originalDocument = await recorder.originalDocument();
+          const originalHTML = new TextDecoder("utf-8", { fatal: true }).decode(
+            originalDocument.body,
+          );
+          const originalElements = await page.evaluate(
+            ({ html, documentURL }) => {
+              const document = new DOMParser().parseFromString(html, "text/html");
 
-                return { src: script.src, credentials: script.crossOrigin };
-              }),
-            );
+              return {
+                modules: [
+                  ...document.querySelectorAll<HTMLScriptElement>('script[type="module"][src]'),
+                ].map((script) => ({
+                  src: new URL(script.getAttribute("src")!, documentURL).href,
+                  credentials: script.getAttribute("crossorigin"),
+                })),
+                preloads: [
+                  ...document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"][href]'),
+                ].map((preload) => ({
+                  href: new URL(preload.getAttribute("href")!, documentURL).href,
+                  credentials: preload.getAttribute("crossorigin"),
+                })),
+              };
+            },
+            { html: originalHTML, documentURL: originalDocument.url },
+          );
+          const initialModules = originalElements.modules;
           const initialPreloads = await page
             .locator('link[rel="modulepreload"]')
             .evaluateAll((elements) =>
@@ -1261,13 +1321,26 @@ test("one captured browser graph serves native generated resources at same-origi
               }),
             );
 
-          observations = { ...observations, initialModules, initialPreloads };
+          observations = {
+            ...observations,
+            initialModules,
+            initialPreloads,
+            originalDocument: {
+              url: originalDocument.url,
+              status: originalDocument.status,
+              byteLength: originalDocument.body.byteLength,
+              sha256: sha256(originalDocument.body),
+              preloads: originalElements.preloads,
+            },
+          };
           generatedInitialPreloads = initialPreloads;
+          expect(originalDocument.url).toBe(applicationUrl);
+          expect(originalDocument.status).toBe(200);
           expect(initialModules).toStrictEqual([
             { src: startupURL, credentials: input.credentials },
           ]);
 
-          for (const preload of initialPreloads) {
+          for (const preload of [...originalElements.preloads, ...initialPreloads]) {
             expect(preload.href.startsWith(scenario.assetRoot + "assets/")).toBe(true);
             expect(preload.credentials).toBe(input.credentials);
           }
