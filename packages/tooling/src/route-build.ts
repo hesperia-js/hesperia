@@ -51,9 +51,27 @@ export interface PublishedRouteGuard {
   readonly map: PublishedSourceMap;
 }
 
-/** Route guard build output; diagnostics preserve the route/helper owning each span. */
+/** Authored render constraints retained separately from executable browser guards. */
+export interface RouteRenderPolicyRecord {
+  /** Scanner-selected route declaration that supplied these facts. */
+  readonly routeFilename: string;
+  /** Partial authored facts and their source provenance. */
+  readonly policy: NonNullable<ReturnType<typeof analyzeRouteModule>["renderPolicy"]>;
+}
+
+/** Request-only member presence retained for target admission. */
+export interface RouteRequestMembersRecord {
+  /** Scanner-selected route declaration. */
+  readonly routeFilename: string;
+  /** Complete request-member presence from its proved route shape. */
+  readonly requestMembers: NonNullable<ReturnType<typeof analyzeRouteModule>["requestMembers"]>;
+}
+
+/** Route analysis and guard output, with source-owned diagnostics. */
 export interface RouteBuildResult {
   readonly guards: readonly PublishedRouteGuard[];
+  readonly renderPolicies: readonly RouteRenderPolicyRecord[];
+  readonly requestMembers: readonly RouteRequestMembersRecord[];
   readonly diagnostics: readonly RouteDiagnostic[];
 }
 
@@ -110,9 +128,11 @@ export async function buildRouteGuards(
   const sourceByKey = new Map(input.modules.map((item) => [sourceKey(item.filename), item]));
   const diagnostics: RouteDiagnostic[] = [...runtimeDiagnostics];
   const guards: PublishedRouteGuard[] = [];
+  const renderPolicies: RouteRenderPolicyRecord[] = [];
+  const requestMembers: RouteRequestMembersRecord[] = [];
 
   if (runtimeDiagnostics.some((item) => item.severity === "error"))
-    return { guards: [], diagnostics };
+    return { guards: [], renderPolicies: [], requestMembers: [], diagnostics };
 
   for (const filename of input.routeFiles) {
     const source = sourceByKey.get(sourceKey(filename));
@@ -137,8 +157,18 @@ export async function buildRouteGuards(
 
     diagnostics.push(...analysis.diagnostics);
 
-    if (!analysis.artifact || analysis.diagnostics.some((item) => item.severity === "error"))
-      continue;
+    if (analysis.diagnostics.some((item) => item.severity === "error")) continue;
+
+    if (analysis.renderPolicy)
+      renderPolicies.push({ routeFilename: source.filename, policy: analysis.renderPolicy });
+
+    if (analysis.requestMembers)
+      requestMembers.push({
+        routeFilename: source.filename,
+        requestMembers: analysis.requestMembers,
+      });
+
+    if (!analysis.artifact) continue;
 
     try {
       guards.push(await bundleGuard(analysis.artifact, source.filename, buildOptions));
@@ -158,8 +188,12 @@ export async function buildRouteGuards(
     }
   }
 
+  const failed = diagnostics.some((item) => item.severity === "error");
+
   return {
-    guards: diagnostics.some((item) => item.severity === "error") ? [] : guards,
+    guards: failed ? [] : guards,
+    renderPolicies: failed ? [] : renderPolicies,
+    requestMembers: failed ? [] : requestMembers,
     diagnostics,
   };
 }

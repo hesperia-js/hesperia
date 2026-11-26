@@ -70,6 +70,53 @@ export interface RouteGuardArtifact {
   readonly modules: readonly RouteGuardModule[];
 }
 
+/** A route-layer render constraint value; graph assembly resolves it against inherited facts. */
+export type RouteRenderConstraintValue = "required" | "optional" | "forbidden";
+
+/** One of the five author-declared route render constraint fields. */
+export type RouteRenderField = "clientRender" | "ssr" | "stream" | "ssg" | "hydration";
+
+/** One literal route constraint with resolver-compatible identity and exact authored provenance. */
+export interface SourcedRouteRenderConstraint {
+  /** The literal author-declared constraint. */
+  readonly value: RouteRenderConstraintValue;
+  /** Opaque `${filename}:${span.start}-${span.end}` identity passed to the route-plan resolver. */
+  readonly source: string;
+  /** Authored module containing the literal. */
+  readonly filename: string;
+  /** Exact authored range of the literal value. */
+  readonly span: SourceSpan;
+}
+
+/** Partial facts from one route layer; omitted fields stay absent for graph resolution. */
+export interface SourcedRouteRenderPolicy {
+  /** Browser-rendering constraint authored at this route layer, if present. */
+  readonly clientRender?: SourcedRouteRenderConstraint;
+  /** Request-time rendering constraint authored at this route layer, if present. */
+  readonly ssr?: SourcedRouteRenderConstraint;
+  /** Progressive-delivery constraint authored at this route layer, if present. */
+  readonly stream?: SourcedRouteRenderConstraint;
+  /** Static-rendering constraint authored at this route layer, if present. */
+  readonly ssg?: SourcedRouteRenderConstraint;
+  /** Browser-adoption constraint authored at this route layer, if present. */
+  readonly hydration?: SourcedRouteRenderConstraint;
+}
+
+/** Request-only members present in a statically inspected route declaration. */
+export interface RouteRequestMembers {
+  /** Projection format version. */
+  readonly version: 1;
+  /** Each request-only member, including duplicate declarations. */
+  readonly declarations: readonly {
+    /** Authored member name. */
+    readonly field: "load" | "headers";
+    /** Module containing the member. */
+    readonly filename: string;
+    /** Authored range of the member declaration. */
+    readonly span: SourceSpan;
+  }[];
+}
+
 /** The literal tag values proved from one route declaration. */
 export type RouteTagProjectionV1 =
   | { readonly version: 1; readonly kind: "none" }
@@ -86,6 +133,10 @@ export interface RouteAnalysisResult {
   readonly debug: CanonicalDebugSidecar;
   /** Build errors and refusal diagnostics. A route without a guard has no artifact and no error. */
   readonly diagnostics: readonly RouteDiagnostic[];
+  /** Authored render constraints, when present and statically proved. */
+  readonly renderPolicy?: SourcedRouteRenderPolicy;
+  /** Complete request-member presence facts for a proved route shape. */
+  readonly requestMembers?: RouteRequestMembers;
   /** Literal tag projection; absent when the route shape itself was not proved. */
   readonly tagProjection?: RouteTagProjectionV1;
   /** Present only when route shape and the complete guard closure pass fail-closed analysis. */
@@ -278,12 +329,39 @@ export function analyzeRouteModule(
   }
 
   const tagProjection = extractRouteTagProjection(root, configuration);
+  const occurrences = { load: 0, headers: 0 };
+  const declarations: RouteRequestMembers["declarations"][number][] = [];
+
+  for (const property of configuration.properties) {
+    if (property.kind !== "property" || (property.key !== "load" && property.key !== "headers"))
+      continue;
+
+    const field = property.key;
+    const occurrence = occurrences[field]++;
+
+    declarations.push({
+      field,
+      filename: root.filename,
+      span:
+        authoredRouteSpan(root, "request-member", field, occurrence) ??
+        authoredSpan(root, property.span),
+    });
+  }
+
+  const requestMembers: RouteRequestMembers = { version: 1, declarations };
+  const renderExtraction = extractRouteRenderPolicy(root, configuration);
+  diagnostics.push(...renderExtraction.diagnostics);
+
+  if (renderExtraction.diagnostics.length > 0)
+    return resultWithDiagnostics(root, diagnostics, tagProjection, undefined, requestMembers);
+
+  const renderPolicy = renderExtraction.policy;
   const guardProperty = configuration.properties.find(
     (property) => property.kind === "property" && !property.computed && property.key === "guard",
   );
 
   if (!guardProperty || guardProperty.kind !== "property")
-    return resultWithDiagnostics(root, diagnostics, tagProjection);
+    return resultWithDiagnostics(root, diagnostics, tagProjection, renderPolicy, requestMembers);
 
   if (!isIdentifier(guardProperty.value)) {
     diagnostics.push(
@@ -295,7 +373,7 @@ export function analyzeRouteModule(
       ),
     );
 
-    return resultWithDiagnostics(root, diagnostics, tagProjection);
+    return resultWithDiagnostics(root, diagnostics, tagProjection, renderPolicy, requestMembers);
   }
 
   const guardId = guardProperty.value.referenceId;
@@ -310,7 +388,7 @@ export function analyzeRouteModule(
       ),
     );
 
-    return resultWithDiagnostics(root, diagnostics, tagProjection);
+    return resultWithDiagnostics(root, diagnostics, tagProjection, renderPolicy, requestMembers);
   }
 
   const analysis = new ClosureAnalysis(sources, diagnostics);
@@ -319,13 +397,186 @@ export function analyzeRouteModule(
   diagnostics.push(...analysis.relevantDiagnostics());
 
   if (!entry || diagnostics.some((item) => item.severity === "error"))
-    return resultWithDiagnostics(root, diagnostics, tagProjection);
+    return resultWithDiagnostics(root, diagnostics, tagProjection, renderPolicy, requestMembers);
 
   const artifact = analysis.artifact(entry);
   return {
-    ...resultWithDiagnostics(root, diagnostics, tagProjection),
+    ...resultWithDiagnostics(root, diagnostics, tagProjection, renderPolicy, requestMembers),
     artifact,
   };
+}
+
+function extractRouteRenderPolicy(
+  root: ModuleInfo,
+  configuration: Extract<CanonicalExpression, { kind: "object" }>,
+): {
+  readonly policy?: SourcedRouteRenderPolicy;
+  readonly diagnostics: readonly RouteDiagnostic[];
+} {
+  const diagnostics: RouteDiagnostic[] = [];
+  const renderProperties = configuration.properties.filter(
+    (property): property is CanonicalKeyedProperty =>
+      property.kind === "property" &&
+      !property.computed &&
+      typeof property.key === "string" &&
+      property.key === "render",
+  );
+
+  if (renderProperties.length === 0) return { diagnostics };
+
+  if (renderProperties.length > 1) {
+    const duplicate = renderProperties[1]!;
+    diagnostics.push(
+      routeDiagnostic(
+        "HES-ROUTE-RENDER",
+        "The route configuration may declare render only once.",
+        authoredSpan(root, duplicate.span),
+        root.filename,
+      ),
+    );
+
+    return { diagnostics };
+  }
+
+  const renderProperty = renderProperties[0]!;
+  const renderValueSpan =
+    authoredRouteSpan(root, "render") ?? authoredSpan(root, renderProperty.value.span);
+
+  if (renderProperty.propertyKind || renderProperty.method) {
+    diagnostics.push(
+      routeDiagnostic(
+        "HES-ROUTE-RENDER",
+        "The route render policy must be an ordinary object property.",
+        authoredSpan(root, renderProperty.span),
+        root.filename,
+      ),
+    );
+
+    return { diagnostics };
+  }
+
+  if (renderProperty.value.kind !== "object") {
+    diagnostics.push(
+      routeDiagnostic(
+        "HES-ROUTE-RENDER",
+        "The route render policy must be a static object literal.",
+        renderValueSpan,
+        root.filename,
+      ),
+    );
+
+    return { diagnostics };
+  }
+
+  const fields: Partial<Record<RouteRenderField, SourcedRouteRenderConstraint>> = {};
+  const seen = new Set<string>();
+  const allowedFields = new Set<RouteRenderField>([
+    "clientRender",
+    "ssr",
+    "stream",
+    "ssg",
+    "hydration",
+  ]);
+
+  for (const property of renderProperty.value.properties) {
+    if (property.kind === "spread") {
+      diagnostics.push(
+        routeDiagnostic(
+          "HES-ROUTE-RENDER",
+          "Route render policies cannot contain spreads.",
+          authoredSpan(root, property.span),
+          root.filename,
+        ),
+      );
+
+      continue;
+    }
+
+    if (property.computed || typeof property.key !== "string") {
+      diagnostics.push(
+        routeDiagnostic(
+          "HES-ROUTE-RENDER",
+          "Route render policies require statically named fields.",
+          authoredSpan(root, property.span),
+          root.filename,
+        ),
+      );
+
+      continue;
+    }
+
+    if (seen.has(property.key)) {
+      diagnostics.push(
+        routeDiagnostic(
+          "HES-ROUTE-RENDER",
+          `Route render field ${property.key} may be declared only once.`,
+          authoredSpan(root, property.span),
+          root.filename,
+        ),
+      );
+
+      continue;
+    }
+
+    seen.add(property.key);
+
+    if (!allowedFields.has(property.key as RouteRenderField)) {
+      diagnostics.push(
+        routeDiagnostic(
+          "HES-ROUTE-RENDER",
+          `Unknown route render field ${property.key}.`,
+          authoredSpan(root, property.span),
+          root.filename,
+        ),
+      );
+
+      continue;
+    }
+
+    if (property.propertyKind || property.method) {
+      diagnostics.push(
+        routeDiagnostic(
+          "HES-ROUTE-RENDER",
+          `Route render field ${property.key} must be an ordinary object property.`,
+          authoredSpan(root, property.span),
+          root.filename,
+        ),
+      );
+
+      continue;
+    }
+
+    if (
+      property.value.kind !== "literal" ||
+      typeof property.value.value !== "string" ||
+      !["required", "optional", "forbidden"].includes(property.value.value)
+    ) {
+      diagnostics.push(
+        routeDiagnostic(
+          "HES-ROUTE-RENDER",
+          `Route render field ${property.key} must be the literal required, optional, or forbidden.`,
+          authoredRouteSpan(root, "render-field", property.key) ??
+            authoredSpan(root, property.value.span),
+          root.filename,
+        ),
+      );
+
+      continue;
+    }
+
+    const field = property.key as RouteRenderField;
+    const span =
+      authoredRouteSpan(root, "render-field", field) ?? authoredSpan(root, property.value.span);
+
+    fields[field] = {
+      value: property.value.value as RouteRenderConstraintValue,
+      source: `${root.filename}:${span.start}-${span.end}`,
+      filename: root.filename,
+      span,
+    };
+  }
+
+  return diagnostics.length > 0 ? { diagnostics } : { diagnostics, policy: fields };
 }
 
 function extractRouteTagProjection(
@@ -1867,11 +2118,23 @@ function moduleSpan(module: CanonicalModule): SourceSpan {
   return first?.span ?? { start: 0, end: 0 };
 }
 
-type RouteSpanPart = "route" | "callee" | "config" | "guard";
+type RouteSpanPart =
+  | "route"
+  | "callee"
+  | "config"
+  | "guard"
+  | "render"
+  | "render-field"
+  | "request-member";
 
 type RawNode = { readonly type: string; readonly [key: string]: unknown };
 
-function authoredRouteSpan(module: ModuleSnapshot, part: RouteSpanPart): SourceSpan | undefined {
+function authoredRouteSpan(
+  module: ModuleSnapshot,
+  part: RouteSpanPart,
+  renderField?: string,
+  occurrence = 0,
+): SourceSpan | undefined {
   const parsed = parseSync(module.filename, module.source, {
     lang: module.filename.endsWith(".tsx") ? "tsx" : "ts",
     astType: "js",
@@ -1900,14 +2163,51 @@ function authoredRouteSpan(module: ModuleSnapshot, part: RouteSpanPart): SourceS
               return key?.name === "guard" || key?.value === "guard";
             })
         : undefined;
+    const render =
+      configuration?.type === "ObjectExpression"
+        ? rawList(configuration.properties)
+            .map(rawNode)
+            .find((property) => {
+              if (!property || property.type !== "Property") return false;
+              const key = rawNode(property.key);
+              return key?.name === "render" || key?.value === "render";
+            })
+        : undefined;
+    const requestMember =
+      part === "request-member" && configuration?.type === "ObjectExpression"
+        ? rawList(configuration.properties)
+            .map(rawNode)
+            .filter((property) => {
+              if (!property || property.type !== "Property") return false;
+              const key = rawNode(property.key);
+              return key?.name === renderField || key?.value === renderField;
+            })[occurrence]
+        : undefined;
+    const renderObject = unwrapRawExpression(render?.value);
+    const field =
+      renderObject?.type === "ObjectExpression"
+        ? rawList(renderObject.properties)
+            .map(rawNode)
+            .find((property) => {
+              if (!property || property.type !== "Property") return false;
+              const key = rawNode(property.key);
+              return key?.name === renderField || key?.value === renderField;
+            })
+        : undefined;
     const selected =
-      part === "route"
-        ? declaration
-        : part === "callee"
-          ? rawNode(declaration.callee)
-          : part === "config"
-            ? configuration
-            : rawNode(guard?.value);
+      part === "request-member"
+        ? requestMember
+        : part === "route"
+          ? declaration
+          : part === "callee"
+            ? rawNode(declaration.callee)
+            : part === "config"
+              ? configuration
+              : part === "guard"
+                ? rawNode(guard?.value)
+                : part === "render"
+                  ? rawNode(render?.value)
+                  : rawNode(field?.value);
     return selected && typeof selected.start === "number" && typeof selected.end === "number"
       ? { start: selected.start, end: selected.end }
       : undefined;
@@ -2023,6 +2323,8 @@ function resultWithDiagnostics(
   root: ModuleInfo,
   diagnostics: readonly RouteDiagnostic[],
   tagProjection?: RouteTagProjectionV1,
+  renderPolicy?: SourcedRouteRenderPolicy,
+  requestMembers?: RouteRequestMembers,
 ): RouteAnalysisResult {
   return {
     filename: root.filename,
@@ -2030,6 +2332,8 @@ function resultWithDiagnostics(
     debug: root.debug,
     diagnostics,
     ...(tagProjection === undefined ? {} : { tagProjection }),
+    ...(renderPolicy === undefined ? {} : { renderPolicy }),
+    ...(requestMembers === undefined ? {} : { requestMembers }),
   };
 }
 

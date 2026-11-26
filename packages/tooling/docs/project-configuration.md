@@ -32,6 +32,24 @@ To produce a target-bound browser/static build, declare the target in the projec
 
 The production build captures the scanned page routes, managed assets, and public files for the browser/static host. It requires at least one filesystem page. Preview uses the captured routes to return a 404 for an unmatched document request. Omitting `target` retains the existing browser build format. Development continues to use the browser development host.
 
+Each Page needs five explicit render constraints inherited from its route declarations. For a browser/static build, a root `src/routes/+route.ts` can supply them:
+
+```ts
+import { route } from "hesperia/routing";
+
+export default route({
+  render: {
+    clientRender: "required",
+    ssr: "forbidden",
+    stream: "forbidden",
+    ssg: "forbidden",
+    hydration: "forbidden",
+  },
+});
+```
+
+Descendant declarations can add constraints. A missing or conflicting field stops production admission. The browser/static target only provides complete client rendering and mounting, so it rejects a policy that requires server rendering, static generation, progressive delivery, or hydration. It also rejects request-time `load` and `headers` declarations.
+
 For a custom server, load a target-bound build with `readTargetedBuild` and pass the result to `createTargetedHost` from `@hesperia/hosting`. Use the returned browser resource's `host` to handle requests, and close the resource after its response bodies have been consumed or canceled. The older `readBuild` and `createHost` path accepts the legacy build format, not this target-bound record. The generated Elysia starter currently uses that older path, so omit `target` when using its server.
 
 Node/fetch, Bun/Elysia, Bun/Hono, and Workerd/module-worker declarations are recognized, but their target profiles are unavailable. Selecting one stops the build; the declaration does not enable server rendering.

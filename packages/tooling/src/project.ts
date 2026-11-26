@@ -56,7 +56,12 @@ import {
   verifyProjectConfigurationSourceCapture,
   type ProjectConfiguration,
 } from "./configuration.ts";
-import { buildRouteGuards, routeFilesFromManifest } from "./route-build.ts";
+import {
+  buildRouteGuards,
+  routeFilesFromManifest,
+  type RouteRenderPolicyRecord,
+} from "./route-build.ts";
+import { resolveRoutePlan, type SourcedRouteRenderPolicy } from "./route-plan.ts";
 import { createRouteTable } from "./route-table.ts";
 import { escapeRegExp, isMissingFile, sourceKey } from "./utils.ts";
 import { writeProjectTypes } from "./page-types.ts";
@@ -103,6 +108,21 @@ import {
   withBuildPublication,
   type BuildPublication,
 } from "./targeted-publication.ts";
+
+function routePlanPolicy(policy: RouteRenderPolicyRecord["policy"]): SourcedRouteRenderPolicy {
+  const constraint = (value: NonNullable<RouteRenderPolicyRecord["policy"]["clientRender"]>) => ({
+    value: value.value,
+    source: value.source,
+  });
+
+  return {
+    ...(policy.clientRender ? { clientRender: constraint(policy.clientRender) } : {}),
+    ...(policy.ssr ? { ssr: constraint(policy.ssr) } : {}),
+    ...(policy.stream ? { stream: constraint(policy.stream) } : {}),
+    ...(policy.ssg ? { ssg: constraint(policy.ssg) } : {}),
+    ...(policy.hydration ? { hydration: constraint(policy.hydration) } : {}),
+  };
+}
 
 /** A diagnostic retains its authored file when several modules are checked together. */
 export interface ProjectDiagnostic extends CompilerDiagnostic {
@@ -574,9 +594,6 @@ async function prepareBuildLocalAttempt(
 ): Promise<BrowserBuild> {
   root = resolve(root);
 
-  if (!development && existsSync(resolve(root, ".hesperia/build")))
-    await withBuildPublication(root, cleanUnpublishedCaptures);
-
   const configuration = await readConfiguration(root);
   signal?.throwIfAborted();
   let productionTarget:
@@ -596,6 +613,9 @@ async function prepareBuildLocalAttempt(
 
     if (!development) productionTarget = target;
   }
+
+  if (!development && !configuration.target && existsSync(resolve(root, ".hesperia/build")))
+    await withBuildPublication(root, cleanUnpublishedCaptures);
 
   const authored = await readProject(root);
   signal?.throwIfAborted();
@@ -675,8 +695,102 @@ async function prepareBuildLocalAttempt(
 
   diagnostics.push(...routeBuild.diagnostics);
 
+  if (productionTarget && !diagnostics.some((item) => item.severity === "error")) {
+    const target = productionTarget;
+    if (manifest.routes.length === 0)
+      diagnostics.push({
+        code: "HES-ROUTE-PLAN",
+        severity: "error",
+        filename: join(root, "app.tsx"),
+        message:
+          "The browser/static producer has no filesystem page to publish; app-only document routing is not implemented",
+      });
+
+    const requestMembers = new Map(
+      routeBuild.requestMembers.map((item) => [sourceKey(item.routeFilename), item.requestMembers]),
+    );
+
+    for (const filename of routeDeclarations) {
+      const request = requestMembers.get(sourceKey(filename));
+
+      if (!request) {
+        diagnostics.push({
+          code: "HES-STATIC-REQUEST",
+          severity: "error",
+          filename,
+          message: "The route declaration has no checked request-member facts for static admission",
+        });
+
+        continue;
+      }
+
+      for (const declaration of request.declarations)
+        diagnostics.push({
+          code: "HES-STATIC-REQUEST",
+          severity: "error",
+          filename: declaration.filename,
+          span: declaration.span,
+          message: `The browser/static producer cannot implement the route's ${declaration.field} request declaration`,
+        });
+    }
+
+    const policies = new Map(
+      routeBuild.renderPolicies.map((item) => [
+        sourceKey(item.routeFilename),
+        routePlanPolicy(item.policy),
+      ]),
+    );
+    const visit = (
+      node: typeof manifest.root,
+      inherited: readonly SourcedRouteRenderPolicy[],
+    ): void => {
+      const own = node.files.route ? policies.get(sourceKey(node.files.route)) : undefined;
+      const chain = own ? [...inherited, own] : inherited;
+
+      if (node.files.page) {
+        const result = resolveRoutePlan(chain, target.capabilities);
+        const filename = node.files.route ?? node.files.page;
+
+        if (result.kind !== "admissible-plan") {
+          const reason =
+            result.kind === "ambiguous"
+              ? "The render policy admits multiple plans"
+              : result.diagnostics
+                  .map((item) => item.code + ("field" in item ? ` (${item.field})` : ""))
+                  .join(", ");
+
+          diagnostics.push({
+            code: "HES-ROUTE-PLAN",
+            severity: "error",
+            filename,
+            message: `Route ${node.pattern} has no selected production render plan: ${reason}`,
+          });
+        } else if (
+          result.plan.producer !== "csr" ||
+          result.plan.activation !== "mount" ||
+          result.plan.delivery !== "complete" ||
+          result.plan.hydrationMismatch !== "client-remount"
+        ) {
+          diagnostics.push({
+            code: "HES-ROUTE-PLAN",
+            severity: "error",
+            filename,
+            message: `The browser/static producer cannot emit the selected ${result.plan.producer}/${result.plan.activation}/${result.plan.delivery}/${result.plan.hydrationMismatch} plan`,
+          });
+        }
+      }
+
+      for (const child of node.children) visit(child, chain);
+    };
+
+    visit(manifest.root, []);
+  }
+
   if (diagnostics.some((item) => item.severity === "error"))
-    throw new ProjectError("Hesperia route guard build failed", diagnostics);
+    throw new ProjectError(
+      productionTarget ? "Production route admission failed" : "Hesperia route guard build failed",
+      diagnostics,
+    );
 
   const routeGuardUrls = new Map(
     routeBuild.guards.map((guard) => [sourceKey(guard.routeFilename), guard.outputUrl]),

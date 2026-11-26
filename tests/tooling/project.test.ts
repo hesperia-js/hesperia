@@ -29,6 +29,17 @@ import type { Plugin } from "../../packages/tooling/src/plugins.ts";
 
 const roots: string[] = [];
 
+async function writeBrowserStaticPolicy(root: string): Promise<void> {
+  await writeFile(
+    join(root, "src/routes/+route.ts"),
+    `import { route } from "hesperia/routing";
+export default route({ render: {
+  clientRender: "required", ssr: "forbidden", stream: "forbidden",
+  ssg: "forbidden", hydration: "forbidden",
+} });`,
+  );
+}
+
 async function temporaryProject(linkPackages = true): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "hesperia-tooling-"));
 
@@ -48,12 +59,138 @@ afterEach(async () => {
 });
 
 describe("project commands", () => {
+  test("browser/static app-only refusal preserves retained capture bytes", async () => {
+    const root = await temporaryProject();
+    const output = join(root, ".hesperia", "build");
+    const capture = "33333333-3333-3333-3333-333333333333";
+    const assets = join(output, ".captures", capture, "assets");
+    const retained = new Uint8Array([0, 255, 13, 10, 42]);
+
+    await mkdir(assets, { recursive: true });
+    await mkdir(join(root, "src/routes"), { recursive: true });
+    await writeFile(join(assets, "retained.bin"), retained);
+    await writeBrowserStaticPolicy(root);
+    await writeFile(
+      join(root, "hesperia.config.json"),
+      JSON.stringify({ target: { version: 1, runtime: "browser", profile: "static" } }),
+    );
+    await writeFile(
+      join(root, "app.tsx"),
+      "export default function App() { return <html><head></head><body>App only</body></html>; }",
+    );
+
+    const failure = await captureRejection(prepareBuild(root));
+
+    expect(failure).toBeInstanceOf(ProjectError);
+    expect((failure as ProjectError).diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "HES-ROUTE-PLAN",
+          filename: join(root, "app.tsx"),
+          message: expect.stringContaining("app-only document routing is not implemented"),
+        }),
+      ]),
+    );
+    expect(new Uint8Array(await readFile(join(assets, "retained.bin")))).toStrictEqual(retained);
+    expect(await readdir(join(output, ".captures"))).toStrictEqual([capture]);
+    expect(existsSync(join(output, "hesperia-build.json"))).toBe(false);
+  });
+
+  test("browser/static admission rejects missing, unsupported, and request-only route policies", async () => {
+    const root = await temporaryProject();
+
+    await mkdir(join(root, "src/routes"), { recursive: true });
+    await writeFile(
+      join(root, "hesperia.config.json"),
+      JSON.stringify({ target: { version: 1, runtime: "browser", profile: "static" } }),
+    );
+    await writeFile(
+      join(root, "app.tsx"),
+      "export default function App() { return <html><head></head><body></body></html>; }",
+    );
+    await writeFile(
+      join(root, "src/routes/+page.tsx"),
+      "export default function Page() { return <main>Page</main>; }",
+    );
+
+    const missing = await captureRejection(prepareBuild(root));
+    expect(missing).toBeInstanceOf(ProjectError);
+    expect(
+      (missing as ProjectError).diagnostics.some((item) => item.code === "HES-ROUTE-PLAN"),
+    ).toBe(true);
+
+    await writeFile(
+      join(root, "src/routes/+route.ts"),
+      `import { route } from "hesperia/routing";
+export default route({ render: {
+  clientRender: "required", ssr: "forbidden", stream: "forbidden",
+  ssg: "required", hydration: "forbidden",
+} });`,
+    );
+
+    const unsupported = await captureRejection(prepareBuild(root));
+    expect(unsupported).toBeInstanceOf(ProjectError);
+    expect(
+      (unsupported as ProjectError).diagnostics.some((item) => item.code === "HES-ROUTE-PLAN"),
+    ).toBe(true);
+
+    await writeFile(
+      join(root, "src/routes/+route.ts"),
+      `import { route } from "hesperia/routing";
+export default route({ load: () => "server", render: {
+  clientRender: "required", ssr: "forbidden", stream: "forbidden",
+  ssg: "forbidden", hydration: "forbidden",
+} });`,
+    );
+
+    const request = await captureRejection(prepareBuild(root));
+    expect(request).toBeInstanceOf(ProjectError);
+    expect(
+      (request as ProjectError).diagnostics.some((item) => item.code === "HES-STATIC-REQUEST"),
+    ).toBe(true);
+  });
+
+  test("browser/static admission rejects conflicting inherited route constraints", async () => {
+    const root = await temporaryProject();
+
+    await mkdir(join(root, "src/routes/child"), { recursive: true });
+    await writeBrowserStaticPolicy(root);
+    await writeFile(
+      join(root, "hesperia.config.json"),
+      JSON.stringify({ target: { version: 1, runtime: "browser", profile: "static" } }),
+    );
+    await writeFile(
+      join(root, "app.tsx"),
+      "export default function App() { return <html><head></head><body></body></html>; }",
+    );
+    await writeFile(
+      join(root, "src/routes/child/+page.tsx"),
+      "export default function Page() { return <main>Child</main>; }",
+    );
+    await writeFile(
+      join(root, "src/routes/child/+route.ts"),
+      `import { route } from "hesperia/routing"; export default route({ render: { clientRender: "forbidden" } });`,
+    );
+
+    const failure = await captureRejection(prepareBuild(root));
+    expect(failure).toBeInstanceOf(ProjectError);
+    expect((failure as ProjectError).diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "HES-ROUTE-PLAN",
+          message: expect.stringContaining("required-forbidden-conflict"),
+        }),
+      ]),
+    );
+  });
+
   test.each([false, true])(
     "writes and serves a browser/static capture (public files: %s)",
     async (withPublic) => {
       const root = await temporaryProject();
 
       await mkdir(join(root, "src/routes/items/[id]"), { recursive: true });
+      await writeBrowserStaticPolicy(root);
       if (withPublic) await mkdir(join(root, "public"));
       await writeFile(
         join(root, "hesperia.config.json"),
@@ -273,6 +410,7 @@ describe("project commands", () => {
   test("browser preview serves retained assets at their published paths", async () => {
     const root = await temporaryProject();
     await mkdir(join(root, "src/routes"), { recursive: true });
+    await writeBrowserStaticPolicy(root);
     await mkdir(join(root, "public"));
     await writeFile(
       join(root, "hesperia.config.json"),
