@@ -24,6 +24,11 @@ import {
   type TargetEntryPreparation,
 } from "./style.ts";
 import { isNonArrayObject, isNonNullObject } from "../utils.ts";
+import {
+  bootstrapDataBindingRoot,
+  registerDataBindingRoot,
+  type DataBindingBootstrap,
+} from "../data/environment.ts";
 
 declare const __HESPERIA_DEV__: boolean;
 
@@ -596,6 +601,8 @@ function append(parent: Node, value: Rendered, document: Document, owner?: Owner
 
 /** Browser mount configuration. */
 export interface MountOptions {
+  /** Application identity and security integration for this root's data bindings. */
+  readonly dataBinding?: DataBindingBootstrap;
   /** Receives unhandled rendering faults; defaults to throwing. */
   readonly onError?: (error: unknown) => void;
   /** Receives development warnings; defaults to console.warn. */
@@ -676,6 +683,7 @@ export function createRuntimeRoot(
   } as RuntimeContext;
   const owner = new Owner(context, null, "root");
   context.scheduler = new Scheduler(owner);
+  registerDataBindingRoot(owner, "MountOptions.dataBinding or app.config.ts");
   return { context, owner };
 }
 
@@ -1198,6 +1206,8 @@ export function mount<P>(
 
   try {
     installRootProjectPolicy(owner, definition as Component<unknown>);
+
+    bootstrapDataBindingRoot(owner, options.dataBinding);
 
     const styleBinding = internalStyleBindingFor(definition);
 

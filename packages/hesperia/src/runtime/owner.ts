@@ -1,5 +1,6 @@
 import { Signal, withoutWrites } from "aeolia";
 import type { Graph, QueryStore } from "aeolia";
+import { retireDataBindingRoot } from "../data/environment.ts";
 import type { Scheduler } from "./scheduler.ts";
 
 /** Lifecycle phases distinguish cleanup access from final destruction. */
@@ -147,6 +148,7 @@ interface OwnerRetirementOperation {
   settled: boolean;
   synchronousReported: boolean;
   asynchronousReported: boolean;
+  reporterFault?: unknown;
 }
 
 class CleanupObservationFault extends Error {
@@ -219,6 +221,8 @@ function reportRetirementFailures(
 
     return { threw: false };
   } catch (reason) {
+    if (!Object.hasOwn(operation, "reporterFault")) operation.reporterFault = reason;
+
     return { threw: true, reason };
   }
 }
@@ -540,10 +544,15 @@ export interface AsyncBoundaryHost {
   capture(owner: Owner, promise: Promise<void>): void;
 
   /** Retain a source and observe value only when the owner consumes its value or awaits it. */
-  consumeQuery<T>(owner: Owner, graph: Graph, store: QueryStore<T>, kind: QueryReadKind): void;
+  consumeQuery<T>(
+    owner: Owner,
+    graph: Graph,
+    store: QueryStore<T, unknown>,
+    kind: QueryReadKind,
+  ): void;
 
   /** Route reset-unavailable scheduled reads to loading; reject callback reads clearly. */
-  assertQueryReadable<T>(owner: Owner, graph: Graph, store: QueryStore<T>): void;
+  assertQueryReadable<T>(owner: Owner, graph: Graph, store: QueryStore<T, unknown>): void;
 }
 
 /** Internal style activation follows the same Owner transitions as effects. */
@@ -826,20 +835,27 @@ export class Owner {
   [closeOwnerAdmission](
     mode: OwnerRetirementMode,
     reason: unknown = new RenderFault("cancelled", "Component removed"),
-    closeAdmission: () => void,
+    closeAdmission: () => () => void,
   ): Promise<void> {
     return this.startRetirement(mode, reason, mode === "sync", closeAdmission).promise;
+  }
+
+  /** @internal Dispose synchronously while a host retains immediate failures. */
+  disposeWithErrors(reason: unknown): readonly unknown[] {
+    return this.startRetirement("sync", reason, false).synchronousFailures.slice();
   }
 
   private startRetirement(
     mode: OwnerRetirementMode,
     reason: unknown,
     reportSynchronous: boolean,
-    closeAdmission?: () => void,
+    closeAdmission?: () => () => void,
   ): OwnerRetirementOperation {
     const existing = ownerRetirementByOwner.get(this);
 
     if (existing) {
+      if (this.parentOwner === null) this.retireDataBinding(existing, reason);
+
       return existing;
     }
 
@@ -887,12 +903,14 @@ export class Owner {
   private destroy(
     reason: unknown,
     operation: OwnerRetirementOperation,
-    closeAdmission?: () => void,
+    closeAdmission?: () => () => void,
   ): void {
     const existing = ownerRetirementByOwner.get(this);
     const wasRetiring = this.state === "cleaning" || this.state === "destroyed";
 
     if (existing && existing !== operation) {
+      if (this.parentOwner === null) this.retireDataBinding(existing, reason);
+
       bindOwnerRetirementAliases(this, existing);
       dependOnOwnerRetirement(operation, existing);
 
@@ -904,11 +922,27 @@ export class Owner {
       this.state = "cleaning";
     }
 
-    if (wasRetiring) return;
+    if (wasRetiring) {
+      if (this.parentOwner === null) this.retireDataBinding(existing ?? operation, reason);
+
+      return;
+    }
+
+    let finishAdmission: (() => void) | undefined;
 
     if (closeAdmission) {
       try {
-        closeAdmission();
+        finishAdmission = closeAdmission();
+      } catch (error) {
+        recordCleanupFailure(operation, error);
+      }
+    }
+
+    if (this.parentOwner === null) this.retireDataBinding(existing ?? operation, reason);
+
+    if (finishAdmission) {
+      try {
+        finishAdmission();
       } catch (error) {
         recordCleanupFailure(operation, error);
       }
@@ -995,6 +1029,15 @@ export class Owner {
       recordCleanupFailureAtSlot(operation, slot, reason);
     }
   }
+
+  private retireDataBinding(operation: OwnerRetirementOperation, reason: unknown): void {
+    try {
+      for (const error of retireDataBindingRoot(this, reason))
+        recordCleanupFailure(operation, error);
+    } catch (error) {
+      recordCleanupFailure(operation, error);
+    }
+  }
 }
 
 /** @internal Close application admission inside its actual root retirement. */
@@ -1002,7 +1045,7 @@ export function disposeOwnerWithAdmissionClose(
   owner: Owner,
   mode: OwnerRetirementMode,
   reason: unknown,
-  closeAdmission: () => void,
+  closeAdmission: () => () => void,
 ): Promise<void> {
   return owner[closeOwnerAdmission](mode, reason, closeAdmission);
 }

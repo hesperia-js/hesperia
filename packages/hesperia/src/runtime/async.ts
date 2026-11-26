@@ -62,7 +62,7 @@ function append(parent: Node, value: Rendered, owner: Owner): void {
 interface QuerySource {
   readonly graph: Graph;
   readonly identity: object;
-  store: QueryStore<unknown>;
+  store: QueryStore<unknown, unknown>;
   freshVersion: number | undefined;
   freshFailure: unknown;
   freshFailed: boolean;
@@ -113,7 +113,7 @@ function holdQueryGate(source: QuerySource, owner: Owner): () => void {
   };
 }
 
-function querySourceFor<T>(graph: Graph, store: QueryStore<T>): QuerySource {
+function querySourceFor<T>(graph: Graph, store: QueryStore<T, unknown>): QuerySource {
   const identity = store.value as unknown as object;
   let graphSources = querySourcesByGraph.get(graph);
 
@@ -129,7 +129,7 @@ function querySourceFor<T>(graph: Graph, store: QueryStore<T>): QuerySource {
     source = {
       graph,
       identity,
-      store: store as QueryStore<unknown>,
+      store: store as QueryStore<unknown, unknown>,
       freshVersion: undefined,
       freshFailure: undefined,
       freshFailed: false,
@@ -137,7 +137,7 @@ function querySourceFor<T>(graph: Graph, store: QueryStore<T>): QuerySource {
 
     graphSources.set(identity, source);
   } else {
-    source.store = store as QueryStore<unknown>;
+    source.store = store as QueryStore<unknown, unknown>;
   }
 
   return source;
@@ -340,7 +340,11 @@ export function asyncBoundary(
     return false;
   };
 
-  const markFreshQueryForOwner = <T>(consumer: Owner, graph: Graph, query: QueryStore<T>): void => {
+  const markFreshQueryForOwner = <T>(
+    consumer: Owner,
+    graph: Graph,
+    query: QueryStore<T, unknown>,
+  ): void => {
     const source = querySourceFor(graph, query);
 
     if (
@@ -355,7 +359,7 @@ export function asyncBoundary(
   const consumeQuery = <T>(
     consumer: Owner,
     graph: Graph,
-    query: QueryStore<T>,
+    query: QueryStore<T, unknown>,
     kind: QueryReadKind,
   ): void => {
     consumer.assertActive();

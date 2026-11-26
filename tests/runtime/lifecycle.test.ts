@@ -1,10 +1,17 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { Signal } from "aeolia";
+import {
+  createDataApplication,
+  createDataSecurityPartition,
+  type DataBindingRootControl,
+} from "../../packages/hesperia/src/index.ts";
 import { createClient, type State } from "../../packages/hesperia/src/client.ts";
+import { bootstrapDataBindingRoot } from "../../packages/hesperia/src/data/environment.ts";
 import {
   child,
   component,
+  createRuntimeRoot,
   defineComponent,
   dynamic,
   element,
@@ -577,6 +584,67 @@ describe("browser component lifetimes", () => {
     expect(errors).toStrictEqual([]);
   });
 
+  test("root disposal fences a pending security replacement and detaches authentication", async () => {
+    const target = container();
+    const partition = createDataSecurityPartition();
+    const events: string[] = [];
+    let control!: DataBindingRootControl;
+    let release!: () => void;
+    const apply = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const app = mount(
+      target,
+      defineComponent(() => "ready"),
+      {},
+      {
+        dataBinding: {
+          application: createDataApplication(),
+          security: () => ({ kind: "none" }),
+          attach(value) {
+            control = value;
+            return () => events.push("detached");
+          },
+        },
+      },
+    );
+    const generation = control.generation;
+    const replacement = control.replaceSecurity(
+      generation,
+      { kind: "partition", partition },
+      () => apply,
+    );
+    const outcome = replacement.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    let staleApplyCalled = false;
+
+    try {
+      await expect(
+        control.replaceSecurity(generation, { kind: "none" }, () => {
+          staleApplyCalled = true;
+        }),
+      ).rejects.toBeDefined();
+      expect(staleApplyCalled).toBe(false);
+
+      const reason = new Error("root closed");
+      const disposal = app.dispose(reason);
+      expect(control.signal.aborted).toBe(true);
+      expect(control.signal.reason).toBe(reason);
+      expect(events).toStrictEqual(["detached"]);
+      expect(await outcome).toBe(reason);
+
+      release();
+      await disposal;
+      expect(control.generation).toBe(generation);
+      expect(target.childNodes.length).toBe(0);
+    } finally {
+      release();
+      await app.dispose();
+    }
+  });
+
   test("cleanup observation does not assimilate an arbitrary thenable", async () => {
     let reads = 0;
     // The rejected cleanup object deliberately exposes a thenable getter.
@@ -673,6 +741,41 @@ describe("browser component lifetimes", () => {
     expect(calls).toStrictEqual(["sync", "async"]);
     expect(errors).toHaveLength(2);
     expect((errors[1] as AggregateError).errors).toStrictEqual([asyncFailure]);
+  });
+
+  test("a root disposed inside authentication attachment drains the late returned detach", async () => {
+    const runtime = createRuntimeRoot(container());
+    const failure = new Error("detach failed");
+    let detachCalls = 0;
+    let setupFailure: unknown;
+
+    try {
+      bootstrapDataBindingRoot(runtime.owner, {
+        application: createDataApplication(),
+        security: () => ({ kind: "none" }),
+        attach() {
+          runtime.owner.disposeSync();
+
+          return () => {
+            detachCalls++;
+            throw failure;
+          };
+        },
+      });
+    } catch (cause) {
+      setupFailure = cause;
+    }
+
+    expect(detachCalls).toBe(1);
+    expect(setupFailure).toBeInstanceOf(AggregateError);
+    expect((setupFailure as AggregateError).errors).toContain(failure);
+
+    const retirement = await runtime.owner.dispose().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(retirement).toBeInstanceOf(AggregateError);
+    expect((retirement as AggregateError).errors).toContain(failure);
   });
 
   test("invalidating an effect after its turn defers its second run until the next DOM/effect pass", async () => {

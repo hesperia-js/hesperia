@@ -2,9 +2,11 @@ import { afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { bootstrapApplication } from "../../packages/hesperia/src/runtime/application.ts";
 import { createClient } from "../../packages/hesperia/src/client.ts";
+import { createDataApplication } from "../../packages/hesperia/src/index.ts";
+import { currentDataBindingEnvironment } from "../../packages/hesperia/src/data/environment.ts";
 import { defineComponent } from "../../packages/hesperia/src/runtime/components.ts";
 import { element, text, type Rendered } from "../../packages/hesperia/src/runtime/dom.ts";
-import { Router } from "../../packages/hesperia/src/routing/navigation.ts";
+import { Router, type NavigationContext } from "../../packages/hesperia/src/routing/navigation.ts";
 import {
   navigationReservationFor,
   reserveNavigation,
@@ -1620,6 +1622,146 @@ test("one compiled filesystem table starts and navigates correctly under two hos
     } finally {
       app.dispose();
     }
+  }
+});
+
+test("routed disposal retires the data environment before route cleanup", async () => {
+  const window = createWindow();
+  window.document.documentElement.remove();
+  const reason = new Error("application disposed");
+  const cleanupFailure = new Error("route cleanup failed");
+  const events: string[] = [];
+  let rejectCleanup!: (reason: unknown) => void;
+  const pendingCleanup = new Promise<void>((_resolve, reject) => {
+    rejectCleanup = reject;
+  });
+
+  void pendingCleanup.catch(() => undefined);
+
+  let environmentLifetime!: AbortSignal;
+  let routeLifetime!: AbortSignal;
+  let reservation!: NonNullable<ReturnType<typeof navigationReservationFor>>;
+  let facade!: typeof reservation.facade;
+  let router: Router | undefined;
+  let navigationError: unknown;
+  let claimDuringDetach: typeof reservation | undefined;
+  let cleanupCallsDuringDetach = -1;
+  let cleanupCalls = 0;
+  let cleanupAborted = false;
+  let cleanupReason: unknown;
+  let routeAbortedDuringDetach = true;
+  let routeAbortedDuringCleanup = false;
+  let routeReasonDuringCleanup: unknown;
+  let detachCountAtCleanup = 0;
+  let detachCalls = 0;
+  const page = defineComponent((owner) => {
+    environmentLifetime = currentDataBindingEnvironment(owner.context).lifetime;
+    createClient(owner).cleanup(() => {
+      cleanupCalls++;
+      events.push("cleanup");
+      cleanupAborted = environmentLifetime.aborted;
+      cleanupReason = environmentLifetime.reason;
+      routeAbortedDuringCleanup = routeLifetime.aborted;
+      routeReasonDuringCleanup = routeLifetime.reason;
+      detachCountAtCleanup = detachCalls;
+      return pendingCleanup;
+    });
+    return element(owner, "main", {}, ["ready"]);
+  });
+  const root: RouteTableNode = {
+    id: "root",
+    pattern: "/",
+    segments: [],
+    files: {
+      page: { filename: "/routes/+page.tsx", load: async () => page },
+      guard: {
+        filename: "/routes/+guard.ts",
+        load: async () => ({
+          default: (context: NavigationContext) => {
+            routeLifetime = context.signal;
+            return true;
+          },
+        }),
+      },
+    },
+    children: [],
+  };
+  const shell = defineComponent<{ children: Rendered }>((owner, props) =>
+    element(owner, "html", {}, [
+      element(owner, "head", {}, []),
+      element(owner, "body", {}, [props.children()]),
+    ]),
+  );
+  const app = await bootstrapApplication(window, {
+    configuration: () => {
+      reservation = navigationReservationFor(window)!;
+      facade = reservation.facade;
+      const attachRouter = reservation.attachRouter;
+      reservation.attachRouter = (candidate, scheduler, owner) => {
+        if (candidate instanceof Router) router = candidate;
+        reservation.attachRouter = attachRouter;
+        attachRouter.call(reservation, candidate, scheduler, owner);
+      };
+      return {
+        dataBinding: {
+          application: createDataApplication(),
+          security: () => ({ kind: "none" }),
+          attach: () => () => {
+            detachCalls++;
+            events.push("detach");
+            try {
+              facade.navigate("/again");
+            } catch (error) {
+              navigationError = error;
+            }
+            reservation.release(reason);
+            router?.dispose(reason);
+            claimDuringDetach = navigationReservationFor(window);
+            cleanupCallsDuringDetach = cleanupCalls;
+            routeAbortedDuringDetach = routeLifetime.aborted;
+          },
+        },
+      };
+    },
+    shell: () => shell,
+    routes: () => ({ version: 1, root, routes: [root] }),
+  });
+  expect(router).toBeInstanceOf(Router);
+  expect(environmentLifetime.aborted).toBe(false);
+  expect(routeLifetime.aborted).toBe(false);
+
+  const disposal = app.dispose(reason);
+  const outcome = disposal.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+
+  try {
+    expect(app.dispose()).toBe(disposal);
+    expect(navigationError).toMatchObject({ kind: "navigation-inactive" });
+    expect(claimDuringDetach).toBe(reservation);
+    expect(cleanupCallsDuringDetach).toBe(0);
+    expect(routeAbortedDuringDetach).toBe(false);
+    expect(navigationReservationFor(window)).toBeUndefined();
+    expect(events).toStrictEqual(["detach", "cleanup"]);
+    expect(detachCalls).toBe(1);
+    expect(cleanupCalls).toBe(1);
+    expect(detachCountAtCleanup).toBe(1);
+    expect(cleanupAborted).toBe(true);
+    expect(cleanupReason).toBe(reason);
+    expect(routeAbortedDuringCleanup).toBe(true);
+    expect(routeReasonDuringCleanup).toBe(reason);
+
+    rejectCleanup(cleanupFailure);
+    const failure = await outcome;
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toStrictEqual([cleanupFailure]);
+    expect(app.dispose()).toBe(disposal);
+    expect(cleanupCalls).toBe(1);
+    expect(detachCalls).toBe(1);
+  } finally {
+    rejectCleanup(cleanupFailure);
+    await outcome;
   }
 });
 

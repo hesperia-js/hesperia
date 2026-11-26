@@ -8,7 +8,9 @@ export type {
   Feed,
   FeedPolicy,
   FeedProjection,
+  ObservationIssue,
   QueryView,
+  ValidationQueryView,
   Task,
   TaskContext,
   TaskFactory,
@@ -17,3 +19,8 @@ export type {
   TaskStatus,
 } from "./types.ts";
 export type { HesperiaContractApi, HesperiaMember, MutationTask } from "./contract.ts";
+export type {
+  QueryProgressProject,
+  QueryProgressStatus,
+  QueryProgressView,
+} from "./query-progress.ts";

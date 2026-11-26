@@ -16,9 +16,11 @@ import {
   registerOwnerDisposalPromiseAlias,
   RenderFault,
 } from "./owner.ts";
+import { bootstrapDataBindingRoot } from "../data/environment.ts";
 import { installRootProjectPolicy } from "./project-policy.ts";
 import { internalStyleBindingFor } from "./style.ts";
-import { reserveNavigation } from "../routing/navigation-api.ts";
+import { reserveNavigation, reserveNavigationRelease } from "../routing/navigation-api.ts";
+import { reserveRouterDisposal } from "../routing/navigation.ts";
 
 /** Deferred authored modules, evaluated only after browser history tracking is installed. */
 export interface ApplicationModules {
@@ -64,6 +66,8 @@ export async function bootstrapApplication(
     runtime = createRuntimeRoot(window.document);
 
     installRootProjectPolicy(runtime.owner, shell as Component<unknown>);
+
+    await bootstrapDataBindingRoot(runtime.owner, configuration.dataBinding, "async");
 
     const outlet = window.document.createDocumentFragment();
     const host = createRouteHost(runtime, outlet);
@@ -141,16 +145,18 @@ export async function bootstrapApplication(
 
       try {
         ownerRetirement = disposeOwnerWithAdmissionClose(mountedRuntime.owner, mode, reason, () => {
-          for (const release of [
-            () => navigationReservation.release(reason),
-            () => mountedRouter.dispose(reason),
-          ]) {
-            try {
-              release();
-            } catch (cause) {
-              synchronousFailures.push(cause);
+          const finishNavigation = reserveNavigationRelease(navigationReservation, reason);
+          const finishRouter = reserveRouterDisposal(mountedRouter, reason);
+
+          return () => {
+            for (const release of [finishNavigation, finishRouter]) {
+              try {
+                release();
+              } catch (cause) {
+                synchronousFailures.push(cause);
+              }
             }
-          }
+          };
         });
       } catch (cause) {
         if (mode === "sync") {
