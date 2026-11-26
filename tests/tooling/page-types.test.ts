@@ -83,9 +83,13 @@ test("the emitted check command updates route types and rejects stale parameter 
   await mkdir(oldDirectory, { recursive: true });
 
   const source =
-    'import type { Page } from "hesperia";\nexport default function User(props: Page.Props<{ queryParams: { tab?: string } }>) { return <span>{props.params.uid}:{props.queryParams().get("tab")}</span>; }';
+    'import type { Page } from "hesperia";\nexport default function User(props: Page.Props<{ queryParams: { tab?: string } }>) { const kind: "user" = props.routeData["/users/[uid]"]().kind; const missing: undefined = props.routeData["/users/[uid]"]().missing; return <span>{props.params.uid}:{kind}:{String(missing)}:{props.queryParams().get("tab")}</span>; }';
 
   await writeFile(join(oldDirectory, "+page.tsx"), source);
+  await writeFile(
+    join(oldDirectory, "+route.ts"),
+    'import { route } from "hesperia/routing"; export default route({ load: async ({ request }) => ({ kind: "user" as const, missing: undefined, path: new URL(request.url).pathname }) });',
+  );
 
   await writeFile(
     join(root, "tsconfig.json"),
@@ -131,10 +135,14 @@ test("the emitted check command updates route types and rejects stale parameter 
   expect(failed.output).toContain("uid");
 
   expect(failed.output).toContain("TS2339");
+  expect(failed.output).toMatch(/TS(?:2551|7053):[^\n]*\/users\/\[uid\]/);
 
   expect(await readFile(join(root, "hesperia.d.ts"), "utf8")).toContain('"userId": string');
 
-  await writeFile(join(newDirectory, "+page.tsx"), source.replace("params.uid", "params.userId"));
+  await writeFile(
+    join(newDirectory, "+page.tsx"),
+    source.replace("params.uid", "params.userId").replaceAll("/users/[uid]", "/users/[userId]"),
+  );
 
   expect(await invoke()).toMatchObject({ code: 0 });
 }, 30_000);

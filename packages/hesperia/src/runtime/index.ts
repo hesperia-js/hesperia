@@ -42,6 +42,8 @@ export type {
   PageProps,
   PagePropsBrand,
   PageQuerySchema,
+  PageRouteContext,
+  PageRouteData,
   PageRouteParams,
 } from "./page.ts";
 export { asyncBoundary, awaitComponent, runAsyncBody } from "./async.ts";

@@ -1,5 +1,5 @@
 import { parseSync } from "oxc-parser";
-import type { CompilerDiagnostic } from "./ir.ts";
+import type { CompilerDiagnostic, SourceSpan } from "./ir.ts";
 import type { NativeEventHandlerContext } from "./event-options.ts";
 import { childNamespace, namespaceForTag, type NamespaceContext } from "./namespace.ts";
 
@@ -11,12 +11,57 @@ export interface CheckingView {
   readonly generatedOffset: (offset: number) => number;
 }
 
+/** Authored and checking-view anchors for an explicit-pattern route configuration. */
+export interface CheckingViewRouteLoadProjection {
+  readonly identifier: string;
+  readonly authoredCallSpan: SourceSpan;
+  readonly authoredConfigurationSpan: SourceSpan;
+  readonly authoredPatternSpan: SourceSpan;
+  readonly authoredPatternText: string;
+  readonly generatedCallSpan: SourceSpan;
+  readonly generatedConfigurationSpan: SourceSpan;
+  readonly generatedConfigurationIdentifierSpan: SourceSpan;
+  readonly generatedTypeArgumentsSpan: SourceSpan;
+  readonly generatedConfigTypeQuerySpan: SourceSpan;
+  readonly generatedArgumentSpan: SourceSpan;
+}
+
+/** Exact authored and generated source for route configuration projections. */
+export interface CheckingViewRouteLoadCapture {
+  readonly authoredSource: string;
+  readonly generatedSource: string;
+  readonly complete: boolean;
+  readonly projections: readonly CheckingViewRouteLoadProjection[];
+}
+
+const checkingViewRouteLoadCaptures = new WeakMap<CheckingView, CheckingViewRouteLoadCapture>();
+
+/** @internal Read the route projection retained for this exact checking view. */
+export function checkingViewRouteLoadCapture(
+  view: CheckingView,
+): CheckingViewRouteLoadCapture | undefined {
+  const capture = checkingViewRouteLoadCaptures.get(view);
+
+  return capture?.generatedSource === view.source ? capture : undefined;
+}
+
 type Syntax = {
   readonly type: string;
   readonly start: number;
   readonly end: number;
   readonly [key: string]: unknown;
 };
+
+interface RouteLoaderCandidate {
+  readonly statement: Syntax;
+  readonly bindingStart: number;
+  readonly call: Syntax;
+  readonly configuration: Syntax;
+  readonly typeArguments: Syntax;
+  readonly pattern: Syntax;
+  readonly identifier: string;
+  readonly argumentRange: RouteLoaderReplacementRange;
+}
 
 interface Piece {
   text: string;
@@ -58,6 +103,34 @@ export function checkingView(
     ? importSourceRanges(root, options.importReplacements)
     : [];
   const routeTypeRanges = options.pageRouteContext ? parameterTypeRanges(root) : [];
+  const routeLoaderCandidates = diagnostics.some(
+    (item) => item.code === "HES-OXC" && item.severity === "error",
+  )
+    ? []
+    : collectRouteLoaderCandidates(root, source);
+  const routeLoaderRanges: RouteLoaderReplacementRange[] = [];
+  const routeLoaderCandidatesByStatement = new Map(
+    routeLoaderCandidates.map((candidate) => [candidate.statement, candidate] as const),
+  );
+
+  for (const candidate of routeLoaderCandidates) {
+    routeLoaderRanges.push(
+      {
+        start: candidate.bindingStart,
+        end: candidate.bindingStart,
+        routeLoaderConfigBinding: candidate,
+      },
+      {
+        start: candidate.typeArguments.start,
+        end: candidate.typeArguments.end,
+        routeLoaderTypeArguments: {
+          identifier: candidate.identifier,
+          patternEnd: candidate.pattern.end,
+        },
+      },
+      candidate.argumentRange,
+    );
+  }
   const handlerContextRanges = resolveNativeHandlerRanges(
     root,
     source,
@@ -129,13 +202,19 @@ export function checkingView(
     offsets: Array.from({ length: end - start }, (_, index) => start + index),
   });
 
-  const copy = (start: number, end: number): Piece => {
-    const ranges: CheckingReplacementRange[] = [
+  const copy = (
+    start: number,
+    end: number,
+    excludedRange?: RouteLoaderReplacementRange,
+    context: NamespaceContext = { namespace: "html" },
+  ): Piece => {
+    const ranges: RouteLoaderReplacementRange[] = [
       ...routeTypeRanges.map((range) => ({ ...range })),
       ...importRanges,
       ...handlerContextRanges,
+      ...routeLoaderRanges,
     ]
-      .filter((range) => range.start >= start && range.end <= end)
+      .filter((range) => range !== excludedRange && range.start >= start && range.end <= end)
       .sort((a, b) => a.start - b.start || a.end - b.end);
 
     if (!ranges.length) return copySource(start, end);
@@ -148,13 +227,43 @@ export function checkingView(
 
       parts.push(copySource(cursor, range.start));
 
-      if (range.start === range.end) {
+      if (range.start === range.end && range.routeLoaderConfigBinding) {
+        const candidate = range.routeLoaderConfigBinding;
+
+        parts.push(
+          literal(`\nconst ${candidate.identifier} = (`, range.start),
+          renderRange(
+            candidate.configuration.start,
+            candidate.configuration.end,
+            candidate.configuration,
+            context,
+            candidate.argumentRange,
+          ),
+          literal(
+            ') satisfies import("hesperia/routing").Route.Declaration<',
+            candidate.configuration.end,
+          ),
+          copySource(candidate.pattern.start, candidate.pattern.end),
+          literal(">;\n", candidate.pattern.end),
+        );
+      } else if (range.start === range.end) {
         if (range.prefix) parts.push(literal(range.prefix, range.start));
 
         if (range.replacement !== undefined)
           parts.push(literal(JSON.stringify(range.replacement), range.start));
 
         if (range.suffix) parts.push(literal(range.suffix, range.start));
+      } else if (range.routeLoaderTypeArguments) {
+        parts.push(
+          copySource(range.start, range.routeLoaderTypeArguments.patternEnd),
+          literal(
+            ", typeof " + range.routeLoaderTypeArguments.identifier,
+            range.routeLoaderTypeArguments.patternEnd,
+          ),
+          copySource(range.routeLoaderTypeArguments.patternEnd, range.end),
+        );
+      } else if (range.routeLoaderConfigArgument !== undefined) {
+        parts.push(literal(range.routeLoaderConfigArgument, range.start));
       } else if (range.replacement !== undefined) {
         parts.push(literal(JSON.stringify(range.replacement), range.start));
       } else {
@@ -189,7 +298,7 @@ export function checkingView(
     if (item.type === "JSXEmptyExpression")
       return concat(literal("undefined", item.start), copy(item.start, item.end));
 
-    return range(item.start, item.end, item, context);
+    return renderRange(item.start, item.end, item, context);
   }
 
   function children(item: Syntax, context: NamespaceContext): Piece {
@@ -308,12 +417,29 @@ export function checkingView(
     );
   }
 
-  function range(start: number, end: number, item: Syntax, context: NamespaceContext): Piece {
-    const replacements: Syntax[] = [];
+  function renderRange(
+    start: number,
+    end: number,
+    item: Syntax,
+    context: NamespaceContext,
+    excludedRange?: RouteLoaderReplacementRange,
+  ): Piece {
+    type Replacement =
+      | { readonly kind: "route"; readonly candidate: RouteLoaderCandidate }
+      | { readonly kind: "jsx"; readonly node: Syntax };
+    const replacements: Replacement[] = [];
 
     function collect(value: Syntax): void {
+      const candidate = routeLoaderCandidatesByStatement.get(value);
+
+      if (candidate) {
+        replacements.push({ kind: "route", candidate });
+
+        return;
+      }
+
       if (value.type === "JSXElement" || value.type === "JSXFragment") {
-        replacements.push(value);
+        replacements.push({ kind: "jsx", node: value });
 
         return;
       }
@@ -323,25 +449,42 @@ export function checkingView(
 
     collect(item);
 
-    replacements.sort((a, b) => a.start - b.start);
+    replacements.sort((left, right) => {
+      const a = left.kind === "route" ? left.candidate.statement : left.node;
+      const b = right.kind === "route" ? right.candidate.statement : right.node;
+
+      return a.start - b.start || a.end - b.end;
+    });
 
     const result: Piece[] = [];
     let cursor = start;
 
     for (const replacement of replacements) {
-      result.push(copy(cursor, replacement.start), jsx(replacement, context));
+      const selected =
+        replacement.kind === "route" ? replacement.candidate.statement : replacement.node;
 
-      cursor = replacement.end;
+      if (selected.start < cursor) continue;
+
+      if (replacement.kind === "route") {
+        result.push(
+          copy(cursor, selected.start, undefined, context),
+          copy(selected.start, selected.end, undefined, context),
+        );
+      } else {
+        result.push(copy(cursor, selected.start, excludedRange, context), jsx(selected, context));
+      }
+
+      cursor = selected.end;
     }
 
-    result.push(copy(cursor, end));
+    result.push(copy(cursor, end, excludedRange, context));
 
     return concat(...result);
   }
 
   const result = diagnostics.some((item) => item.code === "HES-OXC" && item.severity === "error")
     ? copy(0, source.length)
-    : range(0, source.length, root, { namespace: "html" });
+    : renderRange(0, source.length, root, { namespace: "html" });
   const reverse = new Map<number, number>();
 
   for (let offset = 0; offset < result.offsets.length; offset++) {
@@ -358,12 +501,102 @@ export function checkingView(
     }
   }
 
-  return {
+  const routeLoaderProjections: CheckingViewRouteLoadProjection[] = [];
+  let routeLoaderCaptureComplete = true;
+  const generatedSpan = (start: number, end: number): SourceSpan | undefined => {
+    if (end <= start) return undefined;
+
+    const generatedStart = result.offsets.indexOf(start);
+    const generatedEnd = result.offsets.lastIndexOf(end - 1) + 1;
+
+    return generatedStart >= 0 && generatedEnd >= generatedStart
+      ? { start: generatedStart, end: generatedEnd }
+      : undefined;
+  };
+
+  for (const candidate of routeLoaderCandidates) {
+    const generatedCallSpan = generatedSpan(candidate.call.start, candidate.call.end);
+    const generatedConfigurationSpan = generatedSpan(
+      candidate.configuration.start,
+      candidate.configuration.end,
+    );
+    const generatedTypeArgumentsSpan = generatedSpan(
+      candidate.typeArguments.start,
+      candidate.typeArguments.end,
+    );
+    const occurrences: number[] = [];
+    let occurrence = result.text.indexOf(candidate.identifier);
+
+    while (occurrence >= 0) {
+      occurrences.push(occurrence);
+      occurrence = result.text.indexOf(
+        candidate.identifier,
+        occurrence + candidate.identifier.length,
+      );
+    }
+
+    if (
+      !generatedCallSpan ||
+      !generatedConfigurationSpan ||
+      !generatedTypeArgumentsSpan ||
+      occurrences.length !== 3
+    ) {
+      routeLoaderCaptureComplete = false;
+      continue;
+    }
+
+    routeLoaderProjections.push(
+      Object.freeze({
+        identifier: candidate.identifier,
+        authoredCallSpan: Object.freeze({ start: candidate.call.start, end: candidate.call.end }),
+        authoredConfigurationSpan: Object.freeze({
+          start: candidate.configuration.start,
+          end: candidate.configuration.end,
+        }),
+        authoredPatternSpan: Object.freeze({
+          start: candidate.pattern.start,
+          end: candidate.pattern.end,
+        }),
+        authoredPatternText: source.slice(candidate.pattern.start, candidate.pattern.end),
+        generatedCallSpan: Object.freeze(generatedCallSpan),
+        generatedConfigurationSpan: Object.freeze(generatedConfigurationSpan),
+        generatedConfigurationIdentifierSpan: Object.freeze({
+          start: occurrences[0]!,
+          end: occurrences[0]! + candidate.identifier.length,
+        }),
+        generatedTypeArgumentsSpan: Object.freeze(generatedTypeArgumentsSpan),
+        generatedConfigTypeQuerySpan: Object.freeze({
+          start: occurrences[1]!,
+          end: occurrences[1]! + candidate.identifier.length,
+        }),
+        generatedArgumentSpan: Object.freeze({
+          start: occurrences[2]!,
+          end: occurrences[2]! + candidate.identifier.length,
+        }),
+      }),
+    );
+  }
+
+  const view: CheckingView = {
     source: result.text,
     diagnostics,
     mapOffset: (offset) => result.offsets[offset] ?? source.length,
     generatedOffset: (offset) => reverse.get(offset) ?? result.text.length,
   };
+  checkingViewRouteLoadCaptures.set(
+    view,
+    Object.freeze({
+      authoredSource: source,
+      generatedSource: result.text,
+      complete:
+        !diagnostics.some((item) => item.code === "HES-OXC" && item.severity === "error") &&
+        routeLoaderCaptureComplete &&
+        routeLoaderProjections.length === routeLoaderCandidates.length,
+      projections: Object.freeze(routeLoaderProjections),
+    }),
+  );
+
+  return view;
 }
 
 interface CheckingReplacementRange {
@@ -372,6 +605,104 @@ interface CheckingReplacementRange {
   readonly replacement?: string;
   readonly prefix?: string;
   readonly suffix?: string;
+}
+
+interface RouteLoaderReplacementRange extends CheckingReplacementRange {
+  readonly routeLoaderConfigBinding?: RouteLoaderCandidate;
+  readonly routeLoaderConfigArgument?: string;
+  readonly routeLoaderTypeArguments?: {
+    readonly identifier: string;
+    readonly patternEnd: number;
+  };
+}
+
+function collectRouteLoaderCandidates(root: Syntax, source: string): RouteLoaderCandidate[] {
+  const routeBindings = new Map<string, number[]>();
+  const body = nodes(root.body);
+
+  for (const [statementIndex, statement] of body.entries()) {
+    if (statement.type !== "ImportDeclaration" || statement.importKind === "type") continue;
+    if (node(statement.source)?.value !== "hesperia/routing") continue;
+
+    for (const specifier of nodes(statement.specifiers)) {
+      if (specifier.type !== "ImportSpecifier" || specifier.importKind === "type") continue;
+
+      const local = node(specifier.local);
+      const imported = node(specifier.imported);
+      const localName = typeof local?.name === "string" ? local.name : undefined;
+      const importedName = typeof imported?.name === "string" ? imported.name : localName;
+
+      if (importedName === "route" && localName) {
+        const positions = routeBindings.get(localName) ?? [];
+
+        positions.push(statementIndex);
+        routeBindings.set(localName, positions);
+      }
+    }
+  }
+
+  if (routeBindings.size === 0) return [];
+
+  const identifiers = new Set<string>();
+
+  walk(root, (item) => {
+    if (item.type === "Identifier" && typeof item.name === "string") identifiers.add(item.name);
+  });
+
+  const candidates: RouteLoaderCandidate[] = [];
+  let identifierIndex = 0;
+
+  for (const [statementIndex, statement] of body.entries()) {
+    if (statement.type !== "ExportDefaultDeclaration") continue;
+
+    const call = node(statement.declaration);
+    const callee = node(call?.callee);
+
+    if (call?.type !== "CallExpression" || callee?.type !== "Identifier") continue;
+    if (
+      typeof callee.name !== "string" ||
+      !(routeBindings.get(callee.name) ?? []).some((index) => index < statementIndex)
+    )
+      continue;
+
+    const arguments_ = nodes(call.arguments);
+    const configuration = arguments_.length === 1 ? arguments_[0] : undefined;
+    const typeArguments = node(call.typeArguments);
+    const patterns = nodes(typeArguments?.params);
+    const pattern = patterns.length === 1 ? patterns[0] : undefined;
+
+    if (!configuration || configuration.type !== "ObjectExpression" || !typeArguments || !pattern)
+      continue;
+    if (pattern.type !== "TSLiteralType" || typeof node(pattern.literal)?.value !== "string")
+      continue;
+
+    let identifier = "__hesperia_checking_route_config_" + identifierIndex++;
+
+    while (identifiers.has(identifier) || source.includes(identifier))
+      identifier = "__hesperia_checking_route_config_" + identifierIndex++;
+
+    identifiers.add(identifier);
+
+    const bindingStart = body[statementIndex - 1]?.end ?? 0;
+    const argumentRange: RouteLoaderReplacementRange = {
+      start: configuration.start,
+      end: configuration.end,
+      routeLoaderConfigArgument: identifier,
+    };
+
+    candidates.push({
+      statement,
+      bindingStart,
+      call,
+      configuration,
+      typeArguments,
+      pattern,
+      identifier,
+      argumentRange,
+    });
+  }
+
+  return candidates.length === 1 ? candidates : [];
 }
 
 function importSourceRanges(
