@@ -18,6 +18,10 @@
   "main": "./dist/project-service.js",
   "types": "./dist/project-service.d.ts",
   "imports": {
+    "#hesperia-cli-main": {
+      "types": "./dist/cli-main.d.ts",
+      "default": "./dist/cli-main.js"
+    },
     "#hesperia-project-worker": {
       "types": "./dist/project-worker.d.ts",
       "default": "./dist/project-worker.js"
