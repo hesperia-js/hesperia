@@ -849,14 +849,14 @@ test("one production capture serves exact assets at root and a nested mount", as
       expect(document.status).toBe(200);
 
       expect(await document.text()).toContain(
-        `<script type="module" src="${assetBase}/startup.js">`,
+        `<script type="module" crossorigin="anonymous" src="${assetBase}/startup.js">`,
       );
 
       const wrapper = await fetch(new URL(assetBase + "/startup.js", fixture.server.url));
 
       expect(wrapper.status).toBe(200);
 
-      expect(await wrapper.text()).toContain(`await start("${fixture.mount || "/"}")`);
+      expect(await wrapper.text()).toContain(`await start("${fixture.mount || "/"}",`);
 
       for (const asset of build.hosting.assets) {
         expect(build.files.get(asset.path)).toBeInstanceOf(Blob);

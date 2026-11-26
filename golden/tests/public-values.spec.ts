@@ -100,6 +100,7 @@ test("compiled public values distinguish an omitted key from own undefined and n
 });
 
 test("missing own undefined in an isolated emitted asset is caught by the same oracle", async ({
+  browser,
   page,
 }, testInfo) => {
   const pageErrors: string[] = [];
@@ -163,7 +164,11 @@ test("missing own undefined in an isolated emitted asset is caught by the same o
         removedSource: publicShapeEntry,
       };
 
-      await route.fulfill({ response, body: changed });
+      await route.fulfill({
+        response,
+        body: changed,
+        headers: { ...response.headers(), "content-length": String(Buffer.byteLength(changed)) },
+      });
     } catch (error) {
       setupError = error instanceof Error ? error.message : String(error);
 
@@ -216,15 +221,29 @@ test("missing own undefined in an isolated emitted asset is caught by the same o
 
   await page.unroute("**/assets/*.js", mutationRoute);
 
-  const ordinaryResponse = await page.goto("/public-values");
+  // Revisit in a context that has never loaded the intercepted module.
+  const ordinaryContext = await browser.newContext();
+  let ordinaryObservation: Observation | null;
+  try {
+    const ordinaryPage = await ordinaryContext.newPage();
+    ordinaryPage.on("pageerror", (error) => pageErrors.push(error.message));
+    const ordinaryResponse = await ordinaryPage.goto(page.url());
 
-  expect(ordinaryResponse?.status()).toBe(200);
+    expect(ordinaryResponse?.status()).toBe(200);
 
-  await expect(page.locator("#public-shape")).toHaveAttribute("data-ready", "true");
+    await expect(ordinaryPage.locator("#public-shape")).toHaveAttribute("data-ready", "true");
+    ordinaryObservation = await readObservation(ordinaryPage);
+    assertPublicShape(ordinaryObservation);
 
-  const ordinaryObservation = await readObservation(page);
+    const capturedMutant = mutant as MutantEvidence;
+    const originalAssetURL = new URL(capturedMutant.assetPath, ordinaryPage.url());
+    const originalAsset = await ordinaryContext.request.get(originalAssetURL.href);
 
-  assertPublicShape(ordinaryObservation);
+    expect(originalAsset.status()).toBe(200);
+    expect(hash(await originalAsset.text())).toBe(capturedMutant.originalSha256);
+  } finally {
+    await ordinaryContext.close();
+  }
 
   expect(pageErrors).toStrictEqual([]);
 

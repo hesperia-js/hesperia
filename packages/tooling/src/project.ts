@@ -1,4 +1,4 @@
-import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -34,18 +34,19 @@ import {
 } from "@hesperia/compiler/tooling";
 import {
   createHost,
-  createTargetedHost,
+  type HostSelection,
   type HostingPublicFileRecord,
   type HostingRecordV1,
   type HostingRecordV2,
-  type InProcessTargetedCapturedBuild,
 } from "@hesperia/hosting";
 import {
   BROWSER_STATIC_ROUTING_ASSET,
+  BROWSER_MODULE_PRELOADS_ASSET,
   canonicalizeMountURL,
   encodeBrowserStaticRouting,
   resolveProductionTarget,
   snapshotTargetedControl,
+  snapshotHostSelection,
   type ResolvedProductionTarget,
 } from "@hesperia/hosting/internal";
 import { compareRoutes } from "hesperia/routing";
@@ -96,6 +97,12 @@ import {
   type StyleRevisionPlan,
 } from "./style-plan.ts";
 import { buildRouteStyleMetadata } from "./route-style-topology.ts";
+import {
+  assertRetainedBrowserAssetsFit,
+  publishTargetedBuild,
+  withBuildPublication,
+  type BuildPublication,
+} from "./targeted-publication.ts";
 
 /** A diagnostic retains its authored file when several modules are checked together. */
 export interface ProjectDiagnostic extends CompilerDiagnostic {
@@ -567,7 +574,8 @@ async function prepareBuildLocalAttempt(
 ): Promise<BrowserBuild> {
   root = resolve(root);
 
-  if (!development) await cleanUnpublishedCaptures(root);
+  if (!development && existsSync(resolve(root, ".hesperia/build")))
+    await withBuildPublication(root, cleanUnpublishedCaptures);
 
   const configuration = await readConfiguration(root);
   signal?.throwIfAborted();
@@ -955,6 +963,7 @@ async function prepareBuildLocalAttempt(
       asset: "assets/[name]-[hash].[ext]",
     },
     splitting: true,
+    modulePreload: development,
     sourcemap: "linked",
     metafile: true,
     plugins: [
@@ -1233,6 +1242,45 @@ async function prepareBuildLocalAttempt(
     files.set(
       outputPath(artifact.path),
       new Blob([JSON.stringify(composed)], { type: "application/json" }),
+    );
+  }
+
+  if (!development) {
+    if (files.has(BROWSER_MODULE_PRELOADS_ASSET))
+      throw new ProjectError("Browser module preload metadata collides with a compiled asset");
+
+    const graph = browserModuleGraph(result);
+    const startupPath = outputPath(entry.path);
+    const routeTablePath = graph.dynamicEntry(startupPath, generatedRouteTableFilename);
+    const imports = new Map<string, readonly string[]>();
+
+    for (const [key, specifier] of Object.entries(startupModules)) {
+      const filename = generatedSpecifiers.get(specifier);
+      if (filename)
+        imports.set(key, graph.staticClosure(graph.dynamicEntry(startupPath, filename)));
+    }
+
+    for (const [specifier, filename] of routeTable.modules) {
+      const key = relative(root, filename).replaceAll("\\", "/");
+      const generated = generatedSpecifiers.get(specifier);
+      if (!generated) throw new ProjectError(`Missing browser route module for ${key}`);
+      imports.set(key, graph.staticClosure(graph.dynamicEntry(routeTablePath, generated)));
+    }
+
+    for (const guard of routeBuild.guards) imports.set(guard.outputUrl, [guard.outputUrl]);
+
+    files.set(
+      BROWSER_MODULE_PRELOADS_ASSET,
+      new Blob(
+        [
+          JSON.stringify({
+            version: 2,
+            modules: graph.staticClosure(startupPath),
+            imports: Object.fromEntries(imports),
+          }),
+        ],
+        { type: "application/json" },
+      ),
     );
   }
 
@@ -1664,6 +1712,61 @@ function outputPath(path: string): string {
   throw new ProjectError(`Unexpected browser artifact path: ${path}`);
 }
 
+function browserModuleGraph(result: Bun.BuildOutput) {
+  const outputs = new Map(
+    Object.entries(result.metafile?.outputs ?? {})
+      .filter(([path]) => /\.m?js$/u.test(path))
+      .map(([path, info]) => [outputPath(path), info] as const),
+  );
+
+  const importPath = (path: string): string | undefined => {
+    const normalized = path.replaceAll("\\", "/");
+    if (!/^(?:\.\/|\/)?assets\//u.test(normalized)) return undefined;
+    return outputPath(normalized);
+  };
+
+  const outputFor = (path: string) => {
+    const output = outputs.get(path);
+    if (!output) throw new ProjectError(`Browser build omitted module metadata for ${path}`);
+    return output;
+  };
+
+  return {
+    dynamicEntry(importer: string, filename: string): string {
+      const entryPoint = `hesperia-generated:${filename.replaceAll("\\", "/")}`;
+      const matches = new Set<string>();
+
+      for (const imported of outputFor(importer).imports) {
+        if (imported.kind !== "dynamic-import") continue;
+        const path = importPath(imported.path);
+        const actual = path && outputs.get(path)?.entryPoint;
+        if (path && actual?.replaceAll("\\", "/") === entryPoint) matches.add(path);
+      }
+
+      const [entry] = matches;
+      if (matches.size !== 1 || !entry)
+        throw new ProjectError(
+          `Browser build omitted an unambiguous module import for ${filename}`,
+        );
+      return entry;
+    },
+
+    staticClosure(entry: string): string[] {
+      const pending = new Set([entry]);
+
+      for (const path of pending) {
+        for (const imported of outputFor(path).imports) {
+          if (imported.kind !== "import-statement") continue;
+          const dependency = importPath(imported.path);
+          if (dependency && outputs.has(dependency)) pending.add(dependency);
+        }
+      }
+
+      return [...pending];
+    },
+  };
+}
+
 function assetContentType(path: string, type: string): string {
   if (type) return type;
 
@@ -1740,11 +1843,20 @@ function samePath(first: string, second: string, root?: string): boolean {
 
 /**
  * Publish an immutable asset capture first, then atomically expose its complete record.
- * Each capture starts empty. The prior published capture remains usable on failure
- * and is retired only after its replacement record has been published.
+ * The prior published capture remains usable on failure. Targeted publications retain prior
+ * generated assets and persist the deployment selection separately from compiled control.
+ * @param root - Project whose build directory receives the completed capture.
+ * @param build - Prepared browser build, including its production control and artifact bytes.
+ * @param selection - Optional deployment settings for an explicitly targeted browser build.
+ * @returns The completed build directory after publishing its record.
  */
-export async function writeBuild(root: string, build: BrowserBuild): Promise<string> {
-  const output = resolve(root, ".hesperia/build");
+export async function writeBuild(
+  root: string,
+  build: BrowserBuild,
+  selection?: HostSelection,
+): Promise<string> {
+  const selected = snapshotHostSelection(selection);
+  const { sources, diagnostics } = build;
   const snapshot =
     "publicFiles" in build
       ? {
@@ -1777,147 +1889,143 @@ export async function writeBuild(root: string, build: BrowserBuild): Promise<str
 
   const assets = new Map([...snapshot.files].filter(([path]) => path.startsWith("/assets/")));
 
-  let publishedMetadata: Record<string, unknown> = metadata;
-
   if (metadata.version === 3) {
     const control = snapshotTargetedControl(metadata);
 
     if (control.kind !== "browser" || control.productionTarget.declaration.runtime !== "browser")
       throw new ProjectError("Browser build requires its browser/static target control");
 
-    const inventory =
-      snapshot.version === 2
-        ? { hosting: snapshot.hosting, files: assets, publicFiles: snapshot.publicFiles }
-        : { hosting: snapshot.hosting, files: assets };
-    const resource = await createTargetedHost({
-      control,
-      inventory,
-    } as InProcessTargetedCapturedBuild);
-
-    await resource.close();
-
-    publishedMetadata = control as unknown as Record<string, unknown>;
-  } else if (snapshot.version === 2) {
-    await createHost({
-      hosting: snapshot.hosting,
-      files: assets,
-      publicFiles: snapshot.publicFiles,
-    });
-  } else {
-    await createHost({ hosting: snapshot.hosting, files: assets });
+    return publishTargetedBuild(
+      root,
+      {
+        buildKind: snapshot.version === 2 ? "production-browser-v2" : "production-browser-v1",
+        control,
+        hosting: snapshot.hosting,
+        files: snapshot.files,
+        sources,
+        diagnostics,
+        ...(snapshot.version === 2 ? { publicFiles: snapshot.publicFiles } : {}),
+      },
+      selected,
+    );
   }
 
-  await cleanUnpublishedCaptures(root);
+  if (
+    selected?.mountURL !== undefined ||
+    selected?.generatedAssets !== undefined ||
+    selected?.applicationOrigin !== undefined
+  )
+    throw new ProjectError("Deployment selection requires a browser/static production target");
 
-  await mkdir(output, { recursive: true });
+  const host = await createHost(
+    snapshot.version === 2
+      ? { hosting: snapshot.hosting, files: assets, publicFiles: snapshot.publicFiles }
+      : { hosting: snapshot.hosting, files: assets },
+  );
 
-  for (const directory of [dirname(output), output]) {
-    const stats = await lstat(directory);
+  return withBuildPublication(root, async (publication) => {
+    const { output, previousDirectory, retainedCaptureIds } = publication;
+    assertRetainedBrowserAssetsFit(host.mount, undefined, undefined, publication.history);
+    await cleanUnpublishedCaptures(publication);
 
-    if (!stats.isDirectory() || stats.isSymbolicLink())
-      throw new ProjectError("The build output path must be a real directory");
-  }
+    const capturesDirectory = join(output, ".captures");
 
-  const capturesDirectory = join(output, ".captures");
+    await mkdir(capturesDirectory, { recursive: true });
 
-  await mkdir(capturesDirectory, { recursive: true });
+    const capturesStat = await lstat(capturesDirectory);
 
-  const capturesStat = await lstat(capturesDirectory);
+    if (!capturesStat.isDirectory() || capturesStat.isSymbolicLink())
+      throw new ProjectError("The build captures path must be a real directory");
 
-  if (!capturesStat.isDirectory() || capturesStat.isSymbolicLink())
-    throw new ProjectError("The build captures path must be a real directory");
+    const captureId = randomUUID();
+    const captureDirectory = join(capturesDirectory, captureId);
+    const assetRoot = join(captureDirectory, "assets");
+    const assetDirectory = `.captures/${captureId}/assets`;
+    const publicDirectory = `.captures/${captureId}/public`;
+    const temporary = join(output, `.hesperia-build.${randomUUID()}.tmp`);
 
-  const captureId = randomUUID();
-  const captureDirectory = join(capturesDirectory, captureId);
-  const assetRoot = join(captureDirectory, "assets");
-  const assetDirectory = `.captures/${captureId}/assets`;
-  const publicDirectory = `.captures/${captureId}/public`;
-  const destination = join(output, "hesperia-build.json");
-  const temporary = join(output, `.hesperia-build.${randomUUID()}.tmp`);
-  const previousDirectory = await publishedAssetDirectory(output);
+    try {
+      await mkdir(assetRoot, { recursive: true });
 
-  try {
-    await mkdir(assetRoot, { recursive: true });
+      for (const { path } of snapshot.hosting.assets) {
+        const blob = assets.get(path);
 
-    for (const { path } of snapshot.hosting.assets) {
-      const blob = assets.get(path);
+        if (!blob) throw new ProjectError(`Browser build omitted ${path}`);
 
-      if (!blob) throw new ProjectError(`Browser build omitted ${path}`);
-
-      const target = join(assetRoot, path.slice("/assets/".length));
-
-      await mkdir(dirname(target), { recursive: true });
-
-      await writeFile(target, new Uint8Array(await blob.arrayBuffer()));
-    }
-
-    if (snapshot.version === 2) {
-      const publicRoot = join(captureDirectory, "public");
-
-      await mkdir(publicRoot, { recursive: true });
-
-      for (const file of snapshot.hosting.publicFiles) {
-        const blob = snapshot.publicFiles.get(file.urlPath);
-
-        if (!blob) throw new ProjectError(`Browser build omitted public file ${file.urlPath}`);
-
-        const target = join(publicRoot, ...file.relativePath.split("/"));
+        const target = join(assetRoot, path.slice("/assets/".length));
 
         await mkdir(dirname(target), { recursive: true });
 
         await writeFile(target, new Uint8Array(await blob.arrayBuffer()));
       }
+
+      if (snapshot.version === 2) {
+        const publicRoot = join(captureDirectory, "public");
+
+        await mkdir(publicRoot, { recursive: true });
+
+        for (const file of snapshot.hosting.publicFiles) {
+          const blob = snapshot.publicFiles.get(file.urlPath);
+
+          if (!blob) throw new ProjectError(`Browser build omitted public file ${file.urlPath}`);
+
+          const target = join(publicRoot, ...file.relativePath.split("/"));
+
+          await mkdir(dirname(target), { recursive: true });
+
+          await writeFile(target, new Uint8Array(await blob.arrayBuffer()));
+        }
+      }
+
+      const {
+        assetDirectory: _assetDirectory,
+        publicDirectory: _publicDirectory,
+        ...buildRecord
+      } = metadata;
+      const publishedRecord = new Blob(
+        [
+          JSON.stringify(
+            {
+              ...buildRecord,
+              assetDirectory,
+              ...(snapshot.version === 2 ? { publicDirectory } : {}),
+            },
+            null,
+            2,
+          ) + "\n",
+        ],
+        { type: record.type || "application/json" },
+      );
+
+      await writeFile(temporary, new Uint8Array(await publishedRecord.arrayBuffer()), {
+        flag: "wx",
+      });
+
+      await publication.replace(temporary);
+    } catch (error) {
+      await rm(temporary, { force: true });
+
+      await rm(captureDirectory, { recursive: true, force: true });
+
+      throw error;
     }
 
-    const {
-      assetDirectory: _assetDirectory,
-      publicDirectory: _publicDirectory,
-      ...buildRecord
-    } = publishedMetadata;
-    const publishedRecord = new Blob(
-      [
-        JSON.stringify(
-          {
-            ...buildRecord,
-            assetDirectory,
-            ...(snapshot.version === 2 ? { publicDirectory } : {}),
-          },
-          null,
-          2,
-        ) + "\n",
-      ],
-      { type: record.type || "application/json" },
-    );
+    if (previousDirectory && !retainedCaptureIds.has(previousDirectory.split("/")[1] ?? "")) {
+      const previousCapture =
+        previousDirectory === "assets"
+          ? join(output, "assets")
+          : join(output, ".captures", previousDirectory.split("/")[1]!);
+      const absolute = resolve(previousCapture);
 
-    await writeFile(temporary, new Uint8Array(await publishedRecord.arrayBuffer()), {
-      flag: "wx",
-    });
+      if (!absolute.startsWith(`${output}${sep}`))
+        throw new ProjectError("The previous build capture is outside the output directory");
 
-    await rename(temporary, destination);
-  } catch (error) {
-    await rm(temporary, { force: true });
+      await rm(absolute, { recursive: true, force: true });
+    }
 
-    await rm(captureDirectory, { recursive: true, force: true });
-
-    throw error;
-  }
-
-  if (previousDirectory) {
-    const previousCapture =
-      previousDirectory === "assets"
-        ? join(output, "assets")
-        : join(output, ".captures", previousDirectory.split("/")[1]!);
-    const absolute = resolve(previousCapture);
-
-    if (!absolute.startsWith(`${output}${sep}`))
-      throw new ProjectError("The previous build capture is outside the output directory");
-
-    await rm(absolute, { recursive: true, force: true });
-  }
-
-  await rm(join(output, "index.html"), { force: true });
-
-  return output;
+    await rm(join(output, "index.html"), { force: true });
+    return output;
+  });
 }
 
 function snapshotBlobMap(files: ReadonlyMap<string, Blob>): Map<string, Blob> {
@@ -1942,42 +2050,11 @@ function snapshotHosting(
   return Object.freeze({ ...hosting, assets });
 }
 
-async function publishedAssetDirectory(output: string): Promise<string | undefined> {
-  let source: string;
-
-  try {
-    source = await readFile(join(output, "hesperia-build.json"), "utf8");
-  } catch (error) {
-    if (isMissingFile(error)) return undefined;
-
-    throw error;
-  }
-
-  const record = JSON.parse(source) as { assetDirectory?: unknown };
-  const directory = record.assetDirectory ?? "assets";
-
-  if (
-    typeof directory !== "string" ||
-    !/^(?:assets|\.captures\/[0-9a-f-]{36}\/assets)$/u.test(directory)
-  )
-    throw new ProjectError("The published build asset directory is invalid");
-
-  return directory;
-}
-
-async function cleanUnpublishedCaptures(root: string): Promise<void> {
-  const output = resolve(root, ".hesperia/build");
-
-  if (!existsSync(output)) return;
-
-  for (const directory of [dirname(output), output]) {
-    const stats = await lstat(directory);
-
-    if (!stats.isDirectory() || stats.isSymbolicLink())
-      throw new ProjectError("The build output path must be a real directory");
-  }
-
-  const published = await publishedAssetDirectory(output);
+async function cleanUnpublishedCaptures({
+  output,
+  previousDirectory,
+  retainedCaptureIds,
+}: BuildPublication): Promise<void> {
   const captures = join(output, ".captures");
 
   if (!existsSync(captures)) return;
@@ -1988,12 +2065,16 @@ async function cleanUnpublishedCaptures(root: string): Promise<void> {
     throw new ProjectError("The build captures path must be a real directory");
 
   for (const entry of await readdir(captures, { withFileTypes: true })) {
-    if (!/^[0-9a-f-]{36}$/u.test(entry.name) || `.captures/${entry.name}/assets` === published)
+    if (
+      !/^[0-9a-f-]{36}$/u.test(entry.name) ||
+      retainedCaptureIds.has(entry.name) ||
+      `.captures/${entry.name}/assets` === previousDirectory
+    )
       continue;
 
     const capture = resolve(captures, entry.name);
 
-    if (!capture.startsWith(`${captures}${sep}`))
+    if (!capture.startsWith(output + sep))
       throw new ProjectError("The unpublished capture is outside the capture directory");
 
     await rm(capture, { recursive: true, force: true });

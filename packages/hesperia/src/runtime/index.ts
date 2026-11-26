@@ -63,3 +63,5 @@ export type {
   StyleOwnerId,
   TargetEntryPreparation,
 } from "./style.ts";
+
+export type { GeneratedAssetRoot, ResolvedGeneratedAssets } from "./generated-assets.ts";

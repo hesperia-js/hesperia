@@ -251,7 +251,7 @@ test("a real split build leaves the route page cold and mounts it through the bu
         `import { start } from ${JSON.stringify(`./assets/${mainUrl.slice("/assets/".length)}`)}`,
       );
 
-      expect(wrapper).toContain('await start("/dashboard")');
+      expect(wrapper).toContain('await start("/dashboard",');
 
       diagnostics.mark("driver-spawn-start");
 

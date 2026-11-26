@@ -1,15 +1,22 @@
-import {
-  captureInput,
-  resolveMountPath,
-  validateAssets,
-  validatePublicFiles,
-  assertCanonicalAssetPath,
-} from "./captured-build.ts";
+import type { GeneratedAssetSelection } from "./generated-assets.ts";
+import type { InProcessTargetedDeploymentCapturedBuildV4 } from "./build-control.ts";
+import type { ResolvedGeneratedAssets } from "hesperia/runtime";
 import type { ConcreteRoutePlan } from "./route-capabilities.ts";
-import { createBrowserArtifacts } from "./browser-artifacts.ts";
 import type { InProcessTargetedCapturedBuild } from "./build-control.ts";
 
 export type { ConcreteRoutePlan, RoutePlanCapabilitiesV1 } from "./route-capabilities.ts";
+export { createGeneratedAssetHost } from "./generated-asset-host.ts";
+export type { GeneratedAssetHost } from "./generated-asset-host.ts";
+export type {
+  InProcessTargetedDeploymentCapturedBuildV4,
+  TargetedDeploymentCapturedBuildV4,
+} from "./build-control.ts";
+export type {
+  ResolvedDeployment,
+  ResolvedDeploymentV1,
+  ResolvedDeploymentV2,
+} from "./deployment.ts";
+export type { GeneratedAssetSelection } from "./generated-assets.ts";
 export { snapshotProductionTarget } from "./target.ts";
 export { createTargetedHost } from "./targeted-host.ts";
 export type { TargetedHostResource } from "./targeted-host.ts";
@@ -186,15 +193,22 @@ export type CapturedBuild = CapturedBrowserBuild | CapturedPublicBuild;
 export interface HostSelection {
   /** Path-only mount override; raw Unicode is canonicalized before use. */
   readonly mountURL?: string;
+  /** Authoritative application origin for this deployment, when selected. */
+  readonly applicationOrigin?: string;
+  /** Select the directory and module credentials for generated assets. */
+  readonly generatedAssets?: GeneratedAssetSelection;
 }
 
 /** A mounted application and its synchronous Fetch request handler. */
 export interface ApplicationHost {
+  /** Resolved generated directory and module request mode. */
+  readonly generatedAssets: ResolvedGeneratedAssets;
+
   /** Canonical application and managed asset namespace paths. */
   readonly mount: {
     /** Application path prefix, with `/` representing the origin root. */
     readonly pathname: string;
-    /** Managed namespace path that serves the wrapper and captured assets. */
+    /** Reserved managed namespace beneath the application mount. */
     readonly assetPath: string;
   };
 
@@ -238,23 +252,24 @@ export async function readBuild(buildDirectory: string): Promise<CapturedBuild> 
 }
 
 /**
- * Load a completed outer-V3 targeted production capture without its source tree.
+ * Load a completed outer-V3 legacy or outer-V4 deployment capture without its source tree.
  *
  * This reader returns the validated control and its matching verified inventory. It does not
- * evaluate application entries. It accepts only outer-version-3 targeted records and rejects
- * Workerd captures; recognized non-Workerd profiles can still be unavailable to
- * `createTargetedHost`. If publication changes the selected record while its bytes are read, the
- * shared reader retries only after observing that change, with at most three read attempts.
+ * evaluate application entries. It preserves the captured version and does not upgrade legacy
+ * captures or invent deployment defaults. Workerd captures remain rejected; recognized non-Workerd
+ * profiles can still be unavailable to `createTargetedHost`. If publication changes the selected
+ * record while its bytes are read, the shared reader retries only after observing that change,
+ * with at most three read attempts.
  *
  * @param buildDirectory - Completed build directory containing `hesperia-build.json`.
- * @returns The correlated targeted capture for an in-process owner.
- * @throws {TypeError} If the record is not outer-V3 targeted data, selects Workerd, or has invalid
- * controls, capture directories, inventories, paths, or artifact bytes. Record parsing,
- * filesystem, and digest failures retain their original rejection.
+ * @returns The correlated V3 legacy or V4 deployment capture for an in-process owner.
+ * @throws {TypeError} If the record is not supported targeted data, selects Workerd, or has
+ * invalid controls, deployment binding, capture directories, inventories, paths, or artifact
+ * bytes. Record parsing, filesystem, and digest failures retain their original rejection.
  */
 export async function readTargetedBuild(
   buildDirectory: string,
-): Promise<InProcessTargetedCapturedBuild> {
+): Promise<InProcessTargetedCapturedBuild | InProcessTargetedDeploymentCapturedBuildV4> {
   return (await import("./read-build.ts")).readTargetedBuildDirectory(buildDirectory);
 }
 
@@ -273,146 +288,4 @@ export async function readServerBuild(buildDirectory: string): Promise<CapturedS
   return (await import("./read-build.ts")).readServerBuildDirectory(buildDirectory);
 }
 
-/**
- * Capture, validate, and host one immutable browser build at a selected mount.
- *
- * With no selection, an empty selection object, or `mountURL: undefined`, the
- * saved canonical mount is used. A supplied mount override is canonicalized.
- * The build and selection are copied synchronously before the first digest
- * operation, so later caller changes cannot alter the host's inventory.
- *
- * Version 2 public files are served only at their exact mount-relative URL paths
- * for GET and HEAD requests. Public files stay separate from managed `/assets/...`
- * files under `/_hesperia/assets/...`. Public misses follow the existing HTML
- * document fallback or backend fallthrough policy; non-GET/HEAD methods remain
- * available to another host.
- *
- * The promise rejects with `TypeError` when the record version or mode is
- * unsupported, a mount or inventory path is unsafe or noncanonical, the startup
- * asset is absent, either inventory does not exactly match its file map, a media
- * type or digest is invalid, or the selection contains unknown fields.
- */
-export async function createHost(
-  build: CapturedBuild,
-  selection?: HostSelection,
-): Promise<ApplicationHost> {
-  const snapshot = captureInput(build, selection);
-  const mountPathname = resolveMountPath(snapshot);
-  const assets = await validateAssets(snapshot);
-  const publicFiles = await validatePublicFiles(snapshot);
-  const startup = assets.get(snapshot.startupAsset as string);
-
-  if (!startup) throw new TypeError("startupAsset is missing from the captured asset inventory");
-
-  const {
-    assetPath,
-    startupURL,
-    startupWrapper: wrapperBlob,
-    document: documentBlob,
-  } = createBrowserArtifacts(mountPathname, snapshot.startupAsset as string);
-  const mount = Object.freeze({ pathname: mountPathname, assetPath });
-
-  return Object.freeze({
-    mount,
-
-    handle(request: Request): Response | undefined {
-      const resourceResponse = respondToStaticRequest(
-        request,
-        mountPathname,
-        assetPath,
-        startupURL,
-        wrapperBlob,
-        assets,
-        publicFiles,
-      );
-
-      if (resourceResponse !== undefined) return resourceResponse;
-
-      if (!isWithinPathname(new URL(request.url).pathname, mountPathname)) return undefined;
-
-      if (
-        (request.method !== "GET" && request.method !== "HEAD") ||
-        !acceptsHTML(request.headers.get("accept"))
-      )
-        return undefined;
-
-      return staticResponse(request, documentBlob);
-    },
-  });
-}
-
-function respondToStaticRequest(
-  request: Request,
-  mountPathname: string,
-  assetPath: string,
-  startupURL: string,
-  wrapperBlob: Blob,
-  assets: ReadonlyMap<string, { readonly blob: Blob; readonly contentType: string }>,
-  publicFiles: ReadonlyMap<string, { readonly blob: Blob; readonly contentType: string }>,
-): Response | undefined {
-  const pathname = new URL(request.url).pathname;
-
-  if (isWithinPathname(pathname, assetPath)) {
-    if (pathname === startupURL) return staticResponse(request, wrapperBlob);
-
-    const assetPrefix = `${assetPath}/assets/`;
-
-    if (pathname.startsWith(assetPrefix)) {
-      const logicalPath = `/assets/${pathname.slice(assetPrefix.length)}`;
-
-      try {
-        assertCanonicalAssetPath(logicalPath, "asset path");
-      } catch {
-        return new Response(null, { status: 404 });
-      }
-
-      const asset = assets.get(logicalPath);
-      return asset
-        ? staticResponse(request, asset.blob, asset.contentType)
-        : new Response(null, { status: 404 });
-    }
-
-    return new Response(null, { status: 404 });
-  }
-
-  if (!isWithinPathname(pathname, mountPathname)) return undefined;
-
-  const publicPath = mountPathname === "/" ? pathname : pathname.slice(mountPathname.length);
-  const publicFile = publicFiles.get(publicPath);
-
-  if (publicFile && (request.method === "GET" || request.method === "HEAD"))
-    return staticResponse(request, publicFile.blob, publicFile.contentType);
-
-  return undefined;
-}
-
-function isWithinPathname(pathname: string, prefix: string): boolean {
-  return prefix === "/" || pathname === prefix || pathname.startsWith(`${prefix}/`);
-}
-
-function acceptsHTML(accept: string | null): boolean {
-  if (!accept) return false;
-
-  return accept.split(",").some((range) => {
-    const [mediaType, ...parameters] = range.trim().split(";");
-
-    if (mediaType?.trim().toLowerCase() !== "text/html") return false;
-
-    const quality = parameters
-      .map((parameter) => parameter.trim())
-      .find((parameter) => parameter.toLowerCase().startsWith("q="));
-
-    if (!quality) return true;
-
-    const value = Number(quality.slice(2));
-    return Number.isFinite(value) && value > 0;
-  });
-}
-
-function staticResponse(request: Request, blob: Blob, contentType = blob.type): Response {
-  if (request.method !== "GET" && request.method !== "HEAD")
-    return new Response(null, { status: 405, headers: { allow: "GET, HEAD" } });
-
-  const headers = new Headers({ "content-type": contentType, "content-length": String(blob.size) });
-  return new Response(request.method === "HEAD" ? null : blob, { status: 200, headers });
-}
+export { createHost } from "./application-host.ts";

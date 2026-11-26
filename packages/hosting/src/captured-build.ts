@@ -1,3 +1,6 @@
+import { snapshotDeployment } from "./deployment.ts";
+import type { TargetedDeploymentCapturedBuildV4 } from "./build-control.ts";
+import { snapshotHostSelection } from "./host-selection.ts";
 import {
   assertCanonicalPublicFilePath,
   canonicalizeMountURL,
@@ -252,6 +255,34 @@ export async function validateTargetedCapturedBuild(
   throw new TypeError("targeted control and inventory variants do not match");
 }
 
+export async function validateTargetedDeploymentCapturedBuild(
+  value: unknown,
+): Promise<TargetedDeploymentCapturedBuildV4> {
+  const wrapper = ownDataFields(value, "targeted deployment captured build");
+
+  assertExactKeys(
+    wrapper,
+    ["version", "control", "inventory", "deployment"],
+    "targeted deployment captured build",
+  );
+
+  if (wrapper.version !== 4)
+    throw new TypeError("unsupported targeted deployment captured build version");
+
+  const control = snapshotTargetedControl(wrapper.control);
+  const deployment = snapshotDeployment(wrapper.deployment);
+  const captured = await validateTargetedCapturedBuild({
+    control,
+    inventory: wrapper.inventory,
+  });
+
+  return Object.freeze({
+    version: 4 as const,
+    ...captured,
+    deployment,
+  });
+}
+
 export function captureInput(build: CapturedBuild, selection?: HostSelection): CapturedSnapshot {
   if (!isRecord(build)) throw new TypeError("build must be a captured browser build");
 
@@ -353,18 +384,7 @@ export function captureInput(build: CapturedBuild, selection?: HostSelection): C
       throw new TypeError("public file inventory and file map do not match");
   }
 
-  let selectedMountURL: unknown;
-
-  if (selection !== undefined) {
-    if (!isRecord(selection)) throw new TypeError("selection must be a record");
-
-    const selectionKeys = Reflect.ownKeys(selection);
-
-    if (selectionKeys.some((key) => key !== "mountURL"))
-      throw new TypeError("host selection has unexpected fields");
-
-    if (selectionKeys.includes("mountURL")) selectedMountURL = selection.mountURL;
-  }
+  const selectedMountURL = snapshotHostSelection(selection)?.mountURL;
 
   return {
     version,

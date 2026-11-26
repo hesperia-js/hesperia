@@ -14,6 +14,7 @@ import {
   readDevelopmentBuildRecord,
   readManagedBuildRecord,
   resolveProductionTarget,
+  resolveCapturedDeployment,
   snapshotTargetedControl,
 } from "../../packages/hosting/src/internal/index.ts";
 import { readRetainedManagedBuild } from "../../packages/hosting/src/read-build.ts";
@@ -572,6 +573,173 @@ test("a targeted browser capture serves its recorded route and drains on close",
     await filesystem.rm(root, { recursive: true, force: true });
   }
 });
+
+test("V4 deployment readback retains old unknown and selected single origins", async () => {
+  const root = await filesystem.mkdtemp(join(tmpdir(), "hesperia-targeted-origin-record-"));
+
+  try {
+    const written = await targetedFixture(root);
+    await writeTargetedRouting(written, browserRouting());
+    const captured = await readTargetedBuild(root);
+    const oldDeployment = resolveCapturedDeployment(captured.inventory);
+    const assetDirectory = written.record.assetDirectory;
+    const writeRecord = async (deployment: typeof oldDeployment) => {
+      await filesystem.writeFile(
+        written.recordPath,
+        JSON.stringify(
+          {
+            version: 4,
+            control: captured.control,
+            deployment,
+            assetDirectory,
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+    };
+
+    await writeRecord(oldDeployment);
+    const old = await readTargetedBuild(root);
+
+    if (!("deployment" in old)) throw new Error("Expected V4 deployment");
+
+    expect(old.deployment).toEqual(oldDeployment);
+    expect(old.deployment.version).toBe(1);
+
+    const selected = resolveCapturedDeployment(captured.inventory, {
+      generatedAssets: { baseURL: "https://static.example.test/deploy/" },
+      applicationOrigin: "https://example.test",
+    });
+    await writeRecord(selected);
+    const restored = await readTargetedBuild(root);
+
+    if (!("deployment" in restored)) throw new Error("Expected V4 deployment");
+
+    expect(restored.deployment).toEqual(selected);
+    expect(restored.deployment.version).toBe(2);
+    const moved = resolveCapturedDeployment(
+      restored.inventory,
+      { mountURL: "/preview" },
+      restored.deployment,
+    );
+    expect(moved.version).toBe(2);
+    if (moved.version !== 2) throw new Error("Expected selected origin");
+    expect(moved.applicationOrigin).toBe("https://example.test");
+    expect(moved.generatedAssets).toEqual(restored.deployment.generatedAssets);
+  } finally {
+    await filesystem.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a targeted host rejects a generated startup on its checked page destination", async () => {
+  const root = await filesystem.mkdtemp(join(tmpdir(), "hesperia-targeted-route-collision-"));
+
+  try {
+    const written = await targetedFixture(root);
+    const routing = {
+      ...browserRouting(),
+      pages: [
+        {
+          id: "assets/startup.js",
+          pattern: "/assets/startup.js",
+          segments: [
+            { kind: "static", value: "assets" },
+            { kind: "static", value: "startup.js" },
+          ],
+        },
+      ],
+    };
+    await writeTargetedRouting(written, routing);
+    const captured = await readTargetedBuild(root);
+
+    await expect(
+      createTargetedHost(captured, {
+        generatedAssets: { baseURL: "/dashboard/assets/" },
+      }),
+    ).rejects.toThrow("collides");
+
+    const resource = await createTargetedHost(captured, {
+      generatedAssets: { baseURL: "https://static.example.test/dashboard/assets/" },
+      applicationOrigin: "http://localhost",
+    });
+
+    if (resource.kind !== "browser") throw new Error("Expected the browser host");
+
+    const page = resource.host.handle(
+      new Request("http://localhost/dashboard/assets/startup.js", {
+        headers: { accept: "text/html" },
+      }),
+    );
+    const generated = resource.host.handle(
+      new Request("https://static.example.test/dashboard/assets/startup.js"),
+    );
+
+    expect(page?.status).toBe(200);
+    expect(await page?.text()).toContain("https://static.example.test/dashboard/assets/startup.js");
+    expect(generated?.status).toBe(200);
+    await generated?.text();
+    await resource.close();
+  } finally {
+    await filesystem.rm(root, { recursive: true, force: true });
+  }
+});
+
+test.each(["/dashboard/", "http://localhost/dashboard/"])(
+  "a targeted host serves a recorded page under an unowned generated path (%s)",
+  async (baseURL) => {
+    const root = await filesystem.mkdtemp(join(tmpdir(), "hesperia-targeted-prefix-"));
+
+    try {
+      const written = await targetedFixture(root);
+      const routing = {
+        ...browserRouting(),
+        pages: [
+          {
+            id: "assets/page",
+            pattern: "/assets/page",
+            segments: [
+              { kind: "static", value: "assets" },
+              { kind: "static", value: "page" },
+            ],
+          },
+        ],
+      };
+      await writeTargetedRouting(written, routing);
+
+      const resource = await createTargetedHost(await readTargetedBuild(root), {
+        generatedAssets: { baseURL },
+      });
+
+      if (resource.kind !== "browser") throw new Error("Expected the browser host");
+
+      const page = resource.host.handle(
+        new Request("http://localhost/dashboard/assets/page", { headers: { accept: "text/html" } }),
+      );
+
+      expect(page?.status).toBe(200);
+      expect(await page?.text()).toContain(`${baseURL}startup.js`);
+      expect(
+        resource.host.handle(new Request("http://localhost/dashboard/assets/missing.js"))?.status,
+      ).toBe(404);
+      expect(
+        resource.host.handle(new Request("http://localhost/dashboard/assets/%2Fsecret.js"))?.status,
+      ).toBe(404);
+      expect(
+        resource.host.handle(
+          new Request("http://localhost/dashboard/assets/startup.mjs", { method: "POST" }),
+        )?.status,
+      ).toBe(405);
+      expect(
+        resource.host.handle(new Request("http://localhost/dashboard/_hesperia/assets/missing.js"))
+          ?.status,
+      ).toBe(404);
+      await resource.close();
+    } finally {
+      await filesystem.rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("a targeted browser host snapshots and serves an explicit preview mount", async () => {
   const root = await filesystem.mkdtemp(join(tmpdir(), "hesperia-targeted-preview-"));

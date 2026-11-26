@@ -1,0 +1,5 @@
+@import "./page-import-detail.css";
+
+.asset-proof {
+  --generated-assets-import: loaded;
+}

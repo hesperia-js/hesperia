@@ -13,8 +13,16 @@ import {
   snapshotPublicFileMetadata,
   snapshotTargetedControl,
   validateTargetedCapturedBuild,
+  validateTargetedDeploymentCapturedBuild,
 } from "./captured-build.ts";
-import type { InProcessTargetedCapturedBuild, TargetedCapturedBuild } from "./build-control.ts";
+import type {
+  InProcessTargetedCapturedBuild,
+  InProcessTargetedDeploymentCapturedBuildV4,
+  TargetedCapturedBuild,
+  TargetedControlRecordV3,
+  TargetedDeploymentCapturedBuildV4,
+} from "./build-control.ts";
+import { snapshotDeployment, type ResolvedDeployment } from "./deployment.ts";
 import type {
   CapturedBuild,
   CapturedBrowserBuild,
@@ -72,29 +80,34 @@ export async function readServerBuildDirectory(
  */
 export async function readCompletedBuildDirectory(
   buildDirectory: string,
-): Promise<CapturedBuild | CapturedServerBuild | TargetedCapturedBuild> {
-  return readBuildDirectoryWithRetry<CapturedBuild | CapturedServerBuild | TargetedCapturedBuild>(
-    buildDirectory,
-    (output, recordSource) => {
-      const record = JSON.parse(recordSource) as Record<string, unknown>;
+): Promise<
+  CapturedBuild | CapturedServerBuild | TargetedCapturedBuild | TargetedDeploymentCapturedBuildV4
+> {
+  return readBuildDirectoryWithRetry<
+    CapturedBuild | CapturedServerBuild | TargetedCapturedBuild | TargetedDeploymentCapturedBuildV4
+  >(buildDirectory, (output, recordSource) => {
+    const record = JSON.parse(recordSource) as Record<string, unknown>;
 
-      if (!isRecord(record) || !isRecord(record.hosting))
-        throw new TypeError("The completed build record has no hosting metadata");
+    if (!isRecord(record)) throw new TypeError("The completed build record must be an object");
 
-      if (record.version === undefined || record.version === 1)
-        return readCapture(output, recordSource);
+    if (record.version === 4) return readTargetedDeploymentCapture(output, recordSource, record);
 
-      if (record.version === 2) return readServerCapture(output, recordSource);
+    if (!isRecord(record.hosting))
+      throw new TypeError("The completed build record has no hosting metadata");
 
-      if (record.version === 3) return readTargetedCapture(output, recordSource, record);
+    if (record.version === undefined || record.version === 1)
+      return readCapture(output, recordSource);
 
-      throw new TypeError("unsupported completed build record version");
-    },
-  );
+    if (record.version === 2) return readServerCapture(output, recordSource);
+
+    if (record.version === 3) return readTargetedCapture(output, recordSource, record);
+
+    throw new TypeError("unsupported completed build record version");
+  });
 }
 
 /**
- * Read a completed outer-V3 targeted capture admitted to the in-process build type.
+ * Read a completed targeted capture admitted to the in-process build type.
  *
  * The completed reader validates the selected control, same-capture directories, inventory
  * correspondence, and captured bytes before this function returns the same wrapper. It does not
@@ -102,19 +115,21 @@ export async function readCompletedBuildDirectory(
  * host profile is unavailable; `createTargetedHost` owns that separate admission decision.
  *
  * @param buildDirectory - Completed build directory containing `hesperia-build.json`.
- * @returns The validated control and inventory wrapper, unchanged.
- * @throws {TypeError} If the selected record is not outer-V3 targeted data, selects Workerd, or
+ * @returns The validated V3 or V4 control and inventory wrapper, unchanged.
+ * @throws {TypeError} If the selected record is not targeted data, selects Workerd, or
  * contains invalid controls, directories, inventories, paths, or artifact bytes. Filesystem,
  * record-parsing, and digest failures retain their original rejection. A changed publication
  * record may trigger the shared bounded retry, which makes at most three read attempts.
  */
 export async function readTargetedBuildDirectory(
   buildDirectory: string,
-): Promise<InProcessTargetedCapturedBuild> {
+): Promise<InProcessTargetedCapturedBuild | InProcessTargetedDeploymentCapturedBuildV4> {
   const completed = await readCompletedBuildDirectory(buildDirectory);
 
   if (!("control" in completed))
-    throw new TypeError("readTargetedBuild requires an outer version 3 targeted capture");
+    throw new TypeError(
+      "readTargetedBuild requires an outer version 3 targeted capture or an outer version 4 deployment capture",
+    );
 
   if (!isInProcessTargetedCapturedBuild(completed))
     throw new TypeError("workerd captures require their separate worker package and preview owner");
@@ -123,13 +138,13 @@ export async function readTargetedBuildDirectory(
 }
 
 function isInProcessTargetedCapturedBuild(
-  completed: TargetedCapturedBuild,
-): completed is InProcessTargetedCapturedBuild {
+  completed: TargetedCapturedBuild | TargetedDeploymentCapturedBuildV4,
+): completed is InProcessTargetedCapturedBuild | InProcessTargetedDeploymentCapturedBuildV4 {
   return completed.control.productionTarget.declaration.runtime !== "workerd";
 }
 
 /**
- * Read the managed projection of a supplied canonical outer-V3 completed record.
+ * Read the managed projection of a supplied canonical outer-V3 or outer-V4 completed record.
  *
  * The record's directories remain relative to the build root. Target controls and same-capture
  * directories are validated, and all inner hosting versions yield a V1 managed inventory.
@@ -138,7 +153,7 @@ function isInProcessTargetedCapturedBuild(
  * Public and private bytes are neither read nor returned, and no application entry is evaluated.
  *
  * @param buildDirectory - Build root containing the record's managed asset directory.
- * @param recordSource - Original canonical outer-V3 completed record text.
+ * @param recordSource - Original canonical outer-V3 or outer-V4 completed record text.
  * @returns The record's canonical capture ID and owned, digest-verified managed inventory.
  * @throws TypeError through rejection for malformed controls, crossed captures, unsafe paths,
  * links or invalid managed bytes. Record and filesystem failures retain their rejection.
@@ -146,20 +161,23 @@ function isInProcessTargetedCapturedBuild(
 export async function readManagedBuildRecord(
   buildDirectory: string,
   recordSource: string,
-): Promise<{ readonly captureId: string; readonly inventory: CapturedBrowserBuild }> {
+): Promise<ManagedBuildCapture> {
   const output = await resolveBuildDirectory(buildDirectory);
   const capture = snapshotManagedBuildRecord(recordSource);
 
-  return {
-    captureId: capture.captureId,
-    inventory: await readManagedCapture(output, capture),
-  };
+  return readManagedCapture(output, capture);
+}
+
+interface ManagedBuildCapture {
+  readonly captureId: string;
+  readonly inventory: CapturedBrowserBuild;
+  readonly deployment?: ResolvedDeployment;
 }
 
 /**
  * Read only the managed bytes of one retained, target-bound production capture.
  *
- * The archive is the original canonical outer-V3 completed record at
+ * The archive is the original canonical outer-V3 or outer-V4 completed record at
  * `.captures/<captureId>/hesperia-build.json`; its directories remain relative to the build root.
  * All inner hosting versions are projected to a legacy V1 managed inventory. Public and private
  * files are neither read nor returned, and no application entry is evaluated. This function does
@@ -175,6 +193,21 @@ export async function readRetainedManagedBuild(
   buildDirectory: string,
   captureId: string,
 ): Promise<CapturedBrowserBuild> {
+  return (await readRetainedManagedCapture(buildDirectory, captureId)).inventory;
+}
+
+/**
+ * Read verified managed bytes and any explicit deployment from their archived publication.
+ * @param buildDirectory - Build root containing the retained capture.
+ * @param captureId - Canonical capture ID that must match the archived record.
+ * @returns Managed bytes paired with the original resolved deployment when available.
+ * @throws TypeError through rejection for mismatched IDs, malformed records or invalid artifacts.
+ * @internal
+ */
+export async function readRetainedManagedCapture(
+  buildDirectory: string,
+  captureId: string,
+): Promise<ManagedBuildCapture> {
   if (typeof captureId !== "string" || !captureIdPattern.test(captureId))
     throw new TypeError("The retained capture ID must be a canonical UUID");
 
@@ -196,10 +229,13 @@ export async function readRetainedManagedBuild(
 function snapshotManagedBuildRecord(recordSource: string) {
   const record: unknown = JSON.parse(recordSource);
 
-  if (!isRecord(record) || record.version !== 3)
-    throw new TypeError("A managed build record must use outer version 3");
+  if (!isRecord(record) || (record.version !== 3 && record.version !== 4))
+    throw new TypeError("A managed build record must use outer version 3 or 4");
 
-  const capture = snapshotTargetedCaptureRecord(recordSource, record);
+  const capture =
+    record.version === 4
+      ? snapshotTargetedDeploymentCaptureRecord(recordSource, record)
+      : snapshotTargetedCaptureRecord(recordSource, record);
 
   if (!captureIdPattern.test(capture.captureId))
     throw new TypeError("The managed build capture ID must be a canonical UUID");
@@ -209,8 +245,8 @@ function snapshotManagedBuildRecord(recordSource: string) {
 
 async function readManagedCapture(
   output: string,
-  capture: ReturnType<typeof snapshotTargetedCaptureRecord>,
-): Promise<CapturedBrowserBuild> {
+  capture: TargetedCaptureLocations | TargetedDeploymentCaptureLocations,
+): Promise<ManagedBuildCapture> {
   const capturedHosting = capture.control.hosting;
   const hosting: HostingRecordV1 = {
     version: 1,
@@ -231,8 +267,12 @@ async function readManagedCapture(
     throw new TypeError("startupAsset is missing from the captured asset inventory");
 
   return {
-    hosting,
-    files: new Map([...assets].map(([path, asset]) => [path, asset.blob])),
+    captureId: capture.captureId,
+    inventory: {
+      hosting,
+      files: new Map([...assets].map(([path, asset]) => [path, asset.blob])),
+    },
+    ...("deployment" in capture ? { deployment: capture.deployment } : {}),
   };
 }
 
@@ -595,15 +635,48 @@ async function readServerCapture(
   };
 }
 
+interface TargetedCaptureLocations {
+  readonly control: TargetedControlRecordV3;
+  readonly captureId: string;
+  readonly assetDirectory: string;
+}
+
+interface TargetedDeploymentCaptureLocations extends TargetedCaptureLocations {
+  readonly deployment: ResolvedDeployment;
+}
+
 async function readTargetedCapture(
   output: string,
   recordSource: string,
   record: Record<string, unknown>,
 ): Promise<TargetedCapturedBuild> {
-  const { control, captureId, assetDirectory } = snapshotTargetedCaptureRecord(
-    recordSource,
-    record,
-  );
+  const capture = snapshotTargetedCaptureRecord(recordSource, record);
+  const inventory = await readTargetedCaptureInventory(output, capture);
+
+  return validateTargetedCapturedBuild({ control: capture.control, inventory });
+}
+
+async function readTargetedDeploymentCapture(
+  output: string,
+  recordSource: string,
+  record: Record<string, unknown>,
+): Promise<TargetedDeploymentCapturedBuildV4> {
+  const capture = snapshotTargetedDeploymentCaptureRecord(recordSource, record);
+  const inventory = await readTargetedCaptureInventory(output, capture);
+
+  return validateTargetedDeploymentCapturedBuild({
+    version: 4,
+    control: capture.control,
+    inventory,
+    deployment: capture.deployment,
+  });
+}
+
+async function readTargetedCaptureInventory(
+  output: string,
+  capture: TargetedCaptureLocations,
+): Promise<Record<string, unknown>> {
+  const { control, captureId, assetDirectory } = capture;
   const hosting = control.hosting;
   const assetsRoot = await resolveRealDirectory(output, assetDirectory, "asset directory");
   const files = await readManagedCaptureFiles(assetsRoot, hosting.assets);
@@ -653,7 +726,7 @@ async function readTargetedCapture(
     inventory.serverFiles = serverFiles;
   }
 
-  return validateTargetedCapturedBuild({ control, inventory });
+  return inventory;
 }
 
 function snapshotTargetedCaptureRecord(recordSource: string, record: Record<string, unknown>) {
@@ -709,6 +782,65 @@ function snapshotTargetedCaptureRecord(recordSource: string, record: Record<stri
     throw new TypeError("The targeted build record must use its canonical JSON encoding");
 
   return { control, captureId, assetDirectory };
+}
+
+function snapshotTargetedDeploymentCaptureRecord(
+  recordSource: string,
+  record: Record<string, unknown>,
+): TargetedDeploymentCaptureLocations {
+  if (record.version !== 4)
+    throw new TypeError("A targeted deployment build record must use outer version 4");
+
+  const control = snapshotTargetedControl(record.control);
+  const deployment = snapshotDeployment(record.deployment);
+  const hosting = control.hosting;
+  const expectedKeys = ["version", "control", "deployment", "assetDirectory"];
+
+  if (hosting.version !== 1) expectedKeys.push("publicDirectory");
+
+  if (hosting.version === 3) expectedKeys.push("serverDirectory");
+
+  const actualKeys = Reflect.ownKeys(record);
+
+  if (
+    actualKeys.length !== expectedKeys.length ||
+    actualKeys.some((key) => typeof key !== "string" || !expectedKeys.includes(key))
+  )
+    throw new TypeError("The targeted deployment build record has unknown or missing fields");
+
+  const assetDirectory = record.assetDirectory;
+  const publicDirectory = record.publicDirectory;
+  const serverDirectory = record.serverDirectory;
+
+  if (typeof assetDirectory !== "string")
+    throw new TypeError("The targeted deployment asset directory must be a string");
+
+  const captureId = /^\.captures\/([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\/assets$/u.exec(
+    assetDirectory,
+  )?.[1];
+
+  if (
+    !captureId ||
+    (hosting.version !== 1 && publicDirectory !== `.captures/${captureId}/public`) ||
+    (hosting.version === 3 && serverDirectory !== `.captures/${captureId}/server`)
+  )
+    throw new TypeError("The targeted deployment directories must share one capture");
+
+  const normalized = {
+    version: 4 as const,
+    control,
+    deployment,
+    assetDirectory,
+    ...(hosting.version !== 1 ? { publicDirectory } : {}),
+    ...(hosting.version === 3 ? { serverDirectory } : {}),
+  };
+
+  if (JSON.stringify(normalized, null, 2) + "\n" !== recordSource)
+    throw new TypeError(
+      "The targeted deployment build record must use its canonical JSON encoding",
+    );
+
+  return { control, deployment, captureId, assetDirectory };
 }
 
 async function readManagedCaptureFiles(

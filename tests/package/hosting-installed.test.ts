@@ -276,12 +276,12 @@ test("packed hosting serves legacy mounts and renders a browser/static capture i
       expect(document.status).toBe(200);
 
       expect(await document.text()).toContain(
-        '<script type="module" src="' + assetBase + '/startup.js">',
+        '<script type="module" crossorigin="anonymous" src="' + assetBase + '/startup.js">',
       );
 
       const wrapper = await fetch(new URL(assetBase + "/startup.js", fixture.url));
 
-      expect(await wrapper.text()).toContain('await start("' + (fixture.mount || "/") + '")');
+      expect(await wrapper.text()).toContain('await start("' + (fixture.mount || "/") + '",');
 
       for (const asset of serving.hosting.assets) {
         const response = await fetch(new URL(assetBase + asset.path, fixture.url));
@@ -413,7 +413,7 @@ test("packed hosting serves legacy mounts and renders a browser/static capture i
     expect(previewDocument.status).toBe(200);
 
     expect(await previewDocument.text()).toContain(
-      '<script type="module" src="/dashboard/_hesperia/startup.js">',
+      '<script type="module" crossorigin="anonymous" src="/dashboard/_hesperia/startup.js">',
     );
 
     for (const path of ["/hesperia-build.json", "/src/routes/+route.ts", "/package.json"]) {

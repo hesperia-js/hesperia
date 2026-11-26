@@ -1,3 +1,4 @@
+import type { ResolvedDeployment } from "./deployment.ts";
 import type {
   CapturedBrowserBuild,
   CapturedPublicBuild,
@@ -176,6 +177,51 @@ export type PersistedServerV3 = ServerControlV3 & {
 /** The new outer completed-record variants, independent of legacy formats. */
 export type PersistedTargetedBuildV3 = PersistedBrowserV3 | PersistedServerV3;
 
+/** Persisted targeted build with an explicit resolved deployment binding. */
+export type PersistedTargetedDeploymentV4 =
+  | {
+      /** Outer completed-record format version. */
+      readonly version: 4;
+      /** Unchanged outer-V3 production control. */
+      readonly control: BrowserControlV3<HostingRecordV1>;
+      /** Explicit resolved deployment selected independently from the control. */
+      readonly deployment: ResolvedDeployment;
+      /** Same-capture managed asset directory. */
+      readonly assetDirectory: string;
+      /** Hosting V1 has no public directory. */
+      readonly publicDirectory?: never;
+      /** Browser captures have no private server directory. */
+      readonly serverDirectory?: never;
+    }
+  | {
+      /** Outer completed-record format version. */
+      readonly version: 4;
+      /** Unchanged outer-V3 production control. */
+      readonly control: BrowserControlV3<HostingRecordV2>;
+      /** Explicit resolved deployment selected independently from the control. */
+      readonly deployment: ResolvedDeployment;
+      /** Same-capture managed asset directory. */
+      readonly assetDirectory: string;
+      /** Same-capture public directory, including an empty inventory. */
+      readonly publicDirectory: string;
+      /** Browser captures have no private server directory. */
+      readonly serverDirectory?: never;
+    }
+  | {
+      /** Outer completed-record format version. */
+      readonly version: 4;
+      /** Unchanged outer-V3 server control. */
+      readonly control: ServerControlV3;
+      /** Explicit resolved deployment selected independently from the control. */
+      readonly deployment: ResolvedDeployment;
+      /** Same-capture managed asset directory. */
+      readonly assetDirectory: string;
+      /** Same-capture public directory, including an empty inventory. */
+      readonly publicDirectory: string;
+      /** Same-capture private server-module directory. */
+      readonly serverDirectory: string;
+    };
+
 /** Source-free target wrapper; runtime validation must prove control/inventory correspondence. */
 export type TargetedCapturedBuild<
   Target extends CapturedProductionTargetV1 = CapturedProductionTargetV1,
@@ -199,10 +245,28 @@ export type TargetedCapturedBuild<
       readonly inventory: CapturedServerBuild;
     };
 
+/** Verified targeted inventory retaining the exact resolved deployment choice. */
+export type TargetedDeploymentCapturedBuildV4 = TargetedCapturedBuild & {
+  /** Completed-record format version. */
+  readonly version: 4;
+  /** Strictly snapshotted resolved deployment; no raw selector or default is retained. */
+  readonly deployment: ResolvedDeployment;
+};
+
 /** Targeted inputs admitted by the future in-process host resource, excluding workerd. */
 export type InProcessTargetedCapturedBuild = TargetedCapturedBuild<
   Exclude<CapturedProductionTargetV1, WorkerdBinding>
 >;
+
+/** V4 targeted input admitted to in-process hosts, excluding Workerd. */
+export type InProcessTargetedDeploymentCapturedBuildV4 = TargetedCapturedBuild<
+  Exclude<CapturedProductionTargetV1, WorkerdBinding>
+> & {
+  /** Completed-record format version. */
+  readonly version: 4;
+  /** Strictly snapshotted resolved deployment. */
+  readonly deployment: ResolvedDeployment;
+};
 
 /** Generated worker data; this type alone verifies neither bytes nor module registration. */
 export interface WorkerCaptureDataV1 {

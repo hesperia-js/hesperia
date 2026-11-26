@@ -1,13 +1,20 @@
+import { createHostForDeployment, createHostWithRouting } from "./application-host.ts";
+import { snapshotDeployment, type ResolvedDeployment } from "./deployment.ts";
+import type { InProcessTargetedDeploymentCapturedBuildV4 } from "./build-control.ts";
+import { resolveCapturedDeployment } from "./captured-deployment.ts";
+import { relativeGeneratedRequestPath } from "./generated-assets.ts";
 import type { InProcessTargetedCapturedBuild } from "./build-control.ts";
 import {
   captureInput,
   resolveMountPath,
   validateAssets,
+  assertCanonicalAssetPath,
   validateTargetedCapturedBuild,
+  validateTargetedDeploymentCapturedBuild,
+  isRecord,
 } from "./captured-build.ts";
 import { snapshotHostSelection } from "./host-selection.ts";
 import {
-  createHost,
   type ApplicationHost,
   type AsyncServerApplicationHost,
   type CapturedBrowserBuild,
@@ -50,18 +57,22 @@ export type TargetedHostResource =
 /**
  * Validate an in-process production capture and construct its owned target host.
  * @param build - Correlated control and captured inventory, excluding workerd packages.
- * @param selection - Optional application mount selection, canonicalized before verification.
+ * @param selection - Optional deployment overrides, captured before verification. A mount-only override retains a V4 deployment's generated asset binding.
  * @returns The admitted browser resource; native profiles require their owned implementation.
  * @throws TypeError through rejection for malformed captures, unavailable profiles or selections.
  * Artifact verification failures retain their original rejection. Native evaluation requires
  * the matching available profile and actual runtime after verification.
  */
 export async function createTargetedHost(
-  build: InProcessTargetedCapturedBuild,
+  build: InProcessTargetedCapturedBuild | InProcessTargetedDeploymentCapturedBuildV4,
   selection?: HostSelection,
 ): Promise<TargetedHostResource> {
   const selected = snapshotHostSelection(selection);
-  const captured = await validateTargetedCapturedBuild(build);
+  const deployed =
+    isRecord(build) && Object.hasOwn(build, "version")
+      ? await validateTargetedDeploymentCapturedBuild(build)
+      : undefined;
+  const captured = deployed ?? (await validateTargetedCapturedBuild(build));
   const binding = captured.control.productionTarget;
 
   if (binding.declaration.runtime === "workerd")
@@ -90,13 +101,22 @@ export async function createTargetedHost(
 
   const routing = await readBrowserStaticRouting(captured.inventory);
 
-  return browserResource(await createHost(captured.inventory, selected), routing);
+  const host = deployed
+    ? await createHostForDeployment(
+        captured.inventory,
+        resolveCapturedDeployment(captured.inventory, selected, deployed.deployment),
+        routing,
+      )
+    : await createHostWithRouting(captured.inventory, selected, routing);
+
+  return browserResource(host, routing, captured.inventory.files);
 }
 
 /**
  * Own retained production bytes without claiming old documents or public files.
  * @param build - Strict managed-only V1 projection from the retained capture reader.
  * @param selection - Optional explicit mount, captured before byte verification.
+ * @param deployment - Saved deployment of the retained capture, if available.
  * @returns A browser resource claiming only the selected reserved managed namespace.
  * @throws TypeError through rejection for invalid or non-production V1 inventories.
  * Byte failures retain their original cause. No application entry is evaluated.
@@ -105,8 +125,10 @@ export async function createTargetedHost(
 export async function createRetainedManagedHost(
   build: CapturedBrowserBuild,
   selection?: HostSelection,
+  deployment?: ResolvedDeployment,
 ): Promise<Extract<TargetedHostResource, { readonly kind: "browser" }>> {
   const selected = snapshotHostSelection(selection);
+  const inherited = deployment === undefined ? undefined : snapshotDeployment(deployment);
   const captured = captureInput(build, selected);
 
   if (captured.version !== 1 || captured.mode !== "production")
@@ -130,14 +152,23 @@ export async function createRetainedManagedHost(
     files: new Map([...assets].map(([path, asset]) => [path, asset.blob])),
   };
 
-  return browserResource(await createHost(inventory, selected), "managed");
+  const host = inherited
+    ? await createHostForDeployment(
+        inventory,
+        resolveCapturedDeployment(inventory, selected, inherited),
+      )
+    : await createHostWithRouting(inventory, selected);
+
+  return browserResource(host, "managed", inventory.files);
 }
 
 function browserResource(
   host: ApplicationHost,
   routing: BrowserStaticRoutingV1 | "managed",
+  assets: ReadonlyMap<string, Blob>,
 ): Extract<TargetedHostResource, { readonly kind: "browser" }> {
   const mount = host.mount;
+  const generatedAssets = host.generatedAssets;
   let open = true;
   let active = 0;
   let retained: ApplicationHost | undefined = host;
@@ -236,6 +267,7 @@ function browserResource(
 
   const gated: ApplicationHost = Object.freeze({
     mount,
+    generatedAssets,
     handle(request: Request): Response | undefined {
       if (!open) throw new TypeError("The targeted host is closed");
 
@@ -254,15 +286,43 @@ function browserResource(
 
       try {
         const url = new URL(request.url);
+        const generated = relativeGeneratedRequestPath(url, generatedAssets);
+        const generatedAsset = generated?.startsWith("assets/") === true;
+        const knownGenerated =
+          generated === "startup.js" || (generatedAsset && assets.has(`/${generated}`));
+        const reserved =
+          url.pathname === mount.assetPath || url.pathname.startsWith(`${mount.assetPath}/`);
+        let safeGeneratedPath = false;
+
+        if (generatedAsset && !knownGenerated) {
+          try {
+            assertCanonicalAssetPath(`/${generated}`, "asset path");
+            safeGeneratedPath = true;
+          } catch {
+            // Invalid generated paths must keep their managed 404 response.
+          }
+        }
+
+        const classified =
+          routing !== "managed" &&
+          !knownGenerated &&
+          !reserved &&
+          (!generatedAsset || safeGeneratedPath)
+            ? classifyBrowserStaticPath(routing, url, mount.pathname)
+            : undefined;
+        const admittedPath = classified?.kind === "public" || classified?.kind === "page";
         const path =
-          routing === "managed"
-            ? {
-                kind:
-                  url.pathname === mount.assetPath || url.pathname.startsWith(`${mount.assetPath}/`)
-                    ? ("managed" as const)
-                    : ("outside" as const),
-              }
-            : classifyBrowserStaticPath(routing, url, mount.pathname);
+          knownGenerated || reserved || (generatedAsset && !admittedPath)
+            ? { kind: "managed" as const }
+            : routing === "managed"
+              ? {
+                  kind:
+                    url.pathname === mount.assetPath ||
+                    url.pathname.startsWith(`${mount.assetPath}/`)
+                      ? ("managed" as const)
+                      : ("outside" as const),
+                }
+              : classified!;
 
         if (path.kind === "outside") return undefined;
 

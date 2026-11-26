@@ -65,8 +65,9 @@ Builds with no public files retain the version 1 record format.
 
 ## Serve a target-bound capture
 
-Use `readTargetedBuild` for a completed outer-version-3 production capture. It
-validates the selected target control and matching capture directories, then
+Use `readTargetedBuild` for a completed outer-version-3 production capture or an
+outer-version-4 deployment capture. It validates the selected target control and
+matching capture directories, then
 verifies every present managed, public, and private inventory byte without
 evaluating an application entry. It returns the complete validated
 control/inventory wrapper for `createTargetedHost`; it does not convert legacy
@@ -77,8 +78,10 @@ rejects both legacy shapes and Workerd captures. Recognized non-Workerd targets
 can be read even when their host profile is unavailable; `createTargetedHost`
 continues to decide which profiles it can admit.
 
-The current Tooling build does not produce outer-version-3 captures. The reader
-and host accept a capture produced elsewhere that meets this format.
+Tooling publishes a deployment capture when the project selects the browser/static
+production target. That capture retains the compiled control and saves the
+resolved deployment binding separately. A legacy browser build keeps its original
+format.
 
 ```ts
 import { resolve } from "node:path";
@@ -106,10 +109,15 @@ for admitted response bodies to be consumed or canceled. Consume or cancel those
 bodies before awaiting the close promise; repeated calls return the same
 completion promise.
 
-This host serves a browser startup wrapper; it does not render components on the
-server or produce a static-file deployment. See
-[mounts and generated assets](https://github.com/hesperia-js/hesperia/blob/main/packages/tooling/docs/project-configuration.md#application-mount-and-generated-assets)
-for the capture format and URL rules. The
+Set `generatedAssets.baseURL` in the host selection to change the generated asset
+directory. `applicationOrigin` identifies the single app origin when an absolute
+asset directory's pathname overlaps an app path. The host resolves the binding
+before it serves any request and refuses a concrete collision with a captured
+public file or page on the application origin. Pass the result of
+`readTargetedBuild` to `createTargetedHost` without an override to keep the
+deployment's saved binding. See the
+[generated asset guide](../tooling/docs/project-configuration.md#select-a-deployments-asset-base)
+for deployment and preview behavior. The
 [Elysia integration](https://github.com/hesperia-js/hesperia/blob/main/packages/elysia/docs/elysia.md)
 adds application routes and typed clients around the same hosting API.
 
