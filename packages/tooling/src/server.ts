@@ -23,6 +23,7 @@ import {
   type TargetedHostResource,
 } from "@hesperia/hosting";
 import {
+  AmbiguousGeneratedDestinationError,
   BROWSER_STATIC_ROUTING_ASSET,
   BROWSER_MODULE_PRELOADS_ASSET,
   createRetainedManagedHost,
@@ -53,59 +54,101 @@ export async function previewProject(
   const output = resolve(root, ".hesperia/build");
   const build = await readCompletedBuildDirectory(output);
   const resources: TargetedHostResource[] = [];
-  let server: ReturnType<typeof Bun.serve>;
+  let server: ReturnType<typeof Bun.serve> | undefined;
 
   try {
-    let host: ApplicationHost;
-    let inventory: PreviewInventory;
-
-    if ("control" in build) {
-      if (
-        build.control.kind !== "browser" ||
-        build.control.productionTarget.declaration.runtime !== "browser"
-      )
-        throw new ProjectError("Preview requires a browser/static target");
-
-      const resource = await createTargetedHost(
-        build as InProcessTargetedCapturedBuild | InProcessTargetedDeploymentCapturedBuildV4,
-        selected,
-      );
-      resources.push(resource);
-
-      if (resource.kind !== "browser") throw new ProjectError("Preview requires a browser host");
-
-      host = resource.host;
-      inventory = build.inventory;
-    } else {
-      if ("serverFiles" in build) throw new ProjectError("Preview requires a browser build");
-
-      host = await createHost(build, selected);
-      inventory = build;
-    }
-
-    const handle = await previewWithRetainedAssets(output, host, inventory, resources);
+    let handle: ApplicationHost["handle"] | undefined;
 
     server = Bun.serve({
       hostname: "127.0.0.1",
       port,
-      fetch: (request) => handle(request) ?? new Response(null, { status: 404 }),
+      fetch: (request) =>
+        handle
+          ? (handle(request) ?? new Response(null, { status: 404 }))
+          : new Response(null, { status: 503 }),
     });
+
+    const previewOrigin = server.url.origin;
+    const previewSelection = { ...selected, applicationOrigin: previewOrigin };
+    const hasBoundOrigin =
+      selected?.applicationOrigin !== undefined ||
+      ("deployment" in build && build.deployment.version === 2);
+    const construct = async (
+      choice: HostSelection | undefined,
+    ): Promise<{
+      readonly host: ApplicationHost;
+      readonly inventory: PreviewInventory;
+    }> => {
+      if ("control" in build) {
+        if (
+          build.control.kind !== "browser" ||
+          build.control.productionTarget.declaration.runtime !== "browser"
+        )
+          throw new ProjectError("Preview requires a browser/static target");
+
+        const resource = await createTargetedHost(
+          build as InProcessTargetedCapturedBuild | InProcessTargetedDeploymentCapturedBuildV4,
+          choice,
+        );
+        resources.push(resource);
+
+        if (resource.kind !== "browser") throw new ProjectError("Preview requires a browser host");
+
+        return { host: resource.host, inventory: build.inventory };
+      }
+
+      if ("serverFiles" in build) throw new ProjectError("Preview requires a browser build");
+
+      return { host: await createHost(build, choice), inventory: build };
+    };
+    let current: Awaited<ReturnType<typeof construct>>;
+
+    try {
+      current = await construct(hasBoundOrigin ? previewSelection : selected);
+    } catch (cause) {
+      if (hasBoundOrigin || !(cause instanceof AmbiguousGeneratedDestinationError)) throw cause;
+
+      current = await construct(previewSelection);
+    }
+
+    handle = await previewWithRetainedAssets(
+      output,
+      current.host,
+      current.inventory,
+      resources,
+      previewOrigin,
+    );
   } catch (cause) {
+    const failures: unknown[] = [cause];
+
+    if (server) {
+      try {
+        await server.stop(true);
+      } catch (cleanup) {
+        failures.push(cleanup);
+      }
+    }
+
     try {
       await closePreviewResources(resources);
     } catch (cleanup) {
-      throw new AggregateError([cause, cleanup], "Preview startup and host cleanup failed");
+      failures.push(cleanup);
     }
+
+    if (failures.length > 1)
+      throw new AggregateError(failures, "Preview startup and host cleanup failed");
 
     throw cause;
   }
 
+  const activeServer = server;
+
   return {
-    url: server.url,
+    url: activeServer.url,
 
     async close() {
       try {
-        await server.stop(true);
+        await activeServer.stop(true);
       } catch (cause) {
         try {
           await closePreviewResources(resources);
@@ -137,6 +180,7 @@ async function previewWithRetainedAssets(
   current: ApplicationHost,
   inventory: PreviewInventory,
   resources: TargetedHostResource[],
+  previewOrigin: string,
 ): Promise<ApplicationHost["handle"]> {
   const retained = new Map<string, Map<string, RetainedPreviewAsset>>();
   const currentRoot = current.generatedAssets.root;
@@ -144,7 +188,7 @@ async function previewWithRetainedAssets(
   for (const capture of await readRetainedManagedHistory(output)) {
     const resource = await createRetainedManagedHost(
       capture.inventory,
-      undefined,
+      capture.deployment?.version === 2 ? { applicationOrigin: previewOrigin } : undefined,
       capture.deployment,
     );
     resources.push(resource);

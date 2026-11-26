@@ -11,7 +11,11 @@ export type {
   InProcessTargetedDeploymentCapturedBuildV4,
   TargetedDeploymentCapturedBuildV4,
 } from "./build-control.ts";
-export type { ResolvedDeploymentV1 } from "./deployment.ts";
+export type {
+  ResolvedDeployment,
+  ResolvedDeploymentV1,
+  ResolvedDeploymentV2,
+} from "./deployment.ts";
 export type { GeneratedAssetSelection } from "./generated-assets.ts";
 export { snapshotProductionTarget } from "./target.ts";
 export { createTargetedHost } from "./targeted-host.ts";
@@ -189,6 +193,8 @@ export type CapturedBuild = CapturedBrowserBuild | CapturedPublicBuild;
 export interface HostSelection {
   /** Path-only mount override; raw Unicode is canonicalized before use. */
   readonly mountURL?: string;
+  /** Authoritative application origin for this deployment, when selected. */
+  readonly applicationOrigin?: string;
   /** Select the directory and module credentials for generated assets. */
   readonly generatedAssets?: GeneratedAssetSelection;
 }

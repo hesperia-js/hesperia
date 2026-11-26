@@ -1,5 +1,5 @@
 import { captureInput, captureServerInput, isRecord, resolveMountPath } from "./captured-build.ts";
-import type { ResolvedDeploymentV1 } from "./deployment.ts";
+import type { ResolvedDeployment } from "./deployment.ts";
 import { resolveGeneratedAssets } from "./generated-assets.ts";
 import { snapshotHostSelection } from "./host-selection.ts";
 import type { CapturedBuild, CapturedServerBuild, HostSelection } from "./index.ts";
@@ -23,8 +23,8 @@ import type { CapturedBuild, CapturedServerBuild, HostSelection } from "./index.
 export function resolveCapturedDeployment(
   build: CapturedBuild | CapturedServerBuild,
   selection?: HostSelection,
-  inherited?: ResolvedDeploymentV1,
-): ResolvedDeploymentV1 {
+  inherited?: ResolvedDeployment,
+): ResolvedDeployment {
   const selected = snapshotHostSelection(selection);
   const hosting = isRecord(build) ? build.hosting : undefined;
   const serverBuild = isRecord(hosting) && hosting.version === 3;
@@ -35,7 +35,15 @@ export function resolveCapturedDeployment(
   const hasMountOverride = selected?.mountURL !== undefined;
   const generatedAssetSelection = selected?.generatedAssets;
 
-  if (inherited && !hasMountOverride && generatedAssetSelection === undefined) return inherited;
+  const selectedOrigin = selected?.applicationOrigin;
+
+  if (
+    inherited &&
+    !hasMountOverride &&
+    generatedAssetSelection === undefined &&
+    selectedOrigin === undefined
+  )
+    return inherited;
 
   const mountPathname = hasMountOverride
     ? capturedMountPathname
@@ -45,5 +53,10 @@ export function resolveCapturedDeployment(
       ? inherited.generatedAssets
       : resolveGeneratedAssets(mountPathname, generatedAssetSelection);
 
-  return Object.freeze({ version: 1, mountPathname, generatedAssets });
+  const applicationOrigin =
+    selectedOrigin ?? (inherited?.version === 2 ? inherited.applicationOrigin : undefined);
+
+  return applicationOrigin === undefined
+    ? Object.freeze({ version: 1, mountPathname, generatedAssets })
+    : Object.freeze({ version: 2, mountPathname, generatedAssets, applicationOrigin });
 }

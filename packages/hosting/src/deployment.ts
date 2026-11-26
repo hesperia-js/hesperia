@@ -14,6 +14,49 @@ export interface ResolvedDeploymentV1 {
   readonly generatedAssets: ResolvedGeneratedAssets;
 }
 
+/** A deployment with one owner-selected application origin. */
+export interface ResolvedDeploymentV2 {
+  /** Deployment record format version. */
+  readonly version: 2;
+  /** Canonical selected application mount. */
+  readonly mountPathname: string;
+  /** Selected generated-resource directory and native module mode. */
+  readonly generatedAssets: ResolvedGeneratedAssets;
+  /** The single canonical origin selected by the application owner. */
+  readonly applicationOrigin: string;
+}
+
+/** A supported fixed deployment binding. */
+export type ResolvedDeployment = ResolvedDeploymentV1 | ResolvedDeploymentV2;
+
+/** Canonicalize an owner-selected HTTP(S) origin. @internal */
+export function canonicalizeApplicationOrigin(value: unknown): string {
+  if (typeof value !== "string") throw new TypeError("applicationOrigin must be a string");
+
+  if (!/^https?:\/\/[^/?#\\]+\/?$/iu.test(value))
+    throw new TypeError("applicationOrigin must contain only an HTTP(S) origin");
+
+  let url: URL;
+
+  try {
+    url = new URL(value);
+  } catch {
+    throw new TypeError("applicationOrigin must be an absolute HTTP(S) origin");
+  }
+
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  )
+    throw new TypeError("applicationOrigin must be an HTTP(S) origin without other URL components");
+
+  return url.origin;
+}
+
 /**
  * Strictly snapshot a persisted resolved deployment record.
  *
@@ -24,10 +67,11 @@ export interface ResolvedDeploymentV1 {
  * @returns A fresh frozen record containing the canonical mount and resolved generated assets.
  * @throws TypeError for unknown keys, accessors, noncanonical mounts, or invalid runtime bindings.
  */
-export function snapshotDeployment(value: unknown): ResolvedDeploymentV1 {
+export function snapshotDeployment(value: unknown): ResolvedDeployment {
   const fields = snapshotFields(value);
 
-  if (fields.version !== 1) throw new TypeError("unsupported resolved deployment version");
+  if (fields.version !== 1 && fields.version !== 2)
+    throw new TypeError("unsupported resolved deployment version");
 
   if (typeof fields.mountPathname !== "string")
     throw new TypeError("deployment mountPathname must be a string");
@@ -42,7 +86,14 @@ export function snapshotDeployment(value: unknown): ResolvedDeploymentV1 {
   if (!generatedAssets)
     throw new TypeError("deployment generatedAssets must be a resolved runtime binding");
 
-  return Object.freeze({ version: 1, mountPathname, generatedAssets });
+  if (fields.version === 1) return Object.freeze({ version: 1, mountPathname, generatedAssets });
+
+  const applicationOrigin = canonicalizeApplicationOrigin(fields.applicationOrigin);
+
+  if (applicationOrigin !== fields.applicationOrigin)
+    throw new TypeError("deployment applicationOrigin must already be canonical");
+
+  return Object.freeze({ version: 2, mountPathname, generatedAssets, applicationOrigin });
 }
 
 function snapshotFields(value: unknown): Record<string, unknown> {
@@ -54,7 +105,11 @@ function snapshotFields(value: unknown): Record<string, unknown> {
   if (prototype !== Object.prototype && prototype !== null)
     throw new TypeError("deployment must be an ordinary or null-prototype record");
 
-  const allowed = ["version", "mountPathname", "generatedAssets"] as const;
+  const version = Object.getOwnPropertyDescriptor(value, "version");
+  const allowed =
+    version && "value" in version && version.value === 2
+      ? ["version", "mountPathname", "generatedAssets", "applicationOrigin"]
+      : ["version", "mountPathname", "generatedAssets"];
   const keys = Reflect.ownKeys(value);
 
   if (

@@ -1,4 +1,4 @@
-import type { ResolvedDeploymentV1 } from "./deployment.ts";
+import type { ResolvedDeployment } from "./deployment.ts";
 import type {
   CapturedBrowserBuild,
   CapturedPublicBuild,
@@ -185,7 +185,7 @@ export type PersistedTargetedDeploymentV4 =
       /** Unchanged outer-V3 production control. */
       readonly control: BrowserControlV3<HostingRecordV1>;
       /** Explicit resolved deployment selected independently from the control. */
-      readonly deployment: ResolvedDeploymentV1;
+      readonly deployment: ResolvedDeployment;
       /** Same-capture managed asset directory. */
       readonly assetDirectory: string;
       /** Hosting V1 has no public directory. */
@@ -199,7 +199,7 @@ export type PersistedTargetedDeploymentV4 =
       /** Unchanged outer-V3 production control. */
       readonly control: BrowserControlV3<HostingRecordV2>;
       /** Explicit resolved deployment selected independently from the control. */
-      readonly deployment: ResolvedDeploymentV1;
+      readonly deployment: ResolvedDeployment;
       /** Same-capture managed asset directory. */
       readonly assetDirectory: string;
       /** Same-capture public directory, including an empty inventory. */
@@ -213,7 +213,7 @@ export type PersistedTargetedDeploymentV4 =
       /** Unchanged outer-V3 server control. */
       readonly control: ServerControlV3;
       /** Explicit resolved deployment selected independently from the control. */
-      readonly deployment: ResolvedDeploymentV1;
+      readonly deployment: ResolvedDeployment;
       /** Same-capture managed asset directory. */
       readonly assetDirectory: string;
       /** Same-capture public directory, including an empty inventory. */
@@ -250,7 +250,7 @@ export type TargetedDeploymentCapturedBuildV4 = TargetedCapturedBuild & {
   /** Completed-record format version. */
   readonly version: 4;
   /** Strictly snapshotted resolved deployment; no raw selector or default is retained. */
-  readonly deployment: ResolvedDeploymentV1;
+  readonly deployment: ResolvedDeployment;
 };
 
 /** Targeted inputs admitted by the future in-process host resource, excluding workerd. */
@@ -265,7 +265,7 @@ export type InProcessTargetedDeploymentCapturedBuildV4 = TargetedCapturedBuild<
   /** Completed-record format version. */
   readonly version: 4;
   /** Strictly snapshotted resolved deployment. */
-  readonly deployment: ResolvedDeploymentV1;
+  readonly deployment: ResolvedDeployment;
 };
 
 /** Generated worker data; this type alone verifies neither bytes nor module registration. */

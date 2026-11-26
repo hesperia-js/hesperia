@@ -230,6 +230,31 @@ describe("project commands", () => {
         const inherited = await readTargetedBuild(output);
 
         expect(inherited).toHaveProperty("deployment", deployed.deployment);
+
+        await writeBuild(root, built, { applicationOrigin: "https://app.example.test" });
+        const originBound = await readTargetedBuild(output);
+
+        if (!("deployment" in originBound)) throw new Error("Expected origin-bound deployment");
+
+        expect(originBound.deployment).toMatchObject({
+          version: 2,
+          applicationOrigin: "https://app.example.test",
+        });
+        const productionReceipt = await readFile(recordPath);
+        const originPreview = await previewProject(root, 0, { mountURL: "/moved" });
+
+        try {
+          const response = await fetch(new URL("/moved/items/42", originPreview.url), {
+            headers: { accept: "text/html" },
+          });
+
+          expect(response.status).toBe(200);
+          expect(await response.text()).toContain("https://assets.example.test/release/startup.js");
+          expect(await readFile(recordPath)).toEqual(productionReceipt);
+        } finally {
+          await originPreview.close();
+        }
+
         const lastGood = await readFile(recordPath);
 
         await writeFile(
@@ -948,6 +973,10 @@ export default function App() {
     expect(record.routeTable).toMatch(/^\/assets\/route-table-.*\.js$/u);
 
     expect(await built.files.get(record.routeTable)!.text()).toContain("routeTable");
+
+    await expect(
+      writeBuild(root, built, { applicationOrigin: "https://app.example.test" }),
+    ).rejects.toThrow("Deployment selection requires a browser/static production target");
 
     await writeBuild(root, built);
 

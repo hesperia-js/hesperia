@@ -1,37 +1,54 @@
 import type { ResolvedGeneratedAssets } from "hesperia/runtime";
+import { classifyBrowserStaticPath, type BrowserStaticRoutingV1 } from "./static-routing.ts";
 
-/**
- * Reject a generated resource that would replace a captured public URL on the application origin.
- * Absolute URL roots need the deployment's actual application origin, which this host input does
- * not supply, so they do not imply an origin match here.
- *
- * @param mountPathname - Canonical application mount used to publish public files.
- * @param generatedAssets - Resolved generated-resource directory for this deployment.
- * @param assets - Complete verified managed asset map, keyed by logical `/assets/...` paths.
- * @param publicFiles - Complete verified public-file map, keyed by application-relative URL paths.
- * @throws {TypeError} If a selected generated resource and captured public file have the same URL.
- * @internal
- */
+/** The deployment needs an application-origin owner to settle a path overlap. @internal */
+export class AmbiguousGeneratedDestinationError extends TypeError {}
+
+/** Reject concrete generated destinations that conflict with the selected application. @internal */
 export function assertGeneratedAssetPublication(
   mountPathname: string,
   generatedAssets: ResolvedGeneratedAssets,
   assets: ReadonlyMap<string, unknown>,
   publicFiles: ReadonlyMap<string, unknown>,
+  applicationOrigin?: string,
+  routing?: BrowserStaticRoutingV1,
 ): void {
   const root = generatedAssets.root;
-
-  if (root.kind !== "path") return;
-
-  const generatedPaths = new Set([
-    `${root.pathname}startup.js`,
-    ...[...assets.keys()].map((path) => `${root.pathname}${path.slice(1)}`),
-  ]);
+  const rootURL = root.kind === "url" ? new URL(root.href) : undefined;
+  const directory = root.kind === "path" ? root.pathname : rootURL!.pathname;
+  const origin = rootURL?.origin ?? applicationOrigin ?? "https://hesperia.invalid";
   const mountPrefix = mountPathname === "/" ? "" : mountPathname;
+  const publicPaths = new Set([...publicFiles.keys()].map((path) => `${mountPrefix}${path}`));
+  const generatedPaths = [
+    `${directory}startup.js`,
+    ...[...assets.keys()].map((path) => `${directory}${path.slice(1)}`),
+  ];
 
-  for (const publicPath of publicFiles.keys()) {
-    const pathname = `${mountPrefix}${publicPath}`;
+  if (rootURL && applicationOrigin === undefined) {
+    for (const pathname of publicPaths) {
+      if (pathname.startsWith(`${directory}assets/`))
+        throw new AmbiguousGeneratedDestinationError(
+          `applicationOrigin is required for ambiguous public destination: ${pathname}`,
+        );
+    }
+  }
 
-    if (generatedPaths.has(pathname))
-      throw new TypeError(`Generated resource collides with captured public file: ${pathname}`);
+  for (const pathname of generatedPaths) {
+    const destination = new URL(origin);
+    destination.pathname = pathname;
+    const route = routing && classifyBrowserStaticPath(routing, destination, mountPathname);
+    const publicCollision = publicPaths.has(pathname);
+
+    if (!publicCollision && route?.kind !== "page") continue;
+
+    if (rootURL && applicationOrigin === undefined)
+      throw new AmbiguousGeneratedDestinationError(
+        `applicationOrigin is required for ambiguous generated destination: ${pathname}`,
+      );
+
+    if (!rootURL || rootURL.origin === applicationOrigin)
+      throw new TypeError(
+        `Generated resource collides with ${publicCollision ? "captured public file" : "captured page"}: ${pathname}`,
+      );
   }
 }

@@ -1,5 +1,5 @@
 import type { ResolvedGeneratedAssets } from "hesperia/runtime";
-import type { ResolvedDeploymentV1 } from "./deployment.ts";
+import type { ResolvedDeployment } from "./deployment.ts";
 import type { ApplicationHost, CapturedBuild, HostSelection } from "./index.ts";
 import {
   captureInput,
@@ -16,6 +16,7 @@ import {
 import { assertGeneratedAssetPublication } from "./generated-asset-publication.ts";
 import { relativeGeneratedRequestPath, resolveGeneratedAssets } from "./generated-assets.ts";
 import { snapshotHostSelection } from "./host-selection.ts";
+import { classifyBrowserStaticPath, type BrowserStaticRoutingV1 } from "./static-routing.ts";
 
 /**
  * Capture, validate, and host one immutable browser build at a selected mount.
@@ -40,30 +41,61 @@ export async function createHost(
   build: CapturedBuild,
   selection?: HostSelection,
 ): Promise<ApplicationHost> {
+  return createHostWithRouting(build, selection);
+}
+
+/** Construct a browser host with the selected target's verified routing policy. @internal */
+export function createHostWithRouting(
+  build: CapturedBuild,
+  selection?: HostSelection,
+  routing?: BrowserStaticRoutingV1,
+): Promise<ApplicationHost> {
   const selected = snapshotHostSelection(selection);
   const snapshot = captureInput(build, selected);
   const mountPathname = resolveMountPath(snapshot);
   const generatedAssets = resolveGeneratedAssets(mountPathname, selected?.generatedAssets);
 
-  return createBrowserHost(snapshot, { version: 1, mountPathname, generatedAssets });
+  const deployment: ResolvedDeployment =
+    selected?.applicationOrigin === undefined
+      ? { version: 1, mountPathname, generatedAssets }
+      : {
+          version: 2,
+          mountPathname,
+          generatedAssets,
+          applicationOrigin: selected.applicationOrigin,
+        };
+
+  return createBrowserHost(snapshot, deployment, routing);
 }
 
 /** Construct a browser host from the exact resolved binding owned by the completed deployment. */
 export function createHostForDeployment(
   build: CapturedBuild,
-  deployment: ResolvedDeploymentV1,
+  deployment: ResolvedDeployment,
+  routing?: BrowserStaticRoutingV1,
 ): Promise<ApplicationHost> {
-  return createBrowserHost(captureInput(build), deployment);
+  return createBrowserHost(captureInput(build), deployment, routing);
 }
 
 async function createBrowserHost(
   snapshot: ReturnType<typeof captureInput>,
-  { mountPathname, generatedAssets }: ResolvedDeploymentV1,
+  deployment: ResolvedDeployment,
+  routing?: BrowserStaticRoutingV1,
 ): Promise<ApplicationHost> {
+  const { mountPathname, generatedAssets } = deployment;
+  const applicationOrigin = deployment.version === 2 ? deployment.applicationOrigin : undefined;
+  resolveMountPath(snapshot);
   const assets = await validateAssets(snapshot);
   const publicFiles = await validatePublicFiles(snapshot);
 
-  assertGeneratedAssetPublication(mountPathname, generatedAssets, assets, publicFiles);
+  assertGeneratedAssetPublication(
+    mountPathname,
+    generatedAssets,
+    assets,
+    publicFiles,
+    applicationOrigin,
+    routing,
+  );
 
   const startupAsset = snapshot.startupAsset as string;
   const startup = assets.get(startupAsset);
@@ -95,9 +127,14 @@ async function createBrowserHost(
         wrapperBlob,
         assets,
         publicFiles,
+        routing,
+        applicationOrigin,
       );
 
       if (resourceResponse !== undefined) return resourceResponse;
+
+      if (applicationOrigin !== undefined && new URL(request.url).origin !== applicationOrigin)
+        return undefined;
 
       if (!isWithinPathname(new URL(request.url).pathname, mountPathname)) return undefined;
 
@@ -120,10 +157,17 @@ function respondToStaticRequest(
   wrapperBlob: Blob,
   assets: ReadonlyMap<string, { readonly blob: Blob; readonly contentType: string }>,
   publicFiles: ReadonlyMap<string, { readonly blob: Blob; readonly contentType: string }>,
+  routing?: BrowserStaticRoutingV1,
+  applicationOrigin?: string,
 ): Response | undefined {
   const url = new URL(request.url);
   const pathname = url.pathname;
-  const generated = relativeGeneratedRequestPath(url, generatedAssets);
+  const generated =
+    generatedAssets.root.kind === "path" &&
+    applicationOrigin !== undefined &&
+    url.origin !== applicationOrigin
+      ? undefined
+      : relativeGeneratedRequestPath(url, generatedAssets);
 
   if (generated === "startup.js") return staticResponse(request, wrapperBlob);
 
@@ -138,10 +182,31 @@ function respondToStaticRequest(
 
     const asset = assets.get(logicalPath);
 
-    return asset
-      ? staticResponse(request, asset.blob, asset.contentType)
-      : new Response(null, { status: 404 });
+    if (asset) return staticResponse(request, asset.blob, asset.contentType);
+
+    if (
+      (generatedAssets.root.kind === "path" ||
+        (applicationOrigin !== undefined && url.origin === applicationOrigin)) &&
+      !isWithinPathname(pathname, assetPath)
+    ) {
+      if (isWithinPathname(pathname, mountPathname)) {
+        const publicPath = mountPathname === "/" ? pathname : pathname.slice(mountPathname.length);
+        const publicFile = publicFiles.get(publicPath);
+
+        if (publicFile)
+          return request.method === "GET" || request.method === "HEAD"
+            ? staticResponse(request, publicFile.blob, publicFile.contentType)
+            : undefined;
+      }
+
+      if (routing && classifyBrowserStaticPath(routing, url, mountPathname).kind === "page")
+        return undefined;
+    }
+
+    return new Response(null, { status: 404 });
   }
+
+  if (applicationOrigin !== undefined && url.origin !== applicationOrigin) return undefined;
 
   if (isWithinPathname(pathname, assetPath)) return new Response(null, { status: 404 });
 

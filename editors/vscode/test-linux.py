@@ -4653,6 +4653,11 @@ def main() -> int:
     args.extensions_dir = extensions
     workspace = temporary_root / "workspace"
 
+    # VS Code otherwise prewarms its AI agent host in the fixture window.
+    user_settings = user_data / "User"
+    user_settings.mkdir(parents=True)
+    write_json(user_settings / "settings.json", {"chat.disableAIFeatures": True})
+
     (workspace / "src").mkdir(parents=True)
 
     (workspace / "node_modules" / "@hesperia").mkdir(parents=True)

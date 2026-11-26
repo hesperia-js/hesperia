@@ -1909,7 +1909,11 @@ export async function writeBuild(
     );
   }
 
-  if (selected?.mountURL !== undefined || selected?.generatedAssets !== undefined)
+  if (
+    selected?.mountURL !== undefined ||
+    selected?.generatedAssets !== undefined ||
+    selected?.applicationOrigin !== undefined
+  )
     throw new ProjectError("Deployment selection requires a browser/static production target");
 
   if (snapshot.version === 2) {

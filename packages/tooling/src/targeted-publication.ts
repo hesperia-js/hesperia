@@ -25,7 +25,7 @@ import {
   readManagedBuildRecord,
   readRetainedManagedCapture,
   snapshotHostSelection,
-  type ResolvedDeploymentV1,
+  type ResolvedDeployment,
   snapshotTargetedControl,
   validateTargetedCapturedBuild,
 } from "@hesperia/hosting/internal";
@@ -38,7 +38,7 @@ type RetainedManagedBuild = Awaited<ReturnType<typeof readRetainedManagedCapture
 interface ObservedPublication {
   readonly source: string;
   readonly assetDirectory: string;
-  readonly deployment?: ResolvedDeploymentV1;
+  readonly deployment?: ResolvedDeployment;
   readonly managed?: RetainedManagedBuild;
 }
 
@@ -51,7 +51,7 @@ export interface BuildPublication {
   /** Prior validated asset directory, relative to the completed-build directory. */
   readonly previousDirectory?: string;
   /** Prior validated V4 deployment, inherited unless the caller replaces generated settings. */
-  readonly deployment?: ResolvedDeploymentV1;
+  readonly deployment?: ResolvedDeployment;
   /** Capture IDs whose published assets cannot be removed by staging cleanup. */
   readonly retainedCaptureIds: ReadonlySet<string>;
   /**
@@ -487,7 +487,7 @@ async function observePublishedRecord(output: string): Promise<ObservedPublicati
       typeof hosting === "object" &&
       Reflect.getOwnPropertyDescriptor(hosting, "mode")?.value === "development";
     let managed: RetainedManagedBuild | undefined;
-    let deployment: ResolvedDeploymentV1 | undefined;
+    let deployment: ResolvedDeployment | undefined;
     let assetDirectory: string;
 
     if (targeted) {
@@ -659,10 +659,10 @@ function staticManagedPath(path: string): string {
 
 async function browserStaticFiles(
   inventory: CapturedBuild,
-  deployment: ResolvedDeploymentV1,
+  deployment: ResolvedDeployment,
 ): Promise<Map<string, Blob>> {
-  await readBrowserStaticRouting(inventory);
-  const host = await createHostForDeployment(inventory, deployment);
+  const routing = await readBrowserStaticRouting(inventory);
+  const host = await createHostForDeployment(inventory, deployment, routing);
 
   if (
     host.mount.pathname !== deployment.mountPathname ||

@@ -18,6 +18,10 @@ import { resolveGeneratedAssets } from "./generated-assets.ts";
 import type { CapturedBuild, CapturedServerBuild, HostSelection } from "./index.ts";
 import { snapshotHostSelection } from "./host-selection.ts";
 import { assertGeneratedAssetPublication } from "./generated-asset-publication.ts";
+import {
+  BROWSER_STATIC_ROUTING_ASSET,
+  readVerifiedBrowserStaticRouting,
+} from "./static-routing.ts";
 import type { TargetedDeploymentCapturedBuildV4 } from "./build-control.ts";
 import { resolveCapturedDeployment } from "./captured-deployment.ts";
 
@@ -75,8 +79,8 @@ export async function createGeneratedAssetHost(
       : undefined;
   const snapshot =
     serverSnapshot?.browserInput ?? captureInput(inventory as CapturedBuild, selected);
-  const capturedMountPathname = resolveMountPath(snapshot);
-  const mountPathname = deployment?.mountPathname ?? capturedMountPathname;
+  const selectedMountPathname = resolveMountPath(snapshot);
+  const mountPathname = deployment?.mountPathname ?? selectedMountPathname;
   const generatedAssets =
     deployment?.generatedAssets ?? resolveGeneratedAssets(mountPathname, selected?.generatedAssets);
   const validation = serverSnapshot
@@ -88,7 +92,24 @@ export async function createGeneratedAssetHost(
     : Promise.all([validateAssets(snapshot), validatePublicFiles(snapshot)]);
   const [assets, publicFiles] = await validation;
 
-  assertGeneratedAssetPublication(mountPathname, generatedAssets, assets, publicFiles);
+  const applicationOrigin =
+    deployment?.version === 2 ? deployment.applicationOrigin : selected?.applicationOrigin;
+  const routing =
+    input.kind === "deployment" && input.captured.control.kind === "browser"
+      ? await readVerifiedBrowserStaticRouting(
+          assets.get(BROWSER_STATIC_ROUTING_ASSET),
+          input.captured.control.hosting.standaloneMountURL,
+          publicFiles,
+        )
+      : undefined;
+  assertGeneratedAssetPublication(
+    mountPathname,
+    generatedAssets,
+    assets,
+    publicFiles,
+    applicationOrigin,
+    routing,
+  );
 
   const startupAsset = snapshot.startupAsset as string;
   const startup = assets.get(startupAsset);

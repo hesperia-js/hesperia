@@ -22,7 +22,7 @@ import type {
   TargetedControlRecordV3,
   TargetedDeploymentCapturedBuildV4,
 } from "./build-control.ts";
-import { snapshotDeployment, type ResolvedDeploymentV1 } from "./deployment.ts";
+import { snapshotDeployment, type ResolvedDeployment } from "./deployment.ts";
 import type {
   CapturedBuild,
   CapturedBrowserBuild,
@@ -171,7 +171,7 @@ export async function readManagedBuildRecord(
 interface ManagedBuildCapture {
   readonly captureId: string;
   readonly inventory: CapturedBrowserBuild;
-  readonly deployment?: ResolvedDeploymentV1;
+  readonly deployment?: ResolvedDeployment;
 }
 
 /**
@@ -642,7 +642,7 @@ interface TargetedCaptureLocations {
 }
 
 interface TargetedDeploymentCaptureLocations extends TargetedCaptureLocations {
-  readonly deployment: ResolvedDeploymentV1;
+  readonly deployment: ResolvedDeployment;
 }
 
 async function readTargetedCapture(

@@ -1,5 +1,5 @@
-import { createHostForDeployment } from "./application-host.ts";
-import { snapshotDeployment, type ResolvedDeploymentV1 } from "./deployment.ts";
+import { createHostForDeployment, createHostWithRouting } from "./application-host.ts";
+import { snapshotDeployment, type ResolvedDeployment } from "./deployment.ts";
 import type { InProcessTargetedDeploymentCapturedBuildV4 } from "./build-control.ts";
 import { resolveCapturedDeployment } from "./captured-deployment.ts";
 import { relativeGeneratedRequestPath } from "./generated-assets.ts";
@@ -8,13 +8,13 @@ import {
   captureInput,
   resolveMountPath,
   validateAssets,
+  assertCanonicalAssetPath,
   validateTargetedCapturedBuild,
   validateTargetedDeploymentCapturedBuild,
   isRecord,
 } from "./captured-build.ts";
 import { snapshotHostSelection } from "./host-selection.ts";
 import {
-  createHost,
   type ApplicationHost,
   type AsyncServerApplicationHost,
   type CapturedBrowserBuild,
@@ -105,10 +105,11 @@ export async function createTargetedHost(
     ? await createHostForDeployment(
         captured.inventory,
         resolveCapturedDeployment(captured.inventory, selected, deployed.deployment),
+        routing,
       )
-    : await createHost(captured.inventory, selected);
+    : await createHostWithRouting(captured.inventory, selected, routing);
 
-  return browserResource(host, routing);
+  return browserResource(host, routing, captured.inventory.files);
 }
 
 /**
@@ -124,7 +125,7 @@ export async function createTargetedHost(
 export async function createRetainedManagedHost(
   build: CapturedBrowserBuild,
   selection?: HostSelection,
-  deployment?: ResolvedDeploymentV1,
+  deployment?: ResolvedDeployment,
 ): Promise<Extract<TargetedHostResource, { readonly kind: "browser" }>> {
   const selected = snapshotHostSelection(selection);
   const inherited = deployment === undefined ? undefined : snapshotDeployment(deployment);
@@ -156,14 +157,15 @@ export async function createRetainedManagedHost(
         inventory,
         resolveCapturedDeployment(inventory, selected, inherited),
       )
-    : await createHost(inventory, selected);
+    : await createHostWithRouting(inventory, selected);
 
-  return browserResource(host, "managed");
+  return browserResource(host, "managed", inventory.files);
 }
 
 function browserResource(
   host: ApplicationHost,
   routing: BrowserStaticRoutingV1 | "managed",
+  assets: ReadonlyMap<string, Blob>,
 ): Extract<TargetedHostResource, { readonly kind: "browser" }> {
   const mount = host.mount;
   const generatedAssets = host.generatedAssets;
@@ -285,8 +287,32 @@ function browserResource(
       try {
         const url = new URL(request.url);
         const generated = relativeGeneratedRequestPath(url, generatedAssets);
+        const generatedAsset = generated?.startsWith("assets/") === true;
+        const knownGenerated =
+          generated === "startup.js" || (generatedAsset && assets.has(`/${generated}`));
+        const reserved =
+          url.pathname === mount.assetPath || url.pathname.startsWith(`${mount.assetPath}/`);
+        let safeGeneratedPath = false;
+
+        if (generatedAsset && !knownGenerated) {
+          try {
+            assertCanonicalAssetPath(`/${generated}`, "asset path");
+            safeGeneratedPath = true;
+          } catch {
+            // Invalid generated paths must keep their managed 404 response.
+          }
+        }
+
+        const classified =
+          routing !== "managed" &&
+          !knownGenerated &&
+          !reserved &&
+          (!generatedAsset || safeGeneratedPath)
+            ? classifyBrowserStaticPath(routing, url, mount.pathname)
+            : undefined;
+        const admittedPath = classified?.kind === "public" || classified?.kind === "page";
         const path =
-          generated === "startup.js" || generated?.startsWith("assets/") === true
+          knownGenerated || reserved || (generatedAsset && !admittedPath)
             ? { kind: "managed" as const }
             : routing === "managed"
               ? {
@@ -296,7 +322,7 @@ function browserResource(
                       ? ("managed" as const)
                       : ("outside" as const),
                 }
-              : classifyBrowserStaticPath(routing, url, mount.pathname);
+              : classified!;
 
         if (path.kind === "outside") return undefined;
 

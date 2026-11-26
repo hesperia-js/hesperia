@@ -219,13 +219,22 @@ export async function readBrowserStaticRouting(
   const mountURL = resolveMountPath(snapshot);
   const assets = await validateAssets(snapshot);
   const asset = assets.get(BROWSER_STATIC_ROUTING_ASSET);
+  const publicFiles = await validatePublicFiles(snapshot);
 
+  return readVerifiedBrowserStaticRouting(asset, mountURL, publicFiles);
+}
+
+/** Decode and correlate the policy with already verified capture inventories. @internal */
+export async function readVerifiedBrowserStaticRouting(
+  asset: { readonly blob: Blob; readonly contentType: string } | undefined,
+  mountURL: string,
+  publicFiles: ReadonlyMap<string, unknown>,
+): Promise<BrowserStaticRoutingV1> {
   if (!asset) throw new TypeError("browser/static capture is missing its static routing asset");
 
   if (asset.contentType !== "application/json")
     throw new TypeError("static routing asset must have application/json media type");
 
-  const publicFiles = await validatePublicFiles(snapshot);
   const bytes = await asset.blob.arrayBuffer();
   const source = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   const policy = decodeBrowserStaticRouting(source);

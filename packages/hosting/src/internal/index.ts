@@ -44,6 +44,12 @@ export type { ResolvedProductionTarget } from "../target-profile.ts";
 export type { WorkerCaptureDataV1 } from "../build-control.ts";
 export { createRetainedManagedHost } from "../targeted-host.ts";
 export { resolveCapturedDeployment } from "../captured-deployment.ts";
-export { snapshotDeployment, type ResolvedDeploymentV1 } from "../deployment.ts";
+export {
+  snapshotDeployment,
+  type ResolvedDeployment,
+  type ResolvedDeploymentV1,
+  type ResolvedDeploymentV2,
+} from "../deployment.ts";
 export { createHostForDeployment } from "../application-host.ts";
+export { AmbiguousGeneratedDestinationError } from "../generated-asset-publication.ts";
 export { relativeGeneratedRequestPath } from "../generated-assets.ts";
