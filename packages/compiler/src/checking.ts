@@ -155,16 +155,6 @@ export interface CheckingSession {
   dispose(): Promise<void>;
 }
 
-/**
- * Keep the same checking views and TypeScript snapshot available for editor operations.
- *
- * The returned project's async TypeScript services remain usable until `dispose` is awaited.
- *
- * @param modules Authored modules checked together in one project snapshot.
- * @param options Root, auxiliary files, and checking behavior for the project.
- * @returns A promise for the checking session after its diagnostics and component prop metadata
- * have been queried.
- */
 const checkingCancellationRequests = new WeakMap<ProjectCheckingOptions, AbortSignal>();
 
 /** @internal Bind cancellation to one actual Tooling checker options object. */
@@ -176,6 +166,16 @@ export function requestCheckingCancellation<T extends ProjectCheckingOptions>(
   return options;
 }
 
+/**
+ * Keep the same checking views and TypeScript snapshot available for editor operations.
+ *
+ * The returned project's async TypeScript services remain usable until `dispose` is awaited.
+ *
+ * @param modules Authored modules checked together in one project snapshot.
+ * @param options Root, auxiliary files, and checking behavior for the project.
+ * @returns A promise for the checking session after its diagnostics and component prop metadata
+ * have been queried.
+ */
 export function openCheckingProject(
   modules: readonly VirtualModule[],
   options: ProjectCheckingOptions = {},
