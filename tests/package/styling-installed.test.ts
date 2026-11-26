@@ -81,10 +81,67 @@ async function pack(workspace: string, root: string): Promise<string> {
   return join(workspace, name).replaceAll("\\", "/");
 }
 
-async function waitForServer(process_: ReturnType<typeof Bun.spawn>): Promise<string> {
-  const reader = (process_.stdout as ReadableStream<Uint8Array>).getReader();
+function captureStderr(stream: ReadableStream<Uint8Array>) {
+  const limit = 16_384;
+  let tail = new Uint8Array(0);
+  let truncated = false;
+  let finished = false;
+  let readFailure: string | undefined;
 
-  const stderr = new Response(process_.stderr as ReadableStream<Uint8Array>).text();
+  const done = (async () => {
+    try {
+      const reader = stream.getReader();
+
+      try {
+        while (true) {
+          const chunk = await reader.read();
+
+          if (chunk.done) break;
+
+          const current = chunk.value.subarray(Math.max(0, chunk.value.byteLength - limit));
+          const retained = Math.min(tail.byteLength, limit - current.byteLength);
+          const next = new Uint8Array(retained + current.byteLength);
+
+          next.set(tail.subarray(tail.byteLength - retained));
+          next.set(current, retained);
+          truncated ||= retained < tail.byteLength || current.byteLength < chunk.value.byteLength;
+          tail = next;
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    } catch (error) {
+      try {
+        const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+
+        readFailure = detail.slice(0, 1_024);
+      } catch {
+        readFailure = "Unprintable stderr stream error";
+      }
+    } finally {
+      finished = true;
+    }
+  })();
+
+  return {
+    done,
+    snapshot(): string {
+      let state = finished ? "complete" : "still draining";
+
+      if (readFailure !== undefined) state = `read failed: ${readFailure}`;
+
+      const prefix = truncated ? "earlier bytes discarded; " : "";
+
+      return `[stderr ${prefix}${state}]\n${new TextDecoder().decode(tail)}`;
+    },
+  };
+}
+
+async function waitForServer(
+  process_: ReturnType<typeof Bun.spawn>,
+  stderr: ReturnType<typeof captureStderr>,
+): Promise<string> {
+  const reader = (process_.stdout as ReadableStream<Uint8Array>).getReader();
 
   let output = "";
 
@@ -93,10 +150,10 @@ async function waitForServer(process_: ReturnType<typeof Bun.spawn>): Promise<st
       const chunk = await reader.read();
 
       if (chunk.done) {
-        const [status, errors] = await Promise.all([process_.exited, stderr]);
+        const [status] = await Promise.all([process_.exited, stderr.done]);
 
         throw new Error(
-          `Hesperia server exited before listening (${status})\n${output}\n${errors}`,
+          `Hesperia server exited before listening (${status})\n${output}\n${stderr.snapshot()}`,
         );
       }
 
@@ -127,8 +184,10 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
   const application = join(workspace, "application with spaces");
 
   let devServer: ReturnType<typeof Bun.spawn> | undefined;
+  let devStderr: ReturnType<typeof captureStderr> | undefined;
 
   let previewServer: ReturnType<typeof Bun.spawn> | undefined;
+  let previewStderr: ReturnType<typeof captureStderr> | undefined;
 
   let passed = false;
 
@@ -269,7 +328,8 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
         },
       );
 
-      const devUrl = await waitForServer(devServer);
+      devStderr = captureStderr(devServer.stderr as ReadableStream<Uint8Array>);
+      const devUrl = await waitForServer(devServer, devStderr);
 
       stage("exercise development app");
       const devPage = await browser.newPage();
@@ -379,7 +439,8 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
         },
       );
 
-      const previewUrl = await waitForServer(previewServer);
+      previewStderr = captureStderr(previewServer.stderr as ReadableStream<Uint8Array>);
+      const previewUrl = await waitForServer(previewServer, previewStderr);
 
       stage("exercise preview app");
       const previewPage = await browser.newPage();
@@ -425,6 +486,17 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
       await previewPage.close();
     } catch (error) {
       console.error("[Q10-STYLING] browser exercise failed", error);
+
+      try {
+        if (devServer && devStderr)
+          console.error("[Q10-STYLING] development server stderr tail", devStderr.snapshot());
+
+        if (previewServer && previewStderr)
+          console.error("[Q10-STYLING] preview server stderr tail", previewStderr.snapshot());
+      } catch {
+        // The stderr diagnostic must not replace the browser failure.
+      }
+
       throw error;
     } finally {
       stage("close browser");
