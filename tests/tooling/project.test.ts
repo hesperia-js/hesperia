@@ -182,6 +182,14 @@ export default route({ load: () => "server", render: {
         }),
       ]),
     );
+    const conflict = (failure as ProjectError).diagnostics.find(
+      (item) => item.code === "HES-ROUTE-PLAN",
+    );
+
+    expect(conflict?.message).toContain(`required at ${join(root, "src/routes/+route.ts")}:`);
+    expect(conflict?.message).toContain(
+      `forbidden at ${join(root, "src/routes/child/+route.ts")}:`,
+    );
   });
 
   test.each([false, true])(

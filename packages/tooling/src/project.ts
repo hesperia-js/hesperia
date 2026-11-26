@@ -756,7 +756,14 @@ async function prepareBuildLocalAttempt(
             result.kind === "ambiguous"
               ? "The render policy admits multiple plans"
               : result.diagnostics
-                  .map((item) => item.code + ("field" in item ? ` (${item.field})` : ""))
+                  .map((item) => {
+                    const label = item.code + ("field" in item ? ` (${item.field})` : "");
+
+                    if (item.code === "required-forbidden-conflict")
+                      return `${label}: required at ${item.requiredSources.join(", ")}; forbidden at ${item.forbiddenSources.join(", ")}`;
+
+                    return label;
+                  })
                   .join(", ");
 
           diagnostics.push({
