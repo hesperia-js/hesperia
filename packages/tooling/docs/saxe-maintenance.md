@@ -37,6 +37,12 @@ unused DTD QName hook while retaining namespace-aware name validation. Both
 modified files carry Hesperia change notices. The other four TypeScript modules
 retain the upstream baseline.
 
+For checked SVG imports, the decoded-text ceiling is 10,000,000 UTF-16 code
+units per logical text run, after entity decoding and XML newline normalization.
+Adjacent ordinary text, references, and CDATA share a run across input chunks
+and parser callbacks. An element boundary, comment, or processing instruction
+ends the run. Attribute values are bounded separately.
+
 The parser and its options are internal to tooling. When updating the vendor,
 retain the license and notices and verify checked SVG import behavior through
 its public owner. Historical coverage captures do not qualify a new source tree.
