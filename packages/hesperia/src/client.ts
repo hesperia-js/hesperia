@@ -9,6 +9,8 @@ import { createForm } from "./validation/form.ts";
 import type { Form, FormOptions } from "./validation/form.ts";
 import * as eventHelpers from "./events.ts";
 
+declare const __HESPERIA_DEV__: boolean;
+
 /** Native event listener helpers available from the `hesperia/client` namespace. */
 export { eventHelpers as events };
 
@@ -132,6 +134,12 @@ export function createClient(owner: Owner): Client {
     derived<T>(compute: () => T, options: SignalOptions<T> = {}): Derived<T> {
       owner.assertActive();
 
+      if (typeof __HESPERIA_DEV__ !== "undefined" && __HESPERIA_DEV__) {
+        if (typeof compute !== "function") {
+          throw new TypeError("HES-DEV-CLIENT-DERIVED: derived() expects compute to be a function");
+        }
+      }
+
       const source = computed(compute, options);
 
       const read = (() => {
@@ -147,6 +155,12 @@ export function createClient(owner: Owner): Client {
 
     effect(run) {
       owner.assertActive();
+
+      if (typeof __HESPERIA_DEV__ !== "undefined" && __HESPERIA_DEV__) {
+        if (typeof run !== "function") {
+          throw new TypeError("HES-DEV-CLIENT-EFFECT: effect() expects run to be a function");
+        }
+      }
 
       owner.context.scheduler.effect(owner, run);
     },
