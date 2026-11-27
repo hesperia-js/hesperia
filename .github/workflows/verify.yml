@@ -167,7 +167,7 @@ jobs:
       - name: "Install browser engines and system dependencies"
         if: "runner.os == 'Linux'"
         timeout-minutes: 25
-        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
+        run: "bash scripts/ci/install-playwright-linux.sh chromium firefox webkit"
       - name: "Install browser engines"
         if: "runner.os == 'Windows'"
         run: "node node_modules/playwright/cli.js install chromium firefox webkit"
@@ -255,14 +255,14 @@ jobs:
       - name: "Install ordinary test browser engines and system dependencies"
         if: "matrix.group == 'bun-tests-ordinary' && runner.os == 'Linux'"
         timeout-minutes: 35
-        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
+        run: "bash scripts/ci/install-playwright-linux.sh chromium firefox webkit"
       - name: "Install ordinary test browser engines"
         if: "matrix.group == 'bun-tests-ordinary' && runner.os == 'Windows'"
         run: "node node_modules/playwright/cli.js install chromium firefox webkit"
       - name: "Install CSS capture Chromium and system dependencies"
         if: "matrix.group == 'browser-css' && runner.os == 'Linux'"
         timeout-minutes: 25
-        run: "node node_modules/playwright/cli.js install --with-deps chromium"
+        run: "bash scripts/ci/install-playwright-linux.sh chromium"
       - name: "Install CSS capture Chromium"
         if: "matrix.group == 'browser-css' && runner.os == 'Windows'"
         run: "node node_modules/playwright/cli.js install chromium"
@@ -447,7 +447,7 @@ jobs:
       - name: "Install all browser engines"
         if: "runner.os == 'Linux'"
         timeout-minutes: 35
-        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
+        run: "bash scripts/ci/install-playwright-linux.sh chromium firefox webkit"
       - name: "Install all browser engines"
         if: "runner.os == 'Windows'"
         run: "node node_modules/playwright/cli.js install chromium firefox webkit"
@@ -526,7 +526,7 @@ jobs:
       - name: "Install browser engines and system dependencies"
         if: "runner.os == 'Linux'"
         timeout-minutes: 35
-        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
+        run: "bash scripts/ci/install-playwright-linux.sh chromium firefox webkit"
       - name: "Install browser engines"
         if: "runner.os == 'Windows'"
         run: "node node_modules/playwright/cli.js install chromium firefox webkit"
@@ -606,7 +606,7 @@ jobs:
       - name: "Install the selected browser engine and system dependencies"
         if: "runner.os == 'Linux'"
         timeout-minutes: 35
-        run: 'node node_modules/playwright/cli.js install --with-deps "$GOLDEN_PROJECT"'
+        run: 'bash scripts/ci/install-playwright-linux.sh "$GOLDEN_PROJECT"'
         shell: bash
       - name: "Install the selected browser engine"
         if: "runner.os == 'Windows'"
