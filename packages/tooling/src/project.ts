@@ -588,7 +588,7 @@ export async function prepareBuildLocal(
         canRetryStaleRoute,
       );
 
-      if (build !== retryStaleRouteCapture) return build;
+      if (typeof build !== "symbol") return build;
 
       signal?.throwIfAborted();
     } catch (error) {
