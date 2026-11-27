@@ -446,6 +446,16 @@ test("packed hosting serves legacy mounts and renders a browser/static capture i
     preview = undefined;
 
     await writeFile(
+      join(application, "src/routes/+route.ts"),
+      `import { route } from "hesperia/routing";
+const guard = () => true;
+export default route({ guard, render: {
+  clientRender: "required", ssr: "forbidden", stream: "forbidden",
+  ssg: "forbidden", hydration: "forbidden",
+} });`,
+    );
+
+    await writeFile(
       join(application, "hesperia.config.json"),
       JSON.stringify({
         mountURL: "/dashboard",

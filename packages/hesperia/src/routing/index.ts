@@ -71,6 +71,23 @@ export function route(configuration: object): object {
 
 /** Types associated with a route declaration. */
 export namespace Route {
+  /** An authored requirement on a route rendering capability. */
+  export type RenderConstraint = "required" | "optional" | "forbidden";
+
+  /** Partial rendering constraints inherited by descendant routes. */
+  export interface RenderPolicy {
+    /** Browser rendering capability. */
+    readonly clientRender?: RenderConstraint;
+    /** Request-time rendering capability. */
+    readonly ssr?: RenderConstraint;
+    /** Progressive response delivery capability. */
+    readonly stream?: RenderConstraint;
+    /** Static generation capability. */
+    readonly ssg?: RenderConstraint;
+    /** Browser adoption of server or static output. */
+    readonly hydration?: RenderConstraint;
+  }
+
   /** Referenced client guard; the compiler validates path parameter names against the route pattern. */
   export type Guard<Pattern extends string = string> = (
     context: Omit<import("./navigation.ts").NavigationContext, "params"> & {
@@ -83,6 +100,8 @@ export namespace Route {
 
   /** Statically inspected declaration; request-time loader execution remains a separate target. */
   export interface Declaration<Pattern extends string = string> {
+    /** Literal rendering constraints inherited by descendant routes. */
+    readonly render?: RenderPolicy;
     /** Identifier reference to a separately client-eligible guard binding. */
     readonly guard?: Guard<Pattern>;
     /** Server-only request loader, preserved for compiler target diagnostics rather than browser execution. */
