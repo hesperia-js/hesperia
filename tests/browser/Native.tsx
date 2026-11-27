@@ -65,6 +65,7 @@ export default function Native() {
   const bindings = state("");
   const eventResult = state("");
   const optionalValue = state("");
+  let recursiveOnceCalls = 0;
   const sharedOnce = client.events.once(function (this: HTMLButtonElement, event: MouseEvent) {
     optionEvents.push(`once:${this.id}:${event.currentTarget === this}`);
   });
@@ -129,6 +130,17 @@ export default function Native() {
         Once B
       </button>
       <button
+        id="native-option-once-recursive"
+        on:click={authorClient.events.once(function (this: HTMLButtonElement) {
+          recursiveOnceCalls += 1;
+          optionEvents.push(`once-recursive:${recursiveOnceCalls}`);
+
+          if (recursiveOnceCalls === 1) this.dispatchEvent(new Event("click"));
+        })}
+      >
+        Recursive once
+      </button>
+      <button
         id="native-option-passive"
         on:click={authorClient.events.passive((event: MouseEvent) => {
           event.preventDefault();
@@ -147,6 +159,24 @@ export default function Native() {
         }}
       >
         Ordinary
+      </button>
+      <button
+        id="native-option-passive-return"
+        on:click={authorClient.events.passive((event: MouseEvent) => {
+          event.returnValue = false;
+          optionEvents.push(`passive-return:${event.returnValue}:${event.defaultPrevented}`);
+        })}
+      >
+        Passive return value
+      </button>
+      <button
+        id="native-option-ordinary-return"
+        on:click={(event: MouseEvent) => {
+          event.returnValue = false;
+          optionEvents.push(`ordinary-return:${event.returnValue}:${event.defaultPrevented}`);
+        }}
+      >
+        Ordinary return value
       </button>
       <button
         id="native-option-fault"
