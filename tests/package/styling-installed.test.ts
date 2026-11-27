@@ -168,6 +168,50 @@ async function waitForServer(
   }
 }
 
+async function waitForServerExit(child: ReturnType<typeof Bun.spawn>): Promise<number | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      child.exited,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), 1_500);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function retireServer(
+  child: ReturnType<typeof Bun.spawn>,
+  name: string,
+  afterFailure: boolean,
+  stage: (message: string) => void,
+): Promise<void> {
+  stage("signal " + name + " server " + child.pid);
+
+  if (child.exitCode === null) child.kill();
+
+  stage("await " + name + " server exit " + child.pid);
+  const status = afterFailure ? await waitForServerExit(child) : await child.exited;
+
+  if (status !== undefined) {
+    stage(name + " server exited with status " + status);
+    return;
+  }
+
+  stage("force " + name + " server exit " + child.pid);
+
+  if (child.exitCode === null) child.kill("SIGKILL");
+
+  const forcedStatus = await waitForServerExit(child);
+
+  if (forcedStatus === undefined) throw new Error(name + " server exit was not observed");
+
+  throw new Error(name + " server exceeded its graceful exit bound (status " + forcedStatus + ")");
+}
+
 function isInside(parent: string, child: string): boolean {
   const path = relative(resolve(parent), resolve(child));
 
@@ -190,6 +234,7 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
   let previewStderr: ReturnType<typeof captureStderr> | undefined;
 
   let passed = false;
+  let primaryFailure: { error: unknown } | undefined;
 
   try {
     stage("prepare package archives");
@@ -316,6 +361,7 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
 
     stage("launch browser");
     const browser = await chromium.launch(browserLaunchOptions("chromium"));
+    let browserFailure: { error: unknown } | undefined;
 
     try {
       stage("start development server");
@@ -485,6 +531,7 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
 
       await previewPage.close();
     } catch (error) {
+      browserFailure = { error };
       console.error("[Q10-STYLING] browser exercise failed", error);
 
       try {
@@ -496,43 +543,58 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
       } catch {
         // The stderr diagnostic must not replace the browser failure.
       }
-
-      throw error;
     } finally {
       stage("close browser");
-      await browser.close();
+
+      try {
+        await browser.close();
+      } catch (error) {
+        browserFailure = {
+          error: browserFailure
+            ? new AggregateError(
+                [browserFailure.error, error],
+                "Browser exercise and close failed",
+                { cause: browserFailure.error },
+              )
+            : error,
+        };
+      }
     }
 
+    if (browserFailure) throw browserFailure.error;
+
     passed = true;
+  } catch (error) {
+    primaryFailure = { error };
   } finally {
     stage("clean up application");
 
-    if (devServer) {
-      stage("signal development server " + devServer.pid);
-      devServer.kill();
+    try {
+      if (devServer) await retireServer(devServer, "development", !passed, stage);
 
-      stage("await development server exit " + devServer.pid);
-      const status = await devServer.exited;
-      stage("development server exited with status " + status);
-    }
+      if (previewServer) await retireServer(previewServer, "preview", !passed, stage);
 
-    if (previewServer) {
-      stage("signal preview server " + previewServer.pid);
-      previewServer.kill();
+      if (!passed && process.env.HESPERIA_PACKAGE_TEST_KEEP_TEMP_ON_FAILURE === "1") {
+        console.error(`Retained failed optional-styling consumer at ${workspace}`);
+      } else if (!isInside(tempRoot, workspace)) {
+        console.error(`Skipped cleanup outside the temp root: ${workspace}`);
+      } else {
+        stage("remove temporary workspace");
+        await rm(workspace, { recursive: true, force: true });
+        stage("temporary workspace removed");
+      }
+    } catch (error) {
+      console.error(`Retained optional-styling consumer after cleanup failure at ${workspace}`);
 
-      stage("await preview server exit " + previewServer.pid);
-      const status = await previewServer.exited;
-      stage("preview server exited with status " + status);
-    }
-
-    if (!passed && process.env.HESPERIA_PACKAGE_TEST_KEEP_TEMP_ON_FAILURE === "1") {
-      console.error(`Retained failed optional-styling consumer at ${workspace}`);
-    } else if (!isInside(tempRoot, workspace)) {
-      console.error(`Skipped cleanup outside the temp root: ${workspace}`);
-    } else {
-      stage("remove temporary workspace");
-      await rm(workspace, { recursive: true, force: true });
-      stage("temporary workspace removed");
+      primaryFailure = {
+        error: primaryFailure
+          ? new AggregateError([primaryFailure.error, error], "Styling test and cleanup failed", {
+              cause: primaryFailure.error,
+            })
+          : error,
+      };
     }
   }
+
+  if (primaryFailure) throw primaryFailure.error;
 }, 300_000);
