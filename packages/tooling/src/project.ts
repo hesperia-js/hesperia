@@ -930,8 +930,32 @@ async function prepareBuildLocalAttempt(
 
   generatedSpecifiers.set(startupModules.routes, generatedRouteTableFilename);
 
-  for (const [specifier, filename] of routeTable.modules)
+  for (const [specifier, filename] of routeTable.modules) {
+    const compiled = development ? compilation.modules.get(filename) : undefined;
+
+    if (compiled) {
+      const parsed = parseSync(filename, compiled.code, { lang: "js", sourceType: "module" });
+      const hasDefault = parsed.module.staticExports.some(({ entries }) =>
+        entries.some(
+          ({ exportName, isType }) =>
+            !isType &&
+            (exportName.kind === "Default" ||
+              (exportName.kind === "Name" && exportName.name === "default")),
+        ),
+      );
+
+      if (parsed.errors.length === 0 && !hasDefault) {
+        const route = relative(root, filename).replaceAll("\\", "/");
+        const message = "Route module " + route + " must default-export a component";
+
+        throw new ProjectError(message, [
+          { code: "HES-ROUTE-COMPONENT", severity: "error", filename, message },
+        ]);
+      }
+    }
+
     generatedSpecifiers.set(specifier, captureCompiledGenerated(filename));
+  }
 
   for (const guard of routeBuild.guards)
     (() => {

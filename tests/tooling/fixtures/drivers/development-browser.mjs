@@ -203,6 +203,66 @@ try {
   const initialPublication = new URL(publicationClient.url()).searchParams
     .get("publication")
     ?.slice(0, 64);
+
+  assert.ok(initialPublication, "Publication observer received the initial revision");
+
+  const initialObserverTimeOrigin = await publicationPage.evaluate(() => performance.timeOrigin);
+  const routeDiagnostic =
+    "Route module src/routes/nested/+page.tsx must default-export a component";
+  const invalidRouteOutcome = Promise.race([
+    publicationPage
+      .waitForEvent("console", {
+        predicate: (message) =>
+          message.type() === "error" && message.text().endsWith(routeDiagnostic),
+        timeout: 30000,
+      })
+      .then(() => "rejected"),
+    publicationPage
+      .waitForEvent("pageerror", {
+        predicate: (error) => error.message === routeDiagnostic,
+        timeout: 30000,
+      })
+      .then(() => "published"),
+  ]);
+  void invalidRouteOutcome.catch(() => {});
+
+  await writeFile(routePath, "");
+
+  const invalidRouteDisposition = await invalidRouteOutcome;
+  const afterInvalidRoute = await publicationPage.evaluate(() => ({
+    timeOrigin: performance.timeOrigin,
+    version: document.querySelector("#version")?.textContent ?? null,
+  }));
+  const servedDocument = await fetch(applicationUrl, { headers: { accept: "text/html" } });
+  assert.equal(servedDocument.status, 200);
+  const servedPublication = (await servedDocument.text()).match(
+    /<script type="module" src="[^"]*\/client\.js\?publication=([0-9a-f-]{36})"><\/script>/u,
+  )?.[1];
+
+  assert.equal(
+    invalidRouteDisposition,
+    "rejected",
+    "The route without a default reached the browser: " +
+      JSON.stringify({
+        initialPublication,
+        initialObserverTimeOrigin,
+        servedPublication,
+        afterInvalidRoute,
+        routeDiagnostic,
+      }),
+  );
+  assert.equal(
+    servedPublication,
+    initialPublication,
+    "A rejected route edit retains the served revision",
+  );
+  assert.equal(
+    afterInvalidRoute.timeOrigin,
+    initialObserverTimeOrigin,
+    "The browser kept its document",
+  );
+  assert.equal(afterInvalidRoute.version, "first", "The previous route stayed visible");
+
   /**
    * @typedef {{
    *   id: number, kind: "document" | "client", path: string, redirectedFrom?: number,
