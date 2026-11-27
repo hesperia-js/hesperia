@@ -1,7 +1,185 @@
 import { browserLaunchOptions } from "../../../support/browser-launch.mjs";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { writeSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+
+const publicationTag =
+  /<script type="module" src="[^"]*\/client\.js\?publication=([0-9a-f-]{36})"><\/script>/u;
+const documentSampleLimit = 16384;
+const timeoutSampleMillis = 750;
+const sseArmMillis = 250;
+
+/** @param {string} url @param {AbortSignal} signal */
+async function sampleServedPublication(url, signal) {
+  try {
+    const response = await fetch(url, {
+      headers: { accept: "text/html" },
+      redirect: "manual",
+      signal,
+    });
+    const status = response.status;
+    const contentType = response.headers.get("content-type")?.slice(0, 80) ?? null;
+
+    if (status !== 200 || !contentType?.toLowerCase().startsWith("text/html") || !response.body) {
+      void response.body?.cancel().catch(() => {});
+      return { status, contentType, state: "document-unavailable" };
+    }
+
+    const reader = response.body.getReader();
+    const output = new Uint8Array(documentSampleLimit);
+    let length = 0;
+    let ended = false;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          ended = true;
+          break;
+        }
+
+        if (length + value.byteLength > output.byteLength)
+          return { status, contentType, state: "body-over-limit" };
+
+        output.set(value, length);
+        length += value.byteLength;
+      }
+
+      const publication = new TextDecoder()
+        .decode(output.subarray(0, length))
+        .match(publicationTag)?.[1];
+
+      return {
+        status,
+        contentType,
+        state: publication ? "publication-observed" : "publication-tag-absent",
+        publication,
+      };
+    } finally {
+      if (!ended) void reader.cancel().catch(() => {});
+
+      reader.releaseLock();
+    }
+  } catch (error) {
+    return { state: "unavailable", error: String(error).slice(0, 160) };
+  }
+}
+
+/** @param {Page} page @param {string | undefined} eventsUrl */
+async function observePublicationEvents(page, eventsUrl) {
+  /** @type {{kind: string, publication: string}[]} */
+  const events = [];
+  /** @type {Set<string>} */
+  const requests = new Set();
+  let dropped = 0;
+  let status = "attaching";
+  let reloadListener = "attaching";
+  /** @type {boolean[]} */
+  const hardReloadDefaultPrevented = [];
+  let hardReloadEventsDropped = 0;
+
+  page.on("console", (message) => {
+    const text = message.text();
+
+    if (
+      text !== "observer-hard-reload-default true" &&
+      text !== "observer-hard-reload-default false"
+    )
+      return;
+    if (hardReloadDefaultPrevented.length === 8) {
+      hardReloadEventsDropped++;
+      return;
+    }
+
+    hardReloadDefaultPrevented.push(text.endsWith(" true"));
+  });
+
+  const reloadAttachment = page
+    .addInitScript(() => {
+      window.addEventListener(
+        "hesperia:dev-hard-reload",
+        (event) =>
+          queueMicrotask(() =>
+            console.debug("observer-hard-reload-default", event.defaultPrevented),
+          ),
+        { capture: true, passive: true },
+      );
+    })
+    .then(
+      () => {
+        reloadListener = "armed";
+      },
+      () => {
+        reloadListener = "unavailable";
+      },
+    );
+
+  const attachment = page
+    .context()
+    .newCDPSession(page)
+    .then(async (session) => {
+      session.on("Network.requestWillBeSent", (event) => {
+        if (event.request.url !== eventsUrl) return;
+        if (requests.size === 8 && !requests.has(event.requestId)) {
+          dropped++;
+          return;
+        }
+
+        requests.add(event.requestId);
+      });
+      session.on("Network.eventSourceMessageReceived", (event) => {
+        if (!requests.has(event.requestId)) return;
+        if (events.length === 12) {
+          dropped++;
+          return;
+        }
+
+        let kind = "message";
+
+        try {
+          const message = JSON.parse(event.data);
+
+          if (message === "reload") kind = "reload";
+          else if (message?.type === "current") kind = "current";
+          else if (message?.type === "style-revision") kind = "style-revision";
+          else if (message?.type === "source-removal") kind = "source-removal";
+          else if (typeof message === "string") kind = "diagnostic";
+        } catch {}
+
+        events.push({ kind, publication: event.eventId.slice(0, 64) });
+      });
+
+      await session.send("Network.enable");
+      status = "armed";
+    })
+    .catch(() => {
+      status = "unavailable";
+    });
+
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  const armLimit = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(undefined), sseArmMillis);
+  });
+
+  try {
+    await Promise.race([Promise.all([attachment, reloadAttachment]), armLimit]);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  return () => ({
+    status,
+    streams: requests.size,
+    events: [...events],
+    dropped,
+    reloadListener,
+    hardReloadDefaultPrevented: [...hardReloadDefaultPrevented],
+    hardReloadEventsDropped,
+  });
+}
 
 /** @typedef {import("playwright").Browser} Browser */
 /** @typedef {import("playwright").Page} Page */
@@ -161,6 +339,10 @@ try {
   if (!publicationEntry) throw new Error("No browser is available for publication observation");
 
   const publicationPage = await publicationEntry.browser.newPage();
+  const publicationEvents = await observePublicationEvents(
+    publicationPage,
+    publicationEntry.eventStreamUrl,
+  );
 
   publicationPage.on("pageerror", (error) => publicationEntry.errors.push(error.message));
 
@@ -235,9 +417,7 @@ try {
   }));
   const servedDocument = await fetch(applicationUrl, { headers: { accept: "text/html" } });
   assert.equal(servedDocument.status, 200);
-  const servedPublication = (await servedDocument.text()).match(
-    /<script type="module" src="[^"]*\/client\.js\?publication=([0-9a-f-]{36})"><\/script>/u,
-  )?.[1];
+  const servedPublication = (await servedDocument.text()).match(publicationTag)?.[1];
 
   assert.equal(
     invalidRouteDisposition,
@@ -297,7 +477,7 @@ try {
         !response ||
         !Number.isSafeInteger(length) ||
         length <= 0 ||
-        length > 16384 ||
+        length > documentSampleLimit ||
         (encoding && encoding !== "identity")
       ) {
         bodyState = "size-or-encoding-unavailable";
@@ -307,15 +487,11 @@ try {
       void response
         .body()
         .then((body) => {
-          if (body.length > 16384) {
+          if (body.length > documentSampleLimit) {
             bodyState = "body-over-limit";
             return;
           }
-          const tag = body
-            .toString("utf8")
-            .match(
-              /<script type="module" src="[^"]*\/client\.js\?publication=([0-9a-f-]{36})"><\/script>/u,
-            );
+          const tag = body.toString("utf8").match(publicationTag);
           injectedPublication = tag?.[1];
           bodyState = injectedPublication ? "publication-observed" : "publication-tag-absent";
         })
@@ -397,7 +573,45 @@ try {
 
   await writeFile(routePath, secondPageSource);
 
-  const publishedDocumentRequest = await publicationDocumentReload;
+  const publishedDocumentRequest = await publicationDocumentReload.catch(async (error) => {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      try {
+        const navigationAtTimeout = {
+          requests: [...reloadRequests.values()].map((row) => ({ ...row })),
+          dropped: reloadRequestsDropped,
+          pageErrors: [...pageErrors],
+          pageErrorsDropped,
+          sse: publicationEvents(),
+        };
+        const signal = AbortSignal.timeout(timeoutSampleMillis);
+        const [routeReadback, currentServed] = await Promise.all([
+          readFile(routePath, { signal })
+            .then((bytes) => ({
+              bytes: bytes.length,
+              sha256: createHash("sha256").update(bytes).digest("hex"),
+              matchesSecond: bytes.equals(Buffer.from(secondPageSource)),
+            }))
+            .catch((reason) => ({ state: "unavailable", error: String(reason).slice(0, 160) })),
+          sampleServedPublication(applicationUrl, signal),
+        ]);
+
+        markMilestone(
+          "observer-reload-request-timeout " +
+            JSON.stringify({
+              initialPublication,
+              lastGoodPublication: servedPublication,
+              routeReadback,
+              navigationAtTimeout,
+              currentServedAfterTimeout: currentServed,
+            }),
+        );
+      } catch (failure) {
+        markMilestone("observer-reload-request-probe-unavailable " + String(failure).slice(0, 160));
+      }
+    }
+
+    throw error;
+  });
 
   assert.equal(publishedDocumentRequest.isNavigationRequest(), true);
 
