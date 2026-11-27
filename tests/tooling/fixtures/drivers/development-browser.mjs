@@ -198,6 +198,135 @@ try {
   assert.equal(publicationRequest.url(), heldEventStreamUrl);
   assert.equal(publicationResponse.url(), publicationRequest.url());
 
+  const applicationOrigin = new URL(applicationUrl).origin;
+  const clientPath = new URL(publicationClient.url()).pathname;
+  const initialPublication = new URL(publicationClient.url()).searchParams
+    .get("publication")
+    ?.slice(0, 64);
+  /**
+   * @typedef {{
+   *   id: number, kind: "document" | "client", path: string, redirectedFrom?: number,
+   *   publication?: string, status?: number, contentType?: string,
+   *   finished?: boolean, failure?: string
+   * }} ReloadRequest
+   */
+  /** @type {Map<import("playwright").Request, ReloadRequest>} */
+  const reloadRequests = new Map();
+  /** @type {WeakMap<import("playwright").Request, import("playwright").Response>} */
+  const reloadResponses = new WeakMap();
+  let reloadRequestsDropped = 0;
+  let reservedNavigationSeen = false;
+  /** @type {string[]} */
+  const pageErrors = [];
+  let pageErrorsDropped = 0;
+  /** @type {import("playwright").Request | undefined} */
+  let selectedNavigation;
+  let bodyState = "waiting-for-finish";
+  /** @type {string | undefined} */
+  let injectedPublication;
+
+  function readFinishedResponse() {
+    if (!selectedNavigation || bodyState !== "waiting-for-finish") return;
+    if (!reloadRequests.get(selectedNavigation)?.finished) return;
+    try {
+      const response = reloadResponses.get(selectedNavigation);
+      const headers = response?.headers();
+      const length = Number(headers?.["content-length"] ?? NaN);
+      const encoding = headers?.["content-encoding"]?.toLowerCase();
+      if (
+        !response ||
+        !Number.isSafeInteger(length) ||
+        length <= 0 ||
+        length > 16384 ||
+        (encoding && encoding !== "identity")
+      ) {
+        bodyState = "size-or-encoding-unavailable";
+        return;
+      }
+      bodyState = "reading";
+      void response
+        .body()
+        .then((body) => {
+          if (body.length > 16384) {
+            bodyState = "body-over-limit";
+            return;
+          }
+          const tag = body
+            .toString("utf8")
+            .match(
+              /<script type="module" src="[^"]*\/client\.js\?publication=([0-9a-f-]{36})"><\/script>/u,
+            );
+          injectedPublication = tag?.[1];
+          bodyState = injectedPublication ? "publication-observed" : "publication-tag-absent";
+        })
+        .catch(() => {
+          bodyState = "read-unavailable";
+        });
+    } catch {
+      bodyState = "read-unavailable";
+    }
+  }
+
+  publicationPage.on("pageerror", (error) => {
+    if (pageErrors.length === 8) {
+      pageErrorsDropped++;
+      return;
+    }
+    pageErrors.push(error.message.slice(0, 160));
+  });
+  publicationPage.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.origin !== applicationOrigin) return;
+    const kind =
+      request.isNavigationRequest() && request.resourceType() === "document"
+        ? "document"
+        : url.pathname === clientPath
+          ? "client"
+          : undefined;
+    if (!kind) return;
+    if (kind === "client") {
+      try {
+        if (request.frame() !== publicationPage.mainFrame()) return;
+      } catch {
+        return;
+      }
+    }
+    const reservesSlot =
+      kind === "document" && url.pathname === "/nested" && !reservedNavigationSeen;
+    const limit = reservedNavigationSeen || reservesSlot ? 16 : 15;
+    if (reloadRequests.size === limit) {
+      reloadRequestsDropped++;
+      return;
+    }
+    if (reservesSlot) reservedNavigationSeen = true;
+    const previous = request.redirectedFrom();
+    reloadRequests.set(request, {
+      id: reloadRequests.size + 1,
+      kind,
+      path: url.pathname.slice(0, 120),
+      redirectedFrom: previous ? reloadRequests.get(previous)?.id : undefined,
+      publication:
+        kind === "client" ? url.searchParams.get("publication")?.slice(0, 64) : undefined,
+    });
+  });
+  publicationPage.on("response", (response) => {
+    const request = response.request();
+    const row = reloadRequests.get(request);
+    if (!row) return;
+    row.status = response.status();
+    row.contentType = response.headers()["content-type"]?.slice(0, 80);
+    reloadResponses.set(request, response);
+  });
+  publicationPage.on("requestfinished", (request) => {
+    const row = reloadRequests.get(request);
+    if (row) row.finished = true;
+    if (request === selectedNavigation) readFinishedResponse();
+  });
+  publicationPage.on("requestfailed", (request) => {
+    const row = reloadRequests.get(request);
+    if (row) row.failure = request.failure()?.errorText.slice(0, 120);
+  });
+
   const publicationDocumentReload = publicationPage.waitForRequest(
     (request) =>
       request.isNavigationRequest() &&
@@ -212,9 +341,41 @@ try {
 
   assert.equal(publishedDocumentRequest.isNavigationRequest(), true);
 
-  await publicationPage.waitForFunction(
-    () => document.querySelector("#version")?.textContent === "second",
-  );
+  selectedNavigation = publishedDocumentRequest;
+  readFinishedResponse();
+  try {
+    await publicationPage.waitForFunction(
+      () => document.querySelector("#version")?.textContent === "second",
+    );
+  } catch (error) {
+    try {
+      const selected = reloadRequests.get(publishedDocumentRequest);
+      markMilestone(
+        "observer-reload-response " +
+          JSON.stringify({
+            initialPublication,
+            selected: selected?.id ?? null,
+            dropped: reloadRequestsDropped,
+            requests: [...reloadRequests.values()],
+            pageErrors,
+            pageErrorsDropped,
+            bodyState,
+            injectedPublication,
+          }),
+      );
+      void publicationPage
+        .evaluate(() => ({
+          path: location.pathname.slice(0, 120),
+          readyState: document.readyState,
+          version: document.querySelector("#version")?.textContent?.slice(0, 64) ?? null,
+        }))
+        .then((value) => {
+          markMilestone("observer-reload-dom-after-rejection " + JSON.stringify(value));
+        })
+        .catch(() => {});
+    } catch {}
+    throw error;
+  }
 
   markMilestone("observer-second");
 
