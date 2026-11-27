@@ -921,7 +921,7 @@ function Assert-IsolatedFixtureProcessScopeClear {
             [pscustomobject]@{
               pid = [int]$_.ProcessId
               parentPid = [int]$_.ParentProcessId
-              creationTime = if ($null -ne $_.CreationDate) { ([datetime]$_.CreationDate).ToUniversalTime().ToString('o') }
+              creationTime = $(if ($null -ne $_.CreationDate) { ([datetime]$_.CreationDate).ToUniversalTime().ToString('o') })
               processName = [string]$_.Name
               executablePath = $_.ExecutablePath
               matchedPathRoles = $matchedPathRoles
