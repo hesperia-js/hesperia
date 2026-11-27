@@ -1,5 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { API } from "typescript/unstable/async";
+import { chromium } from "playwright";
+import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import * as filesystem from "node:fs";
 import * as filesystemPromises from "node:fs/promises";
 import {
@@ -407,6 +409,12 @@ function observePublicWatches(root: string, context: () => unknown) {
   let readIntercepted = false;
   let readRestored = false;
   let forwardedNativeCallbacks = 0;
+  let exactNativeHold:
+    | {
+        readonly target: string;
+        readonly onNotification: () => void;
+      }
+    | undefined;
 
   const isWithinFixture = (path: string): boolean => {
     const relativePath = relative(canonicalRoot, path);
@@ -567,6 +575,10 @@ function observePublicWatches(root: string, context: () => unknown) {
               Reflect.apply(callback, this, [event, filename]);
               return;
             }
+            if (exactNativeHold?.target === changed) {
+              exactNativeHold.onNotification();
+              return;
+            }
             const controlled = [...heldNotifications].some((target) => {
               const fromTarget = relative(target, changed);
               const fromChange = relative(changed, target);
@@ -678,6 +690,12 @@ function observePublicWatches(root: string, context: () => unknown) {
     },
     afterRead(filename: string, run: () => void): void {
       afterRead = { filename: entryPath(filename), run };
+    },
+    holdFileNotifications(filename: string, onNotification: () => void): void {
+      const target = entryPath(filename);
+      if (!isWithinFixture(target) || exactNativeHold)
+        throw new Error("File notification hold is not owned by this fixture");
+      exactNativeHold = { target, onNotification };
     },
     forwardedNativeCallbacks(): number {
       return forwardedNativeCallbacks;
@@ -2780,4 +2798,334 @@ for (const mode of ["aborted", "live", "cleanup"] as const) {
       () => cleanup?.close(),
     ]);
   }, 240_000);
+}
+
+for (const [worker, completeRoute] of [
+  [false, false],
+  [false, true],
+  [true, false],
+  [true, true],
+] as const) {
+  test(
+    (completeRoute
+      ? "development recovers a route changed after an empty capture"
+      : "development retains the last good route when the empty capture is current") +
+      (worker ? " through the project worker" : " in process"),
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "hesperia-stale-route-control-"));
+      const route = join(root, "src/routes/nested/+page.tsx");
+      const fixture = join(import.meta.dir, "fixtures/applications/development-browser");
+      const pageSource = (version: string) => `import * as client from "hesperia/client";
+export default function Page() {
+  const count = client.state(0);
+  const input = client.unsafeBind<HTMLInputElement>();
+  return <main><span id="version">${version}</span><input bind={input} /><button id="count" on:click={() => count.update(value => value + 1)}>{count()}</button></main>;
+}`;
+      const routeDiagnostic =
+        "Route module src/routes/nested/+page.tsx must default-export a component";
+      const deadline = createDeadline(55_000);
+      const { signal } = deadline;
+      const releaseSnapshot = completion();
+      const snapshotHeld = completion();
+      const completedNotice = completion();
+      type Attempt = { readonly signal: AbortSignal | undefined; sawEmpty: boolean };
+      let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+      let browserStarted: ReturnType<typeof chromium.launch> | undefined;
+      let gate: ReturnType<typeof Bun.serve> | undefined;
+      let reloadPublication: string | undefined;
+      let active: Attempt | undefined;
+      let held: Attempt | undefined;
+      let firstPublication: string | undefined;
+      let lastPublication: string | undefined;
+      let actual: "reload" | "route-diagnostic" | undefined;
+      let server: ProjectServer | undefined;
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+      let watches: ReturnType<typeof observePublicWatches> | undefined;
+      let readSpy: { mockRestore(): void } | undefined;
+      let snapshotSpy: { mockRestore(): void } | undefined;
+      let cleanup: ReturnType<typeof createDeadline> | undefined;
+      let ready: Promise<ProjectServer> | undefined;
+      let armed = false;
+      let closed = false;
+      let sampled = false;
+      let noticeFailure: string | undefined;
+      const reports: string[] = [];
+      const second = Buffer.from(pageSource("second"));
+
+      await withFixtureCleanup(async () => {
+        await withAbort(linkFrameworkPackages(root), signal);
+        await withAbort(mkdir(dirname(route), { recursive: true }), signal);
+        await withAbort(
+          filesystemPromises.copyFile(join(fixture, "app.tsx"), join(root, "app.tsx")),
+          signal,
+        );
+        await withAbort(
+          filesystemPromises.copyFile(
+            join(fixture, "src/routes/+loading.tsx"),
+            join(root, "src/routes/+loading.tsx"),
+          ),
+          signal,
+        );
+        await withAbort(writeFile(route, pageSource("first")), signal);
+        const observed = observePublicWatches(root, () => ({ held: held !== undefined }));
+        watches = observed;
+
+        const holdRouteNotifications = () => {
+          observed.holdFileNotifications(route, () => {
+            try {
+              if (filesystem.readFileSync(route).equals(second)) completedNotice.resolve();
+            } catch (error) {
+              noticeFailure ??= String(error);
+            }
+          });
+          snapshotHeld.resolve();
+        };
+
+        if (worker) {
+          const token = crypto.randomUUID();
+          gate = Bun.serve({
+            hostname: "127.0.0.1",
+            port: 0,
+            async fetch(request) {
+              const owner = active;
+              if (request.method !== "POST" || new URL(request.url).pathname !== "/" + token)
+                return new Response(null, { status: 404 });
+              const capture = (await request.json()) as {
+                pid?: number;
+                filename?: string;
+                authored?: string;
+                current?: string;
+              };
+              if (
+                !armed ||
+                held ||
+                !owner?.signal ||
+                owner !== active ||
+                owner.signal.aborted ||
+                capture.filename !== route ||
+                capture.authored !== "" ||
+                capture.current !== "" ||
+                !Number.isInteger(capture.pid) ||
+                capture.pid === process.pid ||
+                capture.pid! <= 0
+              )
+                return new Response(null, { status: 409 });
+              owner.sawEmpty = true;
+              held = owner;
+              holdRouteNotifications();
+              await releaseSnapshot.promise;
+              return new Response(null, { status: 204 });
+            },
+          });
+          const rendezvous = new URL(token, gate.url).href;
+          await withAbort(
+            writeFile(
+              join(root, "hesperia.config.ts"),
+              [
+                "export default { plugins: [{",
+                '  name: "route-capture-gate",',
+                "  async transformSource(input) {",
+                "    if (input.filename !== " +
+                  JSON.stringify(route) +
+                  ' || input.authored !== "" || input.current !== "") return;',
+                "    const answer = await fetch(" + JSON.stringify(rendezvous) + ", {",
+                '      method: "POST", headers: { "content-type": "application/json" },',
+                "      body: JSON.stringify({pid:process.pid,filename:input.filename,authored:input.authored,current:input.current}),",
+                "      signal: AbortSignal.timeout(20000),",
+                "    });",
+                '    if (answer.status !== 204) throw new Error("Worker capture admission refused");',
+                "  },",
+                "}] };",
+              ].join("\n"),
+            ),
+            signal,
+          );
+        } else {
+          const originalReadFile = filesystemPromises.readFile;
+          readSpy = spyOn(filesystemPromises, "readFile").mockImplementation((async (
+            ...args: Parameters<typeof filesystemPromises.readFile>
+          ) => {
+            const owner = active;
+            const source: string | Buffer = await Reflect.apply(
+              originalReadFile,
+              filesystemPromises,
+              args,
+            );
+            if (
+              armed &&
+              owner?.signal &&
+              owner === active &&
+              args[0] === route &&
+              args[1] === "utf8" &&
+              source === ""
+            )
+              owner.sawEmpty = true;
+            return source;
+          }) as typeof filesystemPromises.readFile);
+
+          const originalSnapshot = API.prototype.updateSnapshot;
+          snapshotSpy = spyOn(API.prototype, "updateSnapshot").mockImplementation(async function (
+            this: API,
+            ...args: Parameters<API["updateSnapshot"]>
+          ) {
+            const owner = active;
+            const snapshot: Awaited<ReturnType<API["updateSnapshot"]>> = await Reflect.apply(
+              originalSnapshot,
+              this,
+              args,
+            );
+            if (
+              armed &&
+              !held &&
+              owner === active &&
+              owner?.sawEmpty &&
+              owner.signal &&
+              !owner.signal.aborted
+            ) {
+              held = owner;
+              holdRouteNotifications();
+              await releaseSnapshot.promise;
+            }
+            return snapshot;
+          });
+        }
+
+        ready = devProject(
+          root,
+          { port: 0, report: (message) => reports.push(message) },
+          async (projectRoot, ownerSignal) => {
+            expect(projectRoot).toBe(root);
+            expect(active).toBeUndefined();
+            const owner: Attempt = { signal: ownerSignal, sawEmpty: false };
+            active = owner;
+            try {
+              return await prepareDevelopmentBuild(projectRoot, ownerSignal);
+            } finally {
+              active = undefined;
+            }
+          },
+        );
+        server = await withAbort(ready, signal);
+        const url = new URL("/nested", server.url);
+        const events = await fetch(new URL("/_hesperia/events", server.url), { signal });
+        expect(events.status).toBe(200);
+        reader = events.body!.getReader();
+        const nextEvent = nextDevelopmentEvent(reader, signal);
+        const current = await nextEvent();
+        expect(current).toContain('data: {"type":"current"}');
+        firstPublication = /^id: ([\w-]+)$/mu.exec(current)?.[1];
+        expect(firstPublication).toBeString();
+
+        const published = async () => {
+          const response = await fetch(url, { headers: { accept: "text/html" }, signal });
+          expect(response.status).toBe(200);
+          const html = await response.text();
+          const publication = /\/_hesperia\/client\.js\?publication=([\w-]+)/u.exec(html)?.[1];
+          expect(publication).toBeString();
+          return publication;
+        };
+        expect(await published()).toBe(firstPublication);
+        armed = true;
+        await withAbort(writeFile(route, ""), signal);
+        await withAbort(snapshotHeld.promise, signal);
+        expect(held).toBe(active);
+        expect(held?.sawEmpty).toBe(true);
+        expect(held?.signal?.aborted).toBe(false);
+        expect((await readFile(route)).byteLength).toBe(0);
+        expect(await published()).toBe(firstPublication);
+
+        if (completeRoute) {
+          await withAbort(writeFile(route, second), signal);
+          expect((await withAbort(readFile(route), signal)).equals(second)).toBe(true);
+          await withAbort(completedNotice.promise, signal);
+        }
+        expect(held).toBe(active);
+        expect(held?.signal?.aborted).toBe(false);
+        expect(await published()).toBe(firstPublication);
+        releaseSnapshot.resolve();
+
+        for (;;) {
+          const event = await nextEvent();
+          if (event.includes(routeDiagnostic)) {
+            actual = "route-diagnostic";
+            expect(/^id: ([\w-]+)$/mu.exec(event)?.[1]).toBe(firstPublication);
+            expect(reports.some((report) => report.endsWith(routeDiagnostic))).toBe(true);
+            break;
+          }
+          if (event.includes('data: "reload"')) {
+            actual = "reload";
+            reloadPublication = /^id: ([\w-]+)$/mu.exec(event)?.[1];
+            expect(reloadPublication).toBeString();
+            expect(reloadPublication).not.toBe(firstPublication);
+            break;
+          }
+        }
+        lastPublication = await published();
+        if (actual === "route-diagnostic") expect(lastPublication).toBe(firstPublication);
+        else {
+          expect(lastPublication).toBe(reloadPublication);
+          browserStarted = chromium.launch(browserLaunchOptions("chromium"));
+          browser = await withAbort(browserStarted, signal);
+          const page = await withAbort(browser.newPage(), signal);
+          const navigation = await withAbort(page.goto(url.href, { timeout: 10_000 }), signal);
+          expect(navigation?.status()).toBe(200);
+          expect(navigation?.url()).toBe(url.href);
+          const documentBytes = await withAbort(navigation!.body(), signal);
+          const publication = /\/_hesperia\/client\.js\?publication=([\w-]+)/u.exec(
+            documentBytes.toString(),
+          )?.[1];
+          expect(publication).toBe(reloadPublication);
+          await withAbort(
+            page.waitForFunction(
+              () => document.querySelector("#version")?.textContent === "second",
+              undefined,
+              { timeout: 10_000 },
+            ),
+            signal,
+          );
+          expect(page.url()).toBe(url.href);
+          expect(await published()).toBe(publication);
+        }
+        expect(noticeFailure).toBeUndefined();
+        sampled = true;
+      }, [
+        () => releaseSnapshot.resolve(),
+        () => {
+          deadline.close();
+          cleanup = createDeadline(15_000);
+        },
+        async () => {
+          if (browserStarted) browser ??= await withAbort(browserStarted, cleanup!.signal);
+          if (browser) await withAbort(browser.close(), cleanup!.signal);
+        },
+        async () => {
+          if (reader) await withAbort(reader.cancel(), cleanup!.signal);
+        },
+        async () => {
+          if (ready) server = await withAbort(ready, cleanup!.signal);
+          if (!server) return;
+          await withAbort(server.close(), cleanup!.signal);
+          closed = true;
+        },
+        () => {
+          if (ready && !closed) throw new Error("Control closure was not verified");
+          snapshotSpy?.mockRestore();
+          readSpy?.mockRestore();
+          watches?.restore();
+        },
+        async () => {
+          if (gate) await withAbort(Promise.resolve(gate.stop(true)), cleanup!.signal);
+        },
+        async () => {
+          if (!sampled || !closed)
+            throw new Error("Control fixture retained after incomplete sample or retirement");
+          await withAbort(unlinkFrameworkPackages(root), cleanup!.signal);
+          await withAbort(rm(root, { recursive: true, force: true }), cleanup!.signal);
+        },
+        () => cleanup?.close(),
+      ]);
+      expect(actual).toBe(completeRoute ? "reload" : "route-diagnostic");
+    },
+    90_000,
+  );
 }

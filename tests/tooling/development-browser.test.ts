@@ -85,7 +85,15 @@ export default function Page() {
       reports.filter((message) => message.includes("unsafeBind")).length,
     ).toBeGreaterThanOrEqual(3);
 
-    expect(reports.filter((message) => !message.includes("unsafeBind"))).toStrictEqual([]);
+    const routeDiagnostic =
+      "Route module src/routes/nested/+page.tsx must default-export a component";
+
+    expect(reports.some((message) => message.endsWith(routeDiagnostic))).toBe(true);
+    expect(
+      reports.filter(
+        (message) => !message.includes("unsafeBind") && !message.endsWith(routeDiagnostic),
+      ),
+    ).toStrictEqual([]);
   } finally {
     await server?.close();
 

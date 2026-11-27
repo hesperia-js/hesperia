@@ -568,21 +568,35 @@ export async function prepareDevelopmentBuild(
   return prepareBuildLocal(root, true, signal);
 }
 
+const retryStaleRouteCapture = Symbol("retry stale development route capture");
+
 /** Project-root worker entry; plugin closures never cross this boundary. */
 export async function prepareBuildLocal(
   root: string,
   development = false,
   signal?: AbortSignal,
 ): Promise<BrowserBuild> {
-  const attemptWatches = createPluginWatchAccumulator();
+  for (let canRetryStaleRoute = development; ; canRetryStaleRoute = false) {
+    const attemptWatches = createPluginWatchAccumulator();
 
-  try {
-    return await prepareBuildLocalAttempt(root, development, attemptWatches, signal);
-  } catch (error) {
-    if (signal?.aborted && error === signal.reason) throw error;
-    if (attemptWatches.watches.length === 0) throw error;
+    try {
+      const build = await prepareBuildLocalAttempt(
+        root,
+        development,
+        attemptWatches,
+        signal,
+        canRetryStaleRoute,
+      );
 
-    throw projectErrorWithWatches(error, attemptWatches.watches);
+      if (typeof build !== "symbol") return build;
+
+      signal?.throwIfAborted();
+    } catch (error) {
+      if (signal?.aborted && error === signal.reason) throw error;
+      if (attemptWatches.watches.length === 0) throw error;
+
+      throw projectErrorWithWatches(error, attemptWatches.watches);
+    }
   }
 }
 
@@ -590,8 +604,9 @@ async function prepareBuildLocalAttempt(
   root: string,
   development: boolean,
   attemptWatches: ReturnType<typeof createPluginWatchAccumulator>,
-  signal?: AbortSignal,
-): Promise<BrowserBuild> {
+  signal: AbortSignal | undefined,
+  canRetryStaleRoute: boolean,
+): Promise<BrowserBuild | typeof retryStaleRouteCapture> {
   root = resolve(root);
 
   const configuration = await readConfiguration(root);
@@ -930,8 +945,44 @@ async function prepareBuildLocalAttempt(
 
   generatedSpecifiers.set(startupModules.routes, generatedRouteTableFilename);
 
-  for (const [specifier, filename] of routeTable.modules)
+  for (const [specifier, filename] of routeTable.modules) {
+    const compiled = development ? compilation.modules.get(filename) : undefined;
+
+    if (compiled) {
+      const parsed = parseSync(filename, compiled.code, { lang: "js", sourceType: "module" });
+      const hasDefault = parsed.module.staticExports.some(({ entries }) =>
+        entries.some(
+          ({ exportName, isType }) =>
+            !isType &&
+            (exportName.kind === "Default" ||
+              (exportName.kind === "Name" && exportName.name === "default")),
+        ),
+      );
+
+      if (parsed.errors.length === 0 && !hasDefault) {
+        const captured = canRetryStaleRoute ? authored.get(filename) : undefined;
+
+        if (captured !== undefined) {
+          signal?.throwIfAborted();
+          const current = await readFile(filename, { encoding: "utf8", signal }).catch(
+            () => undefined,
+          );
+          signal?.throwIfAborted();
+
+          if (current !== undefined && current !== captured) return retryStaleRouteCapture;
+        }
+
+        const route = relative(root, filename).replaceAll("\\", "/");
+        const message = "Route module " + route + " must default-export a component";
+
+        throw new ProjectError(message, [
+          { code: "HES-ROUTE-COMPONENT", severity: "error", filename, message },
+        ]);
+      }
+    }
+
     generatedSpecifiers.set(specifier, captureCompiledGenerated(filename));
+  }
 
   for (const guard of routeBuild.guards)
     (() => {
