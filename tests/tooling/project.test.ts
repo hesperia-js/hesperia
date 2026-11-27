@@ -1255,6 +1255,77 @@ export default function App() {
     }
   });
 
+  test("targeted production retains earlier and unknown captures without a retirement policy", async () => {
+    const root = await temporaryProject();
+
+    await mkdir(join(root, "src/routes"), { recursive: true });
+    await writeBrowserStaticPolicy(root);
+    await writeFile(
+      join(root, "hesperia.config.json"),
+      JSON.stringify({ target: { version: 1, runtime: "browser", profile: "static" } }),
+    );
+    await writeFile(
+      join(root, "src/routes/+page.tsx"),
+      "export default function Page() { return <main>Retained route</main>; }",
+    );
+
+    const app = join(root, "app.tsx");
+
+    await writeFile(
+      app,
+      "export default function App() { return <html><head></head><body>Old</body></html>; }",
+    );
+
+    const first = await prepareBuild(root);
+    const output = await writeBuild(root, first);
+    const recordPath = join(output, "hesperia-build.json");
+    const oldRecord = await readFile(recordPath, "utf8");
+    const old = JSON.parse(oldRecord) as { assetDirectory: string };
+    const oldCaptureId = old.assetDirectory.split("/")[1]!;
+    const unknown = join(output, ".captures", "33333333-3333-3333-3333-333333333333");
+    const unknownBytes = new Uint8Array([0, 255, 13, 10, 42]);
+
+    await mkdir(join(unknown, "assets"), { recursive: true });
+    await writeFile(join(unknown, "assets", "retained.bin"), unknownBytes);
+    await writeFile(
+      app,
+      "export default function App() { const broken: string = 42; return <html><head></head><body>{broken}</body></html>; }",
+    );
+
+    expect(await captureRejection(prepareBuild(root))).toMatchObject({
+      message: expect.stringContaining("checking failed"),
+    });
+    expect(await readFile(recordPath, "utf8")).toBe(oldRecord);
+    expect(new Uint8Array(await readFile(join(unknown, "assets", "retained.bin")))).toStrictEqual(
+      unknownBytes,
+    );
+    expect((await readTargetedBuild(output)).inventory.hosting).toStrictEqual(first.hosting);
+
+    await writeFile(
+      app,
+      "export default function App() { return <html><head></head><body>New</body></html>; }",
+    );
+
+    const second = await prepareBuild(root);
+
+    await writeBuild(root, second);
+
+    const current = await readTargetedBuild(output);
+    const retained = await readRetainedManagedBuild(output, oldCaptureId);
+
+    expect(await readFile(recordPath, "utf8")).not.toBe(oldRecord);
+    expect(current.inventory.hosting).toStrictEqual(second.hosting);
+    expect(new Uint8Array(await readFile(join(unknown, "assets", "retained.bin")))).toStrictEqual(
+      unknownBytes,
+    );
+    expect(
+      await readFile(join(output, ".captures", oldCaptureId, "hesperia-build.json"), "utf8"),
+    ).toBe(oldRecord);
+    expect(await retained.files.get(first.hosting.startupAsset)?.arrayBuffer()).toEqual(
+      await first.files.get(first.hosting.startupAsset)!.arrayBuffer(),
+    );
+  });
+
   test("production removes unpublished captures before checking and retires the old capture only after success", async () => {
     const root = await temporaryProject();
 
