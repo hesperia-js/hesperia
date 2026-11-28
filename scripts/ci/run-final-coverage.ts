@@ -59,6 +59,8 @@ const ordinaryTestRoots = [
 const installedCliCoverageTest = "tests/package/check-installed.test.ts" as const;
 const bunTestFile = /\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/u;
 const runIdentity = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u;
+const workerSeedFilename =
+  /^tooling-project-worker_([0-9a-f-]{36})-project-worker-seed-\1-\d+-\d+-[0-9a-f-]{36}\.json$/u;
 
 type FamilyId = "bun-tests-ordinary" | "project-worker-owner" | "browser-css" | "native-editor";
 
@@ -126,9 +128,9 @@ function canonicalPath(path: string): string {
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
-function parseJson(path: string): unknown {
+function parseJson(path: string, decode?: (bytes: Buffer) => unknown): unknown {
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    return decode ? decode(readFileSync(path)) : JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     throw new Error(`Malformed coverage evidence ${path}`, { cause: error });
   }
@@ -356,6 +358,30 @@ function readArtifacts(
   }
 
   const artifacts: CoverageArtifact[] = [];
+  let sharedWorkerSeed:
+    | { readonly body: Buffer; readonly value: Record<string, unknown> }
+    | undefined;
+
+  const decodeWorkerSeed = (bytes: Buffer, ownerId: string): unknown => {
+    const prefix = Buffer.from(
+      `{"format":"hesperia-coverage","version":2,"kind":"seed","runId":${JSON.stringify(runId)},"ownerId":${JSON.stringify(ownerId)},`,
+    );
+
+    if (!bytes.subarray(0, prefix.length).equals(prefix)) return JSON.parse(bytes.toString("utf8"));
+
+    const body = bytes.subarray(prefix.length);
+
+    if (sharedWorkerSeed?.body.equals(body)) return { ...sharedWorkerSeed.value, ownerId };
+
+    const value: unknown = JSON.parse(bytes.toString("utf8"));
+
+    // The round trip excludes duplicate keys and other spellings that JSON.parse normalizes.
+    if (!sharedWorkerSeed && isRecord(value) && Buffer.from(JSON.stringify(value)).equals(bytes)) {
+      sharedWorkerSeed = { body, value };
+    }
+
+    return value;
+  };
 
   for (const entry of entries) {
     if (
@@ -374,7 +400,16 @@ function readArtifacts(
       throw new Error(`${family} coverage output contains foreign evidence: ${entry.name}`);
     }
 
-    const value = parseJson(join(outputDirectory, entry.name));
+    const invocationId =
+      family === "project-worker-owner"
+        ? workerSeedFilename.exec(entry.name.slice(runId.length + 1))?.[1]
+        : undefined;
+    const value = parseJson(
+      join(outputDirectory, entry.name),
+      invocationId && runIdentity.test(invocationId)
+        ? (bytes) => decodeWorkerSeed(bytes, `tooling-project-worker:${invocationId}`)
+        : undefined,
+    );
 
     if (
       !isRecord(value) ||
