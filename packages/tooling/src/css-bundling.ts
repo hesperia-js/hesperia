@@ -135,7 +135,6 @@ export async function bundleCssRoots(
         css,
         origin: { filename: absolute, start: 0, end: css.length },
       });
-
       return transformed.css;
     })();
 
@@ -263,7 +262,6 @@ export async function bundleCssRoots(
                   (isEntry && (input.imported === true || input.css !== undefined)) ||
                   importedCssPaths.has(pathKey(absolute)) ||
                   absolute.toLowerCase().endsWith(".css");
-
                 return {
                   contents:
                     isEntry && input.css !== undefined
@@ -278,7 +276,6 @@ export async function bundleCssRoots(
                 };
               } catch (error) {
                 const origin = generatedAssetOrigins.get(pathKey(absolute));
-
                 loadFailure ??= new CssBundleError(
                   absolute,
                   error instanceof Error ? error.message : String(error),
@@ -566,7 +563,6 @@ function cssDeclaredEncoding(bytes: Uint8Array): string | undefined {
 
   try {
     const encoding = new TextDecoder(label).encoding;
-
     return encoding === "utf-16be" || encoding === "utf-16le" ? "utf-8" : encoding;
   } catch {
     return undefined;
@@ -579,7 +575,6 @@ function isParentRelative(path: string): boolean {
 
 function encodePathSegments(path: string): string {
   const url = new URL("https://hesperia.invalid");
-
   url.pathname = `/${path.replaceAll("\\", "/").replaceAll("%", "%25")}`;
   return url.pathname.slice(1);
 }
@@ -605,7 +600,6 @@ function resolveRequest(path: string, resolveDir: string): string {
 
 function pathKey(path: string): string {
   const normalized = resolve(path).replaceAll("\\", "/");
-
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
@@ -621,7 +615,6 @@ function outputPath(path: string): string {
 
   if (logical) {
     const url = new URL("https://hesperia.invalid");
-
     url.pathname = logical;
     return url.pathname;
   }

@@ -376,7 +376,6 @@ export async function editorInProjectProcess(
     },
     signal,
   )) as PreparedPluginEditorWire;
-
   return {
     ...wire,
     configuration: {

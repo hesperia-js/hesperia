@@ -196,7 +196,6 @@ export async function analyzeConfiguredEffects(
       origin,
       message: warning,
     }));
-
     return {
       ...(warnings.length ? { diagnostics: warnings } : {}),
       watch: emitted.watch,
@@ -471,7 +470,6 @@ async function selectorBinding(
     if (!captured) return undefined;
 
     const name = uniqueSyntheticName(captured.source, span.start, span.end);
-
     return {
       filename: captured.filename,
       name,
@@ -563,7 +561,6 @@ async function isStableFunctionValue(
 
     if (initializer.kind === SyntaxKind.Identifier) {
       const alias = await input.types.checker.getSymbolAtLocation(initializer);
-
       return alias ? isStableFunctionValue(input, alias, seen) : false;
     }
   }
@@ -580,12 +577,10 @@ async function selectorIdentity(
     selector.kind === SyntaxKind.FunctionExpression
   ) {
     const source = selector.getSourceFile();
-
     return `expression:${pathKey(source.fileName)}:${selector.getStart(source)}:${selector.getEnd()}`;
   }
 
   const symbol = await input.types.checker.getSymbolAtLocation(selector);
-
   return symbol ? selectorValueIdentity(input, symbol, new Set()) : undefined;
 }
 
@@ -622,13 +617,11 @@ async function selectorValueIdentity(
       initializer.kind === SyntaxKind.FunctionExpression
     ) {
       const source = initializer.getSourceFile();
-
       return `expression:${pathKey(source.fileName)}:${initializer.getStart(source)}:${initializer.getEnd()}`;
     }
 
     if (initializer.kind === SyntaxKind.Identifier) {
       const alias = await input.types.checker.getSymbolAtLocation(initializer);
-
       return alias ? selectorValueIdentity(input, alias, seen) : undefined;
     }
   }
@@ -680,7 +673,6 @@ async function routeReference(
 
   const method = values.get("method")?.toUpperCase();
   const path = values.get("path");
-
   return method && path !== undefined && values.size === 2 ? { method, path } : undefined;
 }
 
@@ -842,7 +834,6 @@ async function emitSelectedEffects(
       [...input.checkingSources.values()].find(
         (item) => pathKey(item.filename) === pathKey(module.filename),
       );
-
     return checking !== undefined && checking.checking !== checking.authored;
   });
 
@@ -894,7 +885,6 @@ async function emitSelectedEffects(
     const exports = selectorExports
       .filter((selector) => pathKey(selector.module!.filename) === pathKey(item.filename))
       .map((selector) => `${selector.name} as ${selector.exportName}`);
-
     return {
       ...item,
       code: exports.length ? `${item.code}\nexport { ${exports.join(", ")} };\n` : item.code,
@@ -986,7 +976,6 @@ async function emitSelectedEffects(
     ),
     ...resolver.capturedManifests.map((item) => item.filename),
   ]);
-
   return {
     ...bundled,
     watch: [...watchedFiles].map((file) => ({ kind: "file" as const, file })),
@@ -1068,7 +1057,6 @@ async function bundlePrivateModule(options: {
 
           builder.onLoad({ filter: /.*/u, namespace: "hesperia-effect-module" }, (args) => {
             const module = moduleById.get(args.path);
-
             return module
               ? { contents: module.code, loader: loaderFor(module.filename) }
               : undefined;
@@ -1107,7 +1095,6 @@ async function bundlePrivateModule(options: {
         const moduleId = source.startsWith("hesperia-effect-module:")
           ? source.slice("hesperia-effect-module:".length)
           : source;
-
         return (
           (moduleMaps.get(source) as SourceMapInput | undefined) ??
           (moduleMaps.get(moduleId) as SourceMapInput | undefined) ??
@@ -1118,7 +1105,6 @@ async function bundlePrivateModule(options: {
     ),
   );
   const code = (await output.text()).replace(/\s*\/\/# sourceMappingURL=[^\r\n]*\s*$/u, "\n");
-
   return { code, map };
 }
 
@@ -1127,7 +1113,6 @@ function stripSourcesContent(value: unknown): PluginSourceMap {
     throw new Error("Effect module bundling produced an invalid source map.");
 
   const map = { ...(value as PluginSourceMap), sourcesContent: undefined };
-
   delete (map as { sourcesContent?: readonly (string | null)[] }).sourcesContent;
   return map;
 }
@@ -1202,7 +1187,6 @@ function sourceMatchesCapture(input: PluginProjectInput, sourceFile: SourceFile)
   const checking = [...input.checkingSources.values()].find(
     (item) => pathKey(item.filename) === pathKey(sourceFile.fileName),
   );
-
   return (
     checking === undefined ||
     (checking.checking === checking.authored && checking.authored === captured.source)

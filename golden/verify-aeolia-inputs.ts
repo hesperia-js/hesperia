@@ -9,13 +9,11 @@ interface PackageOwner {
 function samePath(left: string, right: string): boolean {
   const a = resolve(left);
   const b = resolve(right);
-
   return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
 function withinPath(path: string, root: string): boolean {
   const prefix = `${resolve(root)}${sep}`;
-
   return process.platform === "win32"
     ? path.toLowerCase().startsWith(prefix.toLowerCase())
     : path.startsWith(prefix);
@@ -45,7 +43,6 @@ export async function verifyAeoliaInputs(
       }
 
       const parent = dirname(directory);
-
       return parent === directory ? undefined : ownerOf(parent);
     })();
 

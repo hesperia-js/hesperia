@@ -106,7 +106,6 @@ function browserAsset(pathname: string): Response | undefined {
   if (!asset) return undefined;
 
   const extension = pathname.split(".").at(-1) ?? "";
-
   return new Response(asset, {
     headers: {
       "cache-control": "no-store",
@@ -128,7 +127,6 @@ function fixtureHostForRequest(request: Request) {
     .map((value) => value.trim())
     .find((value) => value.startsWith("hesperia-golden-host="));
   const appId = appCookie?.slice("hesperia-golden-host=".length);
-
   return fixtureHosts.find((fixture) => fixture.appId === appId);
 }
 
@@ -297,13 +295,11 @@ const server = Bun.serve({
     // Root-mounted hosts share this URL, but each wrapper imports a different startup asset.
     if (pathname === "/_hesperia/startup.js") {
       const fixture = fixtureHostForRequest(request);
-
       return fixture?.host.handle(request) ?? new Response(null, { status: 404 });
     }
 
     if (pathname.startsWith("/_hesperia/assets/")) {
       const logicalPath = `/assets/${pathname.slice("/_hesperia/assets/".length)}`;
-
       return browserAsset(logicalPath) ?? new Response(null, { status: 404 });
     }
 

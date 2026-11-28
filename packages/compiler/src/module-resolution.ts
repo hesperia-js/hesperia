@@ -240,7 +240,6 @@ export class ModuleResolver {
     const importer = target.startsWith(".")
       ? join(this.#root, "override.ts")
       : join(this.#root, ".hesperia", "override.ts");
-
     return this.resolveUncached(importer, target, false);
   }
 
@@ -442,7 +441,6 @@ export class ModuleResolver {
         specifier,
         `Compiler-selected entry ${specifier} conflicts with the previously captured resolution.`,
       );
-
       return conflict;
     }
 
@@ -628,7 +626,6 @@ export class ModuleResolver {
         conditionPath: ["override", specifier, target, ...selected.provenance.conditionPath],
       },
     };
-
     return resolved;
   }
 
@@ -1039,7 +1036,6 @@ function selectExport(
     if (!pattern) return { kind: "no-match" };
 
     const match = subpath.slice(pattern.prefix.length, subpath.length - pattern.suffix.length);
-
     return selectTarget(pattern.value, conditions, [pattern.key], match);
   }
 
@@ -1151,7 +1147,6 @@ function isArrayIndexKey(key: string): boolean {
   if (!/^\d+$/u.test(key)) return false;
 
   const value = Number(key);
-
   return value < 4_294_967_295 && String(value) === key;
 }
 

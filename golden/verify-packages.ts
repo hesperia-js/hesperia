@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 function samePath(left: string, right: string): boolean {
   const a = resolve(left);
   const b = resolve(right);
-
   return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 

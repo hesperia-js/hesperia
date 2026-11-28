@@ -68,6 +68,31 @@
       "rules": {
         "@stylistic/padding-line-between-statements": "off"
       }
+    },
+    {
+      "files": [
+        "golden/server.ts",
+        "golden/tests/public-values.spec.ts",
+        "golden/verify-aeolia-inputs.ts",
+        "golden/verify-packages.ts",
+        "packages/compiler/src/checking-inputs.ts",
+        "packages/compiler/src/checking.ts",
+        "packages/compiler/src/module-resolution.ts",
+        "packages/compiler/src/native-module-resolution.ts",
+        "packages/compiler/src/scanner.ts",
+        "packages/elysia/src/app-analysis.ts",
+        "packages/elysia/src/effect-analysis.ts",
+        "packages/tooling/src/configuration.ts",
+        "packages/tooling/src/css-bundling.ts",
+        "packages/tooling/src/plugin-pipeline.ts",
+        "packages/tooling/src/project-worker-client.ts",
+        "packages/tooling/src/project.ts",
+        "packages/tooling/src/public-files.ts"
+      ],
+      "rules": {
+        "@stylistic/padding-line-between-statements": "off",
+        "@stylistic/lines-between-class-members": "off"
+      }
     }
   ],
   "env": {

@@ -181,7 +181,6 @@ export function openCheckingProject(
   options: ProjectCheckingOptions = {},
 ): Promise<CheckingSession> {
   const captured = captureCheckingModules(modules);
-
   return createCheckingSession(captured?.modules ?? modules, options, captured);
 }
 
@@ -382,7 +381,6 @@ async function createCheckingSession(
     fs: {
       readFile(filename) {
         const source = checkingInputs.readFile(filename);
-
         typingHost?.record({
           operation: "readFile",
           path: filename,
@@ -393,7 +391,6 @@ async function createCheckingSession(
 
       fileExists(filename) {
         const exists = checkingInputs.fileExists(filename);
-
         typingHost?.record({ operation: "fileExists", path: filename, result: exists });
         return exists;
       },
@@ -402,7 +399,6 @@ async function createCheckingSession(
         ? {
             directoryExists(filename: string) {
               const exists = virtualDirectories.has(normalize(filename)) || undefined;
-
               typingHost.record({ operation: "directoryExists", path: filename, result: exists });
               return exists;
             },
@@ -444,7 +440,6 @@ async function createCheckingSession(
           checkingInputs.capture(filename, source);
 
           const targetPath = relative(dirname(configPath), filename).replaceAll("\\", "/");
-
           return [[specifier, [targetPath.startsWith(".") ? targetPath : `./${targetPath}`]]];
         }),
       )
@@ -566,7 +561,6 @@ async function createCheckingSession(
         checkingInputs: checkingInputs.captured,
         snapshotId: snapshot.id,
       };
-
       return {
         analyses,
         project,
@@ -707,12 +701,10 @@ async function createCheckingSession(
       get result() {
         const capturedInputs = checkingInputs.captured;
         const value = { ...result, checkingInputs: capturedInputs };
-
         associateResult(value, capturedInputs);
         return value;
       },
     };
-
     associateResult = issueNativeCheckingOrigin(
       project,
       session,
@@ -748,12 +740,10 @@ async function createCheckingSession(
 
         if (nativeGuard) return nativeGuard();
         const current = session.result;
-
         return (
           diagnosticGuard?.(current) === true && checkingInputs.ownsCaptured(current.checkingInputs)
         );
       };
-
       try {
         typingEnvironment = await captureTypingInputEnvironment(
           project,
@@ -768,10 +758,8 @@ async function createCheckingSession(
       } catch {
         typingHost.close();
       }
-
       typingHost.close();
       const finalResult = typingEnvironment && ownsInitialSession() ? session.result : undefined;
-
       if (
         typingEnvironment &&
         finalResult &&
@@ -788,7 +776,6 @@ async function createCheckingSession(
           modules,
           views: modules.flatMap((module, index) => {
             const view = views.get(normalize(modulePaths[index]!));
-
             return view
               ? [
                   {
@@ -805,11 +792,9 @@ async function createCheckingSession(
           isDisposed: () => disposed,
         });
     }
-
     return session;
   } catch (error) {
     typingHost?.close();
-
     try {
       await dispose();
     } catch (cleanupError) {
@@ -959,7 +944,6 @@ async function readAuthorPaths(
       typeof parsed.options.pathsBasePath === "string"
         ? parsed.options.pathsBasePath
         : dirname(filename);
-
     return Object.fromEntries(
       Object.entries(paths).flatMap(([specifier, targets]) => {
         if (!Array.isArray(targets) || !targets.every((target) => typeof target === "string"))
@@ -997,7 +981,6 @@ function toDiagnostic(
     mapOffset && item.end > item.pos
       ? Math.max(start, mapOffset(item.end - 1) + 1)
       : (mapOffset?.(item.end) ?? item.end);
-
   return {
     code: `TS${item.code}`,
     severity: item.category === 1 ? "error" : item.category === 2 ? "warning" : "info",

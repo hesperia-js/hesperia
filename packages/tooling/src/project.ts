@@ -351,7 +351,6 @@ export async function checkSources(
     );
 
   const prepared = await configuredCompilation(files, root, configuration);
-
   return prepared.diagnostics;
 }
 
@@ -361,7 +360,6 @@ export async function checkProject(root: string): Promise<readonly ProjectDiagno
 
   if (existsSync(join(root, "hesperia.config.ts"))) {
     const { checkInProjectProcess } = await import("./project-worker-client.ts");
-
     return checkInProjectProcess(root);
   }
 
@@ -438,7 +436,6 @@ export async function preparePluginEditorWire(
   configuration: ProjectConfiguration,
 ): Promise<PreparedPluginEditorWire> {
   const result = await configuredCompilation(files, root, configuration, true);
-
   return {
     root,
     configuration: {
@@ -489,7 +486,6 @@ export function hydratePluginEditor(wire: PreparedPluginEditorWire): PreparedPlu
   const declarationSources = new Map(
     wire.additionalFiles.map(({ filename, source }) => [sourceKey(filename), source] as const),
   );
-
   return {
     modules: wire.modules,
     additionalFiles: wire.additionalFiles,
@@ -500,13 +496,11 @@ export function hydratePluginEditor(wire: PreparedPluginEditorWire): PreparedPlu
 
     generatedOffset(filename, offset) {
       const source = transformed.get(filename) ?? mappedPluginSource(transformed, filename);
-
       return source ? pluginGeneratedOffset(source, offset) : offset;
     },
 
     authoredOffset(filename, offset) {
       const source = transformed.get(filename) ?? mappedPluginSource(transformed, filename);
-
       return source ? pluginOriginalOffset(source, offset) : offset;
     },
 
@@ -518,7 +512,6 @@ export function hydratePluginEditor(wire: PreparedPluginEditorWire): PreparedPlu
       const key = sourceKey(filename);
       const map = declarationMaps.get(key);
       const source = declarationSources.get(key);
-
       return map && source
         ? mapPluginDeclarationLocation(map, source, filename, start, end)
         : undefined;
@@ -552,7 +545,6 @@ export async function prepareBuild(root: string, development = false): Promise<B
 
   if (existsSync(join(root, "hesperia.config.ts"))) {
     const { buildInProjectProcess } = await import("./project-worker-client.ts");
-
     return buildInProjectProcess(root, development);
   }
 
@@ -569,7 +561,6 @@ export async function prepareDevelopmentBuild(
 
   if (existsSync(join(root, "hesperia.config.ts"))) {
     const { buildInProjectProcess } = await import("./project-worker-client.ts");
-
     signal?.throwIfAborted();
     return buildInProjectProcess(root, true, signal);
   }
@@ -619,7 +610,6 @@ async function prepareBuildLocalAttempt(
   root = resolve(root);
 
   const configuration = await readConfiguration(root);
-
   signal?.throwIfAborted();
   let productionTarget:
     | Exclude<ResolvedProductionTarget, { readonly kind: "unavailable" }>
@@ -643,7 +633,6 @@ async function prepareBuildLocalAttempt(
     await withBuildPublication(root, cleanUnpublishedCaptures);
 
   const authored = await readProject(root);
-
   signal?.throwIfAborted();
   const projectRuntimeModule = `hesperia:compiler-runtime:project:${new Bun.CryptoHasher("sha256")
     .update(root)
@@ -657,7 +646,6 @@ async function prepareBuildLocalAttempt(
     projectRuntimeModule,
     signal,
   );
-
   signal?.throwIfAborted();
   const sources = configured?.sources ?? authored;
   const resolution =
@@ -724,7 +712,6 @@ async function prepareBuildLocalAttempt(
 
   if (productionTarget && !diagnostics.some((item) => item.severity === "error")) {
     const target = productionTarget;
-
     if (manifest.routes.length === 0)
       diagnostics.push({
         code: "HES-ROUTE-PLAN",
@@ -980,7 +967,6 @@ async function prepareBuildLocalAttempt(
           const current = await readFile(filename, { encoding: "utf8", signal }).catch(
             () => undefined,
           );
-
           signal?.throwIfAborted();
 
           if (current !== undefined && current !== captured) return retryStaleRouteCapture;
@@ -1159,7 +1145,6 @@ async function prepareBuildLocalAttempt(
         setup(builder) {
           builder.onResolve({ filter: /^hesperia:markup-resource:/u }, ({ path }) => {
             const filename = markupResources.get(path);
-
             return filename ? { path: filename, namespace: "hesperia-markup-resource" } : undefined;
           });
 
@@ -1242,7 +1227,6 @@ async function prepareBuildLocalAttempt(
             if (generatedImporter?.semantic !== "startup") return undefined;
 
             const target = generatedSpecifiers.get(path);
-
             return target ? { path: target, namespace: "hesperia-generated" } : undefined;
           });
 
@@ -1260,7 +1244,6 @@ async function prepareBuildLocalAttempt(
             if (generatedImporter?.semantic !== "route-table") return undefined;
 
             const target = generatedSpecifiers.get(path);
-
             return target ? { path: target, namespace: "hesperia-generated" } : undefined;
           });
 
@@ -1268,7 +1251,6 @@ async function prepareBuildLocalAttempt(
             const generatedImporter = importer
               ? generatedSources.get(sourceKey(importer))
               : undefined;
-
             return generatedImporter?.semantic === "route-table" && generatedSpecifiers.has(path)
               ? { path, external: true }
               : undefined;
@@ -1288,7 +1270,6 @@ async function prepareBuildLocalAttempt(
             if (resolved.kind === "failure") throw new ProjectError(resolved.message, diagnostics);
 
             const generatedTarget = authoredGeneratedPaths.get(sourceKey(resolved.filename));
-
             return generatedTarget
               ? { path: generatedTarget, namespace: "hesperia-generated" }
               : { path: resolved.filename, namespace: "hesperia-resolved" };
@@ -1447,7 +1428,6 @@ async function prepareBuildLocalAttempt(
 
     for (const [key, specifier] of Object.entries(startupModules)) {
       const filename = generatedSpecifiers.get(specifier);
-
       if (filename)
         imports.set(key, graph.staticClosure(graph.dynamicEntry(startupPath, filename)));
     }
@@ -1455,7 +1435,6 @@ async function prepareBuildLocalAttempt(
     for (const [specifier, filename] of routeTable.modules) {
       const key = relative(root, filename).replaceAll("\\", "/");
       const generated = generatedSpecifiers.get(specifier);
-
       if (!generated) throw new ProjectError(`Missing browser route module for ${key}`);
       imports.set(key, graph.staticClosure(graph.dynamicEntry(routeTablePath, generated)));
     }
@@ -1665,7 +1644,6 @@ async function prepareBuildLocalAttempt(
 
     const original = (filename: string): string => {
       const path = filename.replace(/^hesperia-(?:generated|resolved|markup-resource):/u, "");
-
       return aliases.get(sourceKey(path)) ?? sourceKey(path);
     };
 
@@ -1781,7 +1759,6 @@ async function prepareBuildLocalAttempt(
       });
       const digest =
         bytes && `sha256-${new Bun.CryptoHasher("sha256").update(bytes).digest("hex")}`;
-
       if (digest === file.digest) continue;
 
       attemptWatches.report({ kind: "file", file: file.filename });
@@ -1893,7 +1870,6 @@ function styleSemanticKey(
     ),
     topology: configured.styleTopology,
   };
-
   return new Bun.CryptoHasher("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
@@ -1917,14 +1893,12 @@ function browserModuleGraph(result: Bun.BuildOutput) {
 
   const importPath = (path: string): string | undefined => {
     const normalized = path.replaceAll("\\", "/");
-
     if (!/^(?:\.\/|\/)?assets\//u.test(normalized)) return undefined;
     return outputPath(normalized);
   };
 
   const outputFor = (path: string) => {
     const output = outputs.get(path);
-
     if (!output) throw new ProjectError(`Browser build omitted module metadata for ${path}`);
     return output;
   };
@@ -1938,17 +1912,14 @@ function browserModuleGraph(result: Bun.BuildOutput) {
         if (imported.kind !== "dynamic-import") continue;
         const path = importPath(imported.path);
         const actual = path && outputs.get(path)?.entryPoint;
-
         if (path && actual?.replaceAll("\\", "/") === entryPoint) matches.add(path);
       }
 
       const [entry] = matches;
-
       if (matches.size !== 1 || !entry)
         throw new ProjectError(
           `Browser build omitted an unambiguous module import for ${filename}`,
         );
-
       return entry;
     },
 
@@ -1959,7 +1930,6 @@ function browserModuleGraph(result: Bun.BuildOutput) {
         for (const imported of outputFor(path).imports) {
           if (imported.kind !== "import-statement") continue;
           const dependency = importPath(imported.path);
-
           if (dependency && outputs.has(dependency)) pending.add(dependency);
         }
       }
@@ -2015,14 +1985,12 @@ function outputPathFromRoot(path: string, root: string): string {
     normalized.startsWith("/") || /^[A-Za-z]:\//u.test(normalized)
       ? normalized
       : resolve(root, normalized).replaceAll("\\", "/");
-
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
 function samePath(first: string, second: string, root?: string): boolean {
   const normalize = (value: string) => {
     const normalized = value.replaceAll("\\", "/");
-
     return process.platform === "win32" ? normalized.toLowerCase() : normalized;
   };
 
@@ -2129,7 +2097,6 @@ export async function writeBuild(
 
   return withBuildPublication(root, async (publication) => {
     const { output, previousDirectory, retainedCaptureIds } = publication;
-
     assertRetainedBrowserAssetsFit(host.mount, undefined, undefined, publication.history);
     await cleanUnpublishedCaptures(publication);
 
@@ -2380,7 +2347,6 @@ async function configuredCompilation(
     configuration.resolutionOverrides.browser,
     publicFilename ? new Map([["hesperia/config/public", publicFilename]]) : undefined,
   );
-
   signal?.throwIfAborted();
   const originalChecking = await checkProjectModules(
     [...prepared.sources].map(([filename, source]) => ({ filename, source: source.current })),
@@ -2398,7 +2364,6 @@ async function configuredCompilation(
       signal,
     ),
   );
-
   signal?.throwIfAborted();
   const originalTypeDiagnostics = originalChecking.modules.flatMap((module) =>
     module.diagnostics
@@ -2409,7 +2374,6 @@ async function configuredCompilation(
           prepared.sources.get(module.filename),
           prepared.sources,
         );
-
         return { ...mapped, filename: diagnosticFilename(mapped, module.filename) };
       }),
   );
@@ -2417,7 +2381,6 @@ async function configuredCompilation(
     additionalFiles,
     originalChecking.checkingInputs,
   );
-
   resolution = resolution.forkWithGeneratedSources(
     new Map(originalChecking.checkingInputs.map((item) => [item.filename, item.source])),
     new Map(),
@@ -2436,7 +2399,6 @@ async function configuredCompilation(
     additionalFiles: retainedAdditionalFiles,
     checkingRoots,
   };
-
   if (development) requestTypingEvidenceCapture(checkingOptions);
   requestCheckingCancellation(checkingOptions, signal);
   signal?.throwIfAborted();
@@ -2461,7 +2423,6 @@ async function configuredCompilation(
       declarations,
       root,
     );
-
     signal?.throwIfAborted();
 
     for (const body of projectBodies) {
@@ -2588,7 +2549,6 @@ async function configuredCompilation(
         return [];
 
       const mapped = mapPluginDiagnostic(item, transformed.get(item.filename), transformed);
-
       return [{ ...mapped, filename: diagnosticFilename(mapped, item.filename) }];
     });
     const pluginResolutionDiagnostics = edgeDiagnostics.flatMap((item) => {
@@ -2606,7 +2566,6 @@ async function configuredCompilation(
       }
 
       const mapped = mapPluginDiagnostic(item, transformed.get(item.filename), transformed);
-
       return [{ ...mapped, filename: diagnosticFilename(mapped, item.filename) }];
     });
 
@@ -2628,7 +2587,6 @@ async function configuredCompilation(
             origin && typeof origin.start === "number" && typeof origin.end === "number"
               ? { start: origin.start, end: origin.end }
               : undefined;
-
           return {
             code: "HES-PLUGIN",
             severity: "error" as const,
@@ -2674,7 +2632,6 @@ async function configuredCompilation(
     const styles = diagnostics.some((item) => item.severity === "error")
       ? []
       : await pipeline.generateStyles(transformed, compilation, root);
-
     diagnostics = collectDiagnostics(compilation);
     const markupStyles: PluginStyleArtifact[] = [];
     const nativeMarkupStyleIds = new Set(
@@ -2707,7 +2664,6 @@ async function configuredCompilation(
     }
 
     const allGeneratedStyles = [...styles, ...markupStyles];
-
     diagnostics = collectDiagnostics(compilation);
     let bundledCss: BundledCss | undefined;
     let styleTopology: StyleTopology | undefined;
@@ -2956,7 +2912,6 @@ function createProjectHookLease(
     capturedSources: capturedSources(),
     types,
   });
-
   return {
     input,
 
@@ -2968,7 +2923,6 @@ function createProjectHookLease(
 
 function readonlyMap<K, V>(source: ReadonlyMap<K, V>): ReadonlyMap<K, V> {
   let view: ReadonlyMap<K, V>;
-
   view = Object.freeze({
     get size() {
       return source.size;
@@ -3034,7 +2988,6 @@ function moduleImports(filename: string, source: string): readonly SourceImport[
 
   try {
     const isTypeScript = /\.(?:ts|tsx|mts|cts)$/iu.test(filename);
-
     parsed = parseSync(filename, source, {
       lang: filename.endsWith(".tsx") ? "tsx" : isTypeScript ? "ts" : "jsx",
       astType: isTypeScript ? "ts" : "js",
@@ -3225,7 +3178,6 @@ function mapPluginCompilation(
   const modules = new Map(
     [...compilation.modules].map(([filename, compiled]) => {
       const source = transformed.get(filename);
-
       return [
         filename,
         {
@@ -3252,7 +3204,6 @@ function mapPluginCompilation(
     },
     modules,
   };
-
   registerMappedProjectCompilation(compilation, mappedCompilation);
   return mappedCompilation;
 }
@@ -3332,7 +3283,6 @@ function pluginOriginalPosition(
   if (samePluginSource(filename, source.filename)) text = source.authored;
   else {
     const captured = sourceContentFor(trace, original.source);
-
     text = captured ?? knownSourceText(filename, knownSources);
   }
 
@@ -3391,7 +3341,6 @@ function pluginSourceIdentity(source: string): string | undefined {
 
 function samePluginSource(first: string, second: string): boolean {
   const firstIdentity = pluginSourceIdentity(first);
-
   return firstIdentity !== undefined && firstIdentity === pluginSourceIdentity(second);
 }
 
@@ -3419,7 +3368,6 @@ function mapPluginDeclarationLocation(
     if (!Number.isInteger(offset) || offset < 0 || offset > generated.length) return undefined;
 
     const before = generated.slice(0, offset);
-
     return {
       line: before.split("\n").length,
       column: offset - before.lastIndexOf("\n") - 1,
@@ -3453,7 +3401,6 @@ function mapPluginDeclarationLocation(
 
   const mappedStart = sourceOffset(source, originalStart.line, originalStart.column);
   const mappedEnd = sourceOffset(source, originalEnd.line, originalEnd.column);
-
   return mappedStart === undefined || mappedEnd === undefined || mappedEnd < mappedStart
     ? undefined
     : { filename, start: mappedStart, end: mappedEnd };
@@ -3485,7 +3432,6 @@ function sourceOffset(source: string, line: number, column: number): number | un
 
 function diagnosticFilename(item: CompilerDiagnostic, fallback: string): string {
   const filename = (item as MappedPluginDiagnostic).filename;
-
   return filename ?? fallback;
 }
 
@@ -3509,7 +3455,6 @@ function pluginOriginalOffset(source: TransformedPluginSource, offset: number): 
     return offset;
 
   const lines = source.authored.split("\n");
-
   return (
     lines.slice(0, original.line - 1).reduce((length, item) => length + item.length + 1, 0) +
     original.column
@@ -3534,7 +3479,6 @@ function pluginGeneratedOffset(source: TransformedPluginSource, offset: number):
   if (generated.line === null || generated.column === null) return offset;
 
   const lines = source.current.split("\n");
-
   return (
     lines.slice(0, generated.line - 1).reduce((length, item) => length + item.length + 1, 0) +
     generated.column
@@ -3546,7 +3490,6 @@ function pluginProjectDiagnostic(item: import("./plugins.ts").PluginDiagnostic):
     typeof item.origin.start === "number" && typeof item.origin.end === "number"
       ? { start: item.origin.start, end: item.origin.end }
       : undefined;
-
   return {
     code: "HES-PLUGIN",
     severity: item.severity,
@@ -3568,7 +3511,6 @@ async function projectCompilation(
   styleShellEntryId?: string,
 ): Promise<ProjectCompilation> {
   const modules: VirtualModule[] = [...files].map(([filename, source]) => ({ filename, source }));
-
   return compileProjectModules(modules, {
     root,
     ...configuration,
@@ -3673,7 +3615,6 @@ function emitGeneratedModule(
 
 function recordFilename(root: string, filename: string): string {
   const relativeFilename = relative(root, filename).replaceAll("\\", "/");
-
   return relativeFilename.startsWith("../") || relativeFilename === ".."
     ? filename.replaceAll("\\", "/")
     : relativeFilename;
