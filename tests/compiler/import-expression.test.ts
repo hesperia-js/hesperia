@@ -67,6 +67,7 @@ async function importGenerated<T extends object, R>(
   const filename = join(directory, "module.mjs");
   const dependencyFiles = Object.entries(dependencies).map(([name, source]) => {
     const path = join(directory, name);
+
     return { path, source };
   });
 
@@ -76,6 +77,7 @@ async function importGenerated<T extends object, R>(
 
   try {
     const module = await import(pathToFileURL(filename).href);
+
     return await exercise(module as T);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -352,6 +354,7 @@ test("browser emission lowers finite imports without eager target evaluation", a
       const first = await generated.load(true);
       const second = await generated.load(false);
       const cached = first === (await generated.load(true));
+
       return [first.value, second.value, cached];
     },
   );
@@ -393,6 +396,7 @@ test("finite import lowering keeps source and options throws as rejected promise
 
       const sourceError = await errorMessage(source);
       const optionsError = await errorMessage(options);
+
       return [sourceError, optionsError];
     },
   );

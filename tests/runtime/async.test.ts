@@ -68,6 +68,7 @@ test("an installed boundary can wait again while preserving its synchronous nati
   await app.settled();
 
   const input = target.querySelector("input")!;
+
   input.value = "local native state";
 
   pending.set(true);
@@ -200,6 +201,7 @@ function deferred<T>() {
     resolve = yes;
     reject = no;
   });
+
   return { promise, resolve, reject };
 }
 
@@ -327,6 +329,7 @@ test("async boundary installs the completed tree before descendant-first effects
         });
 
         const value = yield registerFrameworkAwaitable(query.promise, owner, "query");
+
         return element(owner, "span", {}, [String(value)]);
       });
       return body as Promise<Node>;
@@ -391,6 +394,7 @@ test("async placement and required independent binding fail before the child bod
 
   const Inside = defineComponent((owner) => {
     const bind = createClient(owner).bind<{ read(): string }>();
+
     return asyncBoundary(
       owner,
       "wait",

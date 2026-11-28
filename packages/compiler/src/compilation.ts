@@ -154,6 +154,7 @@ export function analyzeModule(source: string, options: CompileOptions = {}): Mod
 
   const semanticHash = sha256(encodeCanonicalModule(ir));
   const semantics = resolveModuleSemantics(ir);
+
   return {
     normalized,
     authoredSourceDigest: sha256(source),
@@ -225,6 +226,7 @@ export function emitAnalysis(
 
   const stages = [lowered.map, generated.map, normalized.map].filter(Boolean) as SourceMap[];
   const map = stages.length ? remapping(stages, () => null) : undefined;
+
   return {
     ...result,
     code: diagnostics.some((item) => item.severity === "error") ? "" : lowered.code,
@@ -428,6 +430,7 @@ function navigationAliasKind(
 
   if (expression.kind === "identifier" && typeof expression.referenceId === "string") {
     const binding = bindings.get(expression.referenceId);
+
     return binding?.kind === "navigation-marker" || binding?.kind === "navigation-namespace"
       ? binding.kind
       : undefined;
@@ -558,6 +561,7 @@ function isLegacyClientNavigationCall(
 
   const navigationProperty = navigationMember.property;
   const client = navigationMember.object;
+
   return (
     typeof navigationProperty === "object" &&
     navigationProperty !== null &&
@@ -576,6 +580,7 @@ function authoredDebug(
   mapOffset: (offset: number) => number,
 ): CanonicalDebugSidecar {
   const debug = canonicalDebugSidecar(ir);
+
   return {
     ...debug,
     spans: Object.fromEntries(
@@ -603,6 +608,7 @@ function mapAuthoredSpan(span: SourceSpan, mapOffset: (offset: number) => number
   if (span.end <= span.start) return { start, end };
 
   const previous = mapOffset(span.end - 1);
+
   return { start, end: end > previous ? end : previous + 1 };
 }
 
@@ -612,6 +618,7 @@ function offsetMapper(generated: string, source: string, map: unknown): (offset:
   const trace = new TraceMap(map as SourceMapInput);
   const generatedLines = lineStarts(generated);
   const sourceLines = lineStarts(source);
+
   return (offset) => {
     let low = 0;
     let high = generatedLines.length;
@@ -627,6 +634,7 @@ function offsetMapper(generated: string, source: string, map: unknown): (offset:
       line: low + 1,
       column: offset - generatedLines[low]!,
     });
+
     return original.line === null || original.column === null
       ? 0
       : (sourceLines[original.line - 1] ?? source.length) + original.column;
@@ -635,6 +643,7 @@ function offsetMapper(generated: string, source: string, map: unknown): (offset:
 
 function failedResult(filename: string, diagnostics: readonly CompilerDiagnostic[]): CompileResult {
   const ir: CanonicalModule = { version: 1, filename, body: [], diagnostics };
+
   return {
     code: "",
     map: undefined,
@@ -722,6 +731,7 @@ function attachCheckedMetadata(
       if (metadata) {
         const empty = { kind: "undefined", span: { start: span.start, end: span.start } };
         const args = copy.arguments as readonly unknown[];
+
         copy.arguments = metadata.argument === "options" ? [empty, ...args] : [...args, empty];
       }
     }
@@ -730,6 +740,7 @@ function attachCheckedMetadata(
   };
 
   const mapped = map(module) as CanonicalModule;
+
   return {
     ...mapped,
     diagnostics: [

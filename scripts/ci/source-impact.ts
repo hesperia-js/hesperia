@@ -83,6 +83,7 @@ function parseJson(value: string, label: string): unknown {
     return JSON.parse(value) as unknown;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+
     throw new Error(`${label} is not valid JSON: ${detail}`);
   }
 }
@@ -154,6 +155,7 @@ function runGitBytes(repoPath: string, args: readonly string[], input?: Buffer):
 
   if (result.error || result.status !== 0) {
     const detail = result.error?.message ?? result.stderr?.toString("utf8").trim();
+
     throw new Error(`git ${args.join(" ")} failed${detail ? `: ${detail}` : ""}`);
   }
 
@@ -190,9 +192,11 @@ function readGraph(
 } {
   try {
     const value = readRevisionFile(repoPath, commit, path);
+
     return { graph: parseGraph(value, `Dependency graph ${side} (${path})`) };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+
     return {
       graph: {
         nodes: new Set(),
@@ -250,6 +254,7 @@ function parseGitTree(repoPath: string, commit: string): SourceSnapshot {
     if (end < 0) break;
 
     const record = tree.subarray(offset, end).toString("utf8");
+
     offset = end + 1;
     const tab = record.indexOf("\t");
 
@@ -365,7 +370,9 @@ function readWorkspaceSnapshot(repoPath: string): SourceSnapshot {
 
     try {
       const content = readFileSync(resolve(repoPath, ...path.split("/")), "utf8");
+
       jsonFiles.set(path, content);
+
       if (path === "package.json" || path.endsWith("/package.json"))
         packageJsons.set(path, content);
     } catch (error) {
@@ -446,12 +453,14 @@ function packageExportEntries(
   if (manifest.exports && typeof manifest.exports === "object") {
     const exports = asRecord(manifest.exports, "Package exports");
     const hasSubpathKeys = Object.keys(exports).some((key) => key === "." || key.startsWith("./"));
+
     return hasSubpathKeys ? Object.entries(exports) : [[".", exports]];
   }
 
   const rootTargets = [manifest.source, manifest.types, manifest.module, manifest.main].filter(
     (target): target is string => typeof target === "string",
   );
+
   return rootTargets.length > 0 ? [[".", rootTargets]] : [];
 }
 
@@ -472,11 +481,13 @@ function conditionalTargetStrings(value: unknown): string[] | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
 
   const entries = Object.values(value as Record<string, unknown>);
+
   if (entries.length === 0) return undefined;
   const targets: string[] = [];
 
   for (const entry of entries) {
     const nested = conditionalTargetStrings(entry);
+
     if (!nested) return undefined;
     targets.push(...nested);
   }
@@ -526,6 +537,7 @@ function workspacePackageIndex(
 
     names.add(packageName);
     const nameOwners = ownersByName.get(packageName) ?? new Set<string>();
+
     nameOwners.add(manifestPath);
     ownersByName.set(packageName, nameOwners);
 
@@ -537,6 +549,7 @@ function workspacePackageIndex(
       if (!specifier) continue;
 
       const specifierOwners = ownersBySpecifier.get(specifier) ?? new Set<string>();
+
       specifierOwners.add(manifestPath);
       ownersBySpecifier.set(specifier, specifierOwners);
       const sources = sourceBySpecifier.get(specifier) ?? new Set<string>();
@@ -548,6 +561,7 @@ function workspacePackageIndex(
       }
 
       if (sources.size > 0) sourceBySpecifier.set(specifier, sources);
+
       if (typeof rawTarget === "object" && rawTarget !== null && !Array.isArray(rawTarget)) {
         const targets = conditionalTargetStrings(rawTarget);
         const complete =
@@ -557,6 +571,7 @@ function workspacePackageIndex(
               new Set(exportSourceCandidates(packageRoot, target).filter((path) => paths.has(path)))
                 .size === 1,
           );
+
         if (complete) safeConditionalSpecifiers.add(specifier);
         else incompleteConditionalSpecifiers.add(specifier);
       }
@@ -708,6 +723,7 @@ function fixedConfigurationTargets(program: AstNode, paths: ReadonlySet<string>)
       return undefined;
 
     const entries = bindings.get(identifier.name);
+
     return entries?.length === 1 ? entries[0] : undefined;
   };
 
@@ -717,6 +733,7 @@ function fixedConfigurationTargets(program: AstNode, paths: ReadonlySet<string>)
     names: readonly string[],
   ) => {
     const binding = unique(value);
+
     return (
       binding?.imported &&
       modules.includes(binding.imported.source) &&
@@ -763,6 +780,7 @@ function fixedConfigurationTargets(program: AstNode, paths: ReadonlySet<string>)
     const targets = [...paths].filter(
       (path) => posix.basename(path).toLowerCase() === "hesperia.config.ts",
     );
+
     return targets.length > 0 ? targets : undefined;
   };
 }
@@ -1000,6 +1018,7 @@ function collectModuleSpecifiers(
     unresolvedExpressions.size > 0
       ? `Could not resolve non-literal ${[...unresolvedExpressions].join(" and non-literal ")} dependencies from ${path}`
       : undefined;
+
   opaque ||=
     unresolvedExpressions.size > 0 ||
     [...specifiers].some((specifier) =>
@@ -1071,6 +1090,7 @@ function emittedSourceIndex(snapshot: SourceSnapshot): ReadonlyMap<string, Reado
       Array.isArray(record.compilerOptions)
     )
       return undefined;
+
     return { record, compilerOptions: { ...inherited, ...record.compilerOptions }, hasFiles };
   };
 
@@ -1115,12 +1135,14 @@ function emittedSourceIndex(snapshot: SourceSnapshot): ReadonlyMap<string, Reado
       config.record.exclude.length !== 0
     )
       continue;
+
     const configDirectory = posix.dirname(configPath);
     const root = posix.normalize(posix.join(configDirectory, ownOptions.rootDir));
     const out = posix.normalize(posix.join(configDirectory, ownOptions.outDir));
 
     if (root === out || !root.startsWith(`${directory}/`) || !out.startsWith(`${directory}/`))
       continue;
+
     const relativeRoot = posix.relative(configDirectory, root);
     const includes = config.record.include;
 
@@ -1149,6 +1171,7 @@ function emittedSourceIndex(snapshot: SourceSnapshot): ReadonlyMap<string, Reado
       const output =
         posix.join(out, posix.relative(root, source)).slice(0, -extension.length) + emitted;
       const sources = outputs.get(output) ?? new Set<string>();
+
       sources.add(source);
 
       outputs.set(output, sources);
@@ -1189,8 +1212,10 @@ function resolveRelativeImport(
   }
 
   const tracked = candidates.find((candidate) => paths.has(candidate));
+
   if (tracked) return tracked;
   const sources = emittedSources.get(base);
+
   return sources?.size === 1 ? [...sources][0] : undefined;
 }
 
@@ -1297,6 +1322,7 @@ function safeAcquireSourceGraph(
     return { graph: acquire() };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+
     return {
       graph: {
         nodes: new Set(),
@@ -1613,6 +1639,7 @@ export function readSourceImpact(options: {
     ...headGraph.issues.map((issue) => `Workspace head source graph is incomplete: ${issue}`),
     ...workspaceStateReasons(repoPath, head),
   ].filter((reason): reason is string => reason !== undefined);
+
   return {
     base,
     head,

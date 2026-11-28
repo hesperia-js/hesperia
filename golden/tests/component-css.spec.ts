@@ -95,6 +95,7 @@ async function openFixture(page: import("@playwright/test").Page): Promise<void>
     if (!host) throw new Error("The component CSS mount host is missing");
 
     const frame = document.createElement("iframe");
+
     frame.id = "mount-frame";
     frame.src = "/component-css-frame";
     frame.title = "Component CSS mount document";
@@ -124,6 +125,7 @@ test("compiled component CSS gates module preload and mount effects on their own
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
   const stylesheet = holdStylesheets(page);
+
   await stylesheet.route;
 
   await openFixture(page);
@@ -141,6 +143,7 @@ test("compiled component CSS gates module preload and mount effects on their own
   const modulePreload = await page.evaluate(() => {
     const frameDocument =
       document.querySelector<HTMLIFrameElement>("#mount-frame")!.contentDocument!;
+
     return {
       state: window.hesperiaComponentCss!.snapshot().state,
       effects: window.hesperiaComponentCss!.snapshot().effects,
@@ -181,6 +184,7 @@ test("compiled component CSS gates module preload and mount effects on their own
     const control = frameDocument.querySelector<HTMLElement>(
       "#control-target .golden-component-css",
     )!;
+
     return {
       panelConnected: panel.isConnected,
       panelVisible: panel.getClientRects().length > 0,
@@ -220,6 +224,7 @@ test("compiled component CSS gates module preload and mount effects on their own
     const control = frameDocument.querySelector<HTMLElement>(
       "#control-target .golden-component-css",
     )!;
+
     return {
       panelVisible: panel.getClientRects().length > 0,
       panelColor: getComputedStyle(panel).color,
@@ -273,6 +278,7 @@ test("multiple component mounts share CSS until the last mount is disposed", asy
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
   const stylesheet = holdStylesheets(page);
+
   await stylesheet.route;
 
   await openFixture(page);
@@ -314,6 +320,7 @@ test("multiple component mounts share CSS until the last mount is disposed", asy
   const mounting = await page.evaluate(() => {
     const frameDocument =
       document.querySelector<HTMLIFrameElement>("#mount-frame")!.contentDocument!;
+
     return {
       firstVisible:
         frameDocument
@@ -360,6 +367,7 @@ test("multiple component mounts share CSS until the last mount is disposed", asy
     const remaining = frameDocument.querySelector<HTMLElement>(
       "#second-target .golden-component-css",
     )!;
+
     return {
       remainingVisible: remaining.getClientRects().length > 0,
       remainingColor: getComputedStyle(remaining).color,
@@ -380,6 +388,7 @@ test("multiple component mounts share CSS until the last mount is disposed", asy
   const final = await page.evaluate(() => {
     const frameDocument =
       document.querySelector<HTMLIFrameElement>("#mount-frame")!.contentDocument!;
+
     return {
       effects: window.hesperiaComponentCss!.snapshot().effects,
       firstCount: frameDocument.querySelectorAll("#first-target .golden-component-css").length,

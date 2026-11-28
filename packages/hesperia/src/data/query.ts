@@ -239,6 +239,7 @@ function waitForCommitted<T>(
 
   const detachStatus = (): void => {
     const stop = stopStatus;
+
     stopStatus = undefined;
 
     stop?.();

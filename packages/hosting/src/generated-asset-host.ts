@@ -102,6 +102,7 @@ export async function createGeneratedAssetHost(
           publicFiles,
         )
       : undefined;
+
   assertGeneratedAssetPublication(
     mountPathname,
     generatedAssets,

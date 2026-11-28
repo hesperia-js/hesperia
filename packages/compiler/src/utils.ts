@@ -2,11 +2,13 @@ import { extname, resolve } from "node:path";
 
 export function normalizeFilename(filename: string): string {
   const normalized = filename.replaceAll("\\", "/");
+
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 export function absolutePathKey(filename: string): string {
   const normalized = resolve(filename).replaceAll("\\", "/");
+
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 

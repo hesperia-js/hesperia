@@ -156,6 +156,7 @@ function routeMatch(
   if (ordinary) return { match: ordinary as unknown as TableMatch, notFound: false };
 
   const fallback = matchNotFound(manifest, routeUrl);
+
   return fallback ? { match: fallback as unknown as TableMatch, notFound: true } : null;
 }
 

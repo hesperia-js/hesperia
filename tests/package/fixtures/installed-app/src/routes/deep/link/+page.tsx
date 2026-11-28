@@ -19,6 +19,7 @@ Object.assign(globalThis, {
 
 function Counter() {
   const count = client.state(0);
+
   return (
     <button id="count" on:click={() => count.update((value) => value + 1)}>
       Count: {count()}
@@ -98,6 +99,7 @@ export default function NestedPage() {
   const removeDisposable = client.state(false);
   const greeting = api.greeting("Hesperia");
   const rename = api.rename();
+
   return (
     <main>
       <CapturedGuards />

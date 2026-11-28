@@ -223,6 +223,7 @@ function createHistoryDriver(window: globalThis.Window) {
 
     releaseMove() {
       const release = heldMove;
+
       heldMove = undefined;
 
       release?.();
@@ -282,6 +283,7 @@ function createHarness(window = createWindow(), mountPath = "/") {
             throw onePreparationFailure;
 
           const main = window.document.createElement("main");
+
           main.textContent = url.pathname;
           return {
             owners: [],
@@ -334,6 +336,7 @@ function createHarness(window = createWindow(), mountPath = "/") {
 
     releaseSettlement() {
       const release = releaseSettlement;
+
       releaseSettlement = undefined;
 
       release?.();
@@ -512,6 +515,7 @@ test("History fallback exposes stable entries, follows traversals, and waits for
     history: "replace",
     state: { page: "one-replaced" },
   });
+
   await replacement.finished;
   const oneReplaced = harness.reservation.facade.currentEntry!;
 
@@ -536,6 +540,7 @@ test("History fallback exposes stable entries, follows traversals, and waits for
   const twoNavigation = harness.reservation.facade.navigate("/two", {
     state: { page: "two" },
   });
+
   await twoNavigation.finished;
   const two = harness.reservation.facade.currentEntry!;
   let prunedTwoPropertyDisposals = 0;
@@ -613,6 +618,7 @@ test("History fallback exposes stable entries, follows traversals, and waits for
   const replacementAfterBack = harness.reservation.facade.navigate("/three", {
     state: { page: "three" },
   });
+
   await replacementAfterBack.finished;
 
   expect(two.index).toBe(-1);
@@ -747,6 +753,7 @@ test("fallback exact unchanged-fragment navigation keeps the page and skips rout
 
   harness.reservation.facade.addEventListener("navigate", (event) => {
     const navigate = event as NavigateEvent;
+
     observed = {
       sameDocument: navigate.destination.sameDocument,
       hashChange: navigate.hashChange,
@@ -965,6 +972,7 @@ test("development hard reload acknowledges only a synchronous identity-matched n
   let nativeEvent: NavigateEvent | undefined;
   let intercepted = false;
   let navigation!: EventTarget & Navigation;
+
   navigation = installNativeNavigation(window, (options) => {
     reloadCalls++;
     reloadInfo = options?.info;
@@ -975,6 +983,7 @@ test("development hard reload acknowledges only a synchronous identity-matched n
     navigation.dispatchEvent(nativeEvent);
 
     const entry = navigation.currentEntry!;
+
     return { committed: Promise.resolve(entry), finished: Promise.resolve(entry) };
   });
   const reservation = reserveNavigation(window);
@@ -1013,10 +1022,12 @@ test("development hard reload does not acknowledge a missing synchronous native 
   let delayedInfo: unknown;
   let intercepted = false;
   let navigation!: EventTarget & Navigation;
+
   navigation = installNativeNavigation(window, (options) => {
     reloadCalls++;
     delayedInfo = options?.info;
     const entry = navigation.currentEntry!;
+
     return { committed: Promise.resolve(entry), finished: Promise.resolve(entry) };
   });
   const reservation = reserveNavigation(window);
@@ -1149,6 +1160,7 @@ test("fallback preserves nested structured-clone boundaries for History and Navi
   expect(harness.window.history.state).toStrictEqual({ nested: { owner: "classic" } });
 
   const navigationInput = { nested: { owner: "navigation" } };
+
   await harness.reservation.facade.navigate("/two", { state: navigationInput }).finished;
   navigationInput.nested.owner = "mutated input";
   const entry = harness.reservation.facade.currentEntry!;
@@ -1339,6 +1351,7 @@ test("fallback scroll is available only after interception commits and only once
   );
 
   const result = navigation.navigate("/two");
+
   await result.committed;
 
   expect(() => issued.scroll()).not.toThrow();
@@ -1360,6 +1373,7 @@ test("fallback traversal rejects a precommit redirect with InvalidStateError", a
   await harness.start();
 
   const navigation = harness.reservation.facade;
+
   await navigation.navigate("/two").finished;
 
   navigation.addEventListener(
@@ -1625,6 +1639,7 @@ test("one compiled filesystem table starts and navigates correctly under two hos
 
 test("routed disposal closes navigation before cleanup and joins its rejection", async () => {
   const window = createWindow();
+
   window.document.documentElement.remove();
   const cleanupFailure = new Error("route cleanup failed");
   let rejectCleanup!: (reason: unknown) => void;
@@ -1639,11 +1654,13 @@ test("routed disposal closes navigation before cleanup and joins its rejection",
   const page = defineComponent((owner) => {
     createClient(owner).cleanup(() => {
       cleanupCalls++;
+
       try {
         facade.navigate("/again");
       } catch (error) {
         navigationError = error;
       }
+
       link.dispatchEvent(click);
       return pending;
     });
@@ -1667,11 +1684,13 @@ test("routed disposal closes navigation before cleanup and joins its rejection",
     shell: () => shell,
     routes: () => ({ version: 1, root, routes: [root] }),
   });
+
   facade = navigationReservationFor(window)!.facade;
   link = window.document.createElement("a");
   link.href = "/again";
   window.document.body.appendChild(link);
   const MouseEventConstructor = (window as unknown as { MouseEvent: typeof MouseEvent }).MouseEvent;
+
   click = new MouseEventConstructor("click", { bubbles: true, cancelable: true, button: 0 });
 
   const disposal = app.dispose();
@@ -1679,6 +1698,7 @@ test("routed disposal closes navigation before cleanup and joins its rejection",
     () => undefined,
     (error: unknown) => error,
   );
+
   expect(app.dispose()).toBe(disposal);
   expect(cleanupCalls).toBe(1);
   expect(navigationError).toMatchObject({ kind: "navigation-inactive" });
@@ -1694,6 +1714,7 @@ test("routed disposal closes navigation before cleanup and joins its rejection",
 
 test("routed disposal joins cleanup of a pending route canceled during admission close", async () => {
   const window = createWindow();
+
   window.document.documentElement.remove();
   const failure = new Error("pending route cleanup failed");
   let notifyStarted!: () => void;
@@ -1748,6 +1769,7 @@ test("routed disposal joins cleanup of a pending route canceled during admission
     routes: () => ({ version: 1, root, routes: [root, child] }),
   });
   const navigation = navigationReservationFor(window)!.facade.navigate("/next");
+
   void navigation.committed.catch(() => undefined);
   void navigation.finished.catch(() => undefined);
 

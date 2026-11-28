@@ -207,7 +207,9 @@ test.each(["unchanged reader and fresh source", "changed reader", "new reader"] 
         JSON.stringify({ version: 1, nodes: [], dependencies: [] }),
       );
       const base = fixtureCommit(repo);
+
       await fixtureFile(repo, fixture, "export const value = 2;\n");
+
       if (variant === "unchanged reader and fresh source") {
         await fixtureFile(repo, "src/changed.ts", "export const value = 2;\n");
         await fixtureFile(repo, "src/new-input.ts", "export const hidden = true;\n");
@@ -218,6 +220,7 @@ test.each(["unchanged reader and fresh source", "changed reader", "new reader"] 
           "export const read = (path: string) => Bun.file(path).text();\n",
         );
       }
+
       const selected = selectGoldenCases({
         repoPath: repo,
         base,
@@ -225,6 +228,7 @@ test.each(["unchanged reader and fresh source", "changed reader", "new reader"] 
         catalogPath: "golden/catalog.json",
         graphPath: "golden/dependency-graph.json",
       });
+
       expect(selected.fullSuite, JSON.stringify(selected.fallbackReasons)).toBe(true);
       expect(selected.selectedCaseIds).toStrictEqual([
         "fixture-case",
@@ -239,11 +243,13 @@ test.each(["unchanged reader and fresh source", "changed reader", "new reader"] 
 
 test("a directory-discovered fixture reader cannot hide outside the static catalog closure", async () => {
   const repo = await mkdtemp(join(tmpdir(), "hesperia-golden-discovered-reader-"));
+
   try {
     fixtureGit(repo, "init", "--quiet");
     const reader = "golden/verify-packages.ts";
     const fixture = "golden/fixtures/native-identity/Counter.tsx";
     const discovered = "golden/fixtures/native-identity/src/routes/new.ts";
+
     await fixtureFile(
       repo,
       reader,
@@ -271,6 +277,7 @@ test("a directory-discovered fixture reader cannot hide outside the static catal
       JSON.stringify({ version: 1, nodes: [], dependencies: [] }),
     );
     const base = fixtureCommit(repo);
+
     await fixtureFile(
       repo,
       discovered,
@@ -284,6 +291,7 @@ test("a directory-discovered fixture reader cannot hide outside the static catal
       catalogPath: "golden/catalog.json",
       graphPath: "golden/dependency-graph.json",
     });
+
     expect(selected.fullSuite, JSON.stringify(selected.fallbackReasons)).toBe(true);
     expect(selected.fallbackReasons).toContain(
       `golden input reader has no reviewed input contract: ${discovered}`,
@@ -295,6 +303,7 @@ test("a directory-discovered fixture reader cannot hide outside the static catal
 
 test("a changed reviewed reader invalidates its clean fixture-only input contract", async () => {
   const repo = await mkdtemp(join(tmpdir(), "hesperia-golden-stale-reader-"));
+
   try {
     fixtureGit(repo, "init", "--quiet");
     const reader = "golden/verify-packages.ts";
@@ -302,6 +311,7 @@ test("a changed reviewed reader invalidates its clean fixture-only input contrac
       new URL("../../golden/verify-packages.ts", import.meta.url),
     ).text();
     const fixture = "golden/fixtures/native-identity/Counter.tsx";
+
     await fixtureFile(repo, reader, original);
     await fixtureFile(repo, fixture, "export const value = 1;\n");
     await fixtureFile(repo, "src/unrelated.ts", "export const unrelated = true;\n");
@@ -328,6 +338,7 @@ test("a changed reviewed reader invalidates its clean fixture-only input contrac
       JSON.stringify({ version: 1, nodes: [], dependencies: [] }),
     );
     const base = fixtureCommit(repo);
+
     await fixtureFile(repo, fixture, "export const value = 2;\n");
     const validHead = fixtureCommit(repo);
     const valid = selectGoldenCases({
@@ -337,6 +348,7 @@ test("a changed reviewed reader invalidates its clean fixture-only input contrac
       catalogPath: "golden/catalog.json",
       graphPath: "golden/dependency-graph.json",
     });
+
     expect(valid.fullSuite, JSON.stringify(valid.fallbackReasons)).toBe(false);
     expect(valid.fallbackReasons).toStrictEqual([]);
     expect(valid.selectedCaseIds).toStrictEqual(["fixture-case"]);
@@ -347,6 +359,7 @@ test("a changed reviewed reader invalidates its clean fixture-only input contrac
     );
     await fixtureFile(repo, fixture, "export const value = 3;\n");
     const head = fixtureCommit(repo);
+
     expect(fixtureGit(repo, "status", "--porcelain")).toBe("");
     expect(fixtureGit(repo, "rev-parse", "HEAD")).toBe(head);
     const selected = selectGoldenCases({
@@ -356,6 +369,7 @@ test("a changed reviewed reader invalidates its clean fixture-only input contrac
       catalogPath: "golden/catalog.json",
       graphPath: "golden/dependency-graph.json",
     });
+
     expect(selected.fullSuite, JSON.stringify(selected.fallbackReasons)).toBe(true);
     expect(selected.fallbackReasons).toContain(
       `golden input reader contract is stale in head: ${reader}`,

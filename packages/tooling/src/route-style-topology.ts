@@ -116,6 +116,7 @@ export function buildRouteStyleMetadata(
         const survivors = chain
           .slice(0, index)
           .flatMap((item) => (item.files.layout ? [item.files.layout] : []));
+
         return [
           {
             boundaryNodeId: boundary.id,
@@ -129,6 +130,7 @@ export function buildRouteStyleMetadata(
           },
         ];
       });
+
       return { destination, loading: loadingId, errors };
     };
 

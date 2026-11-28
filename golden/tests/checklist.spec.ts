@@ -336,6 +336,7 @@ function seededActions(seed: number): Action[] {
 
     if (kind === "update") {
       const updated = { ...target, done: !target.done };
+
       planner[targetIndex] = updated;
 
       actions.push({ kind, id: updated.id, done: updated.done });

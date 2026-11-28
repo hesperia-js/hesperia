@@ -102,6 +102,7 @@ export function createContractApi<C extends Contract>(
   owner.assertActive();
 
   const rawApi = graph.api as ContractApi<C>;
+
   return buildTree(owner, graph, rawApi, contract.operations) as HesperiaContractApi<C>;
 }
 
@@ -138,6 +139,7 @@ function buildTree(
           ...args: [input?: unknown, options?: StoreOptions<unknown>]
         ) => QueryStore<unknown>;
         const store = queryMember(...args);
+
         return createQueryView(owner, graph, store, () => {
           queryMember(...args);
         });
@@ -183,6 +185,7 @@ function buildTree(
                 const operation = (
                   member as (value: unknown, callOptions: MutationOptions) => Promise<unknown>
                 )(invocation.input, operationOptions);
+
                 return rejectOnAbort(operation, invocation.options?.abortSignal).finally(
                   linked.stop,
                 );
@@ -222,6 +225,7 @@ function buildTree(
           if (!starting && !task.pending()) return;
 
           const reason = cancellationReason();
+
           record.resetReason = reason;
 
           try {
@@ -279,8 +283,10 @@ function buildTree(
             sequence: ++sequence,
             version: graph.resetVersion.get(),
           };
+
           latest = record;
           const handle = task.run({ input, options, record });
+
           record.handle = handle;
 
           if (record.resetReason !== undefined) handle.cancel(record.resetReason);
@@ -370,6 +376,7 @@ function isOperationDefinition(value: unknown): value is OperationDefinition {
   if (!isNonNullObject(value)) return false;
 
   const kind = (value as { kind?: unknown }).kind;
+
   return kind === "query" || kind === "mutation" || kind === "stream";
 }
 

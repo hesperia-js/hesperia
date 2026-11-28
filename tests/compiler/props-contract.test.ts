@@ -70,6 +70,7 @@ test("compiled optional callbacks remain accessors through presence changes with
       'callback.set(() => "second")',
       'callback.set(() => "third")',
     );
+
     expect(revisedSource).not.toBe(source);
     const revisedSession = await openCheckingProject(
       [{ filename: sourceFilename, source: revisedSource }],
@@ -88,6 +89,7 @@ test("compiled optional callbacks remain accessors through presence changes with
       expect(revisedModule.code).not.toBe(emitted.code);
 
       const modules = compilation.modules as Map<string, typeof emitted>;
+
       modules.set(sourceFilename, revisedModule);
       expect(issuedProjectTypingEvidence(compilation)).toBeUndefined();
       modules.set(sourceFilename, emitted);
@@ -121,6 +123,7 @@ test("compiled optional callbacks remain accessors through presence changes with
       childBodies(): number;
     };
     const errors: unknown[] = [];
+
     app = mount(
       window.document.body as unknown as Element,
       generated.App,
@@ -279,6 +282,7 @@ test("checked recursive generic props retain their evidence and render their val
       App: Component<object>;
     };
     const errors: unknown[] = [];
+
     app = mount(
       window.document.body as unknown as Element,
       generated.App,

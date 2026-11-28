@@ -27,6 +27,7 @@ test("generated shell startup waits for installed-head CSS and releases failed s
         ? { hosting: built.hosting, files, publicFiles: built.publicFiles }
         : { hosting: built.hosting, files },
     );
+
     server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,

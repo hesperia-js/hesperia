@@ -102,6 +102,7 @@ function FormValidation() {
 
     form.addEventListener("formdata", observeCapture, { once: true });
     const run = validation.runForm(form, { submitter: event.submitter });
+
     form.removeEventListener("formdata", observeCapture);
     captureTiming.set(capturedDuringCall ? "true" : "false");
     void run.then(undefined, () => undefined);
@@ -111,6 +112,7 @@ function FormValidation() {
     event.preventDefault();
 
     const run = mappedValidation.runForm(mappedForm(), { submitter: event.submitter });
+
     void run.then(undefined, () => undefined);
   };
 
@@ -123,6 +125,7 @@ function FormValidation() {
       if (completion) completion.textContent = String(Number(completion.textContent ?? "0") + 1);
     }
   };
+
   releaseDelayedValidations = releaseDelayed;
 
   return (
@@ -197,6 +200,7 @@ function FormValidation() {
           type="button"
           on:click={() => {
             const run = validation.run({ required: "direct", intent: "direct" });
+
             void run.then(undefined, () => undefined);
           }}
         >
@@ -287,6 +291,7 @@ function FormValidation() {
           if (!submitter) throw new Error("The invalid submitter fixture is missing");
 
           const run = validation.runForm(nativeForm(), { submitter });
+
           void run.then(undefined, () => undefined);
         }}
       >

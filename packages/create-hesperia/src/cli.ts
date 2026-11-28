@@ -164,6 +164,7 @@ async function writeJsonResult(result: CreatorJsonResult): Promise<void> {
   try {
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error): void => reject(error);
+
       process.stdout.on("error", onError);
 
       try {
@@ -247,6 +248,7 @@ async function main(): Promise<void> {
         const hostIntegration =
           (args.host as HostIntegration | undefined) ??
           (jsonMode ? "elysia" : await chooseHostIntegration(controller.signal));
+
         plan = resolveCreator({
           destination: args.destination,
           hostIntegration,
@@ -331,6 +333,7 @@ async function main(): Promise<void> {
     } else if (jsonMode) {
       const cancelled = controller.signal.aborted;
       const message = error instanceof Error ? error.message : String(error);
+
       finalJson = {
         schemaVersion: 1,
         status: cancelled ? "cancelled" : "failed",

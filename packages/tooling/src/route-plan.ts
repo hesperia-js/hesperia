@@ -170,6 +170,7 @@ export function resolveRoutePlan(
 
 function snapshotCapabilities(value: RoutePlanCapabilitiesV1): RoutePlanCapabilitiesV1 {
   const descriptor = asRecord(value, "capabilities");
+
   assertExactKeys(
     descriptor,
     ["version", "identity", "provenance", "clientRender", "supportedPlans"],
@@ -218,6 +219,7 @@ function snapshotCapabilities(value: RoutePlanCapabilitiesV1): RoutePlanCapabili
 
 function snapshotPlan(value: unknown, index: number): ConcreteRoutePlan {
   const record = asRecord(value, `capabilities.supportedPlans[${index}]`);
+
   assertExactKeys(
     record,
     ["producer", "activation", "delivery", "hydrationMismatch"],
@@ -263,18 +265,21 @@ function resolveConstraints(
 
   inherited.forEach((value, layer) => {
     const policy = asRecord(value, `inherited[${layer}]`);
+
     assertOnlyKeys(policy, fields, `inherited[${layer}]`);
 
     for (const field of fields) {
       if (!Object.hasOwn(policy, field)) continue;
 
       const constraint = asRecord(policy[field], `inherited[${layer}].${field}`);
+
       assertExactKeys(constraint, ["value", "source"], `inherited[${layer}].${field}`);
 
       if (!constraintValues.includes(constraint.value as RouteRenderConstraint))
         throw new TypeError(`inherited[${layer}].${field}.value is invalid`);
 
       const source = nonEmptyString(constraint.source, `inherited[${layer}].${field}.source`);
+
       facts.get(field)!.push(
         Object.freeze({
           layer,

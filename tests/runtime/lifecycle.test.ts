@@ -62,6 +62,7 @@ describe("browser component lifetimes", () => {
     const App = defineComponent((owner) => {
       root = owner;
       let unregisterFirst!: () => void;
+
       unregisterFirst = registerOwnerResourceLifecycle(owner, {
         suspended() {},
 
@@ -177,6 +178,7 @@ describe("browser component lifetimes", () => {
     const App = defineComponent((owner) => {
       const client = createClient(owner);
       const bind = client.bind<HTMLInputElement>();
+
       read = bind;
       input = element(owner, "input", { bind });
       return element(owner, "section", {}, [input, element(owner, "aside")]);
@@ -213,6 +215,7 @@ describe("browser component lifetimes", () => {
   test("a duplicate target faults before the second attachment can replace the first", () => {
     const App = defineComponent((owner) => {
       const bind = createClient(owner).bind<HTMLInputElement>();
+
       return [element(owner, "input", { bind }), element(owner, "input", { bind })];
     });
 
@@ -225,6 +228,7 @@ describe("browser component lifetimes", () => {
     const App = defineComponent((owner) => {
       const client = createClient(owner);
       const count = client.state(0);
+
       input = element(owner, "input");
       return element(owner, "section", {}, [
         child(owner, () => input),
@@ -278,6 +282,7 @@ describe("browser component lifetimes", () => {
     const seen: number[] = [];
     const App = defineComponent((owner) => {
       const client = createClient(owner);
+
       choose = client.state(true);
       left = client.state(1);
       right = client.state(10);
@@ -326,6 +331,7 @@ describe("browser component lifetimes", () => {
     const seen: string[] = [];
     const App = defineComponent((owner) => {
       const client = createClient(owner);
+
       count = client.state(0);
       const output = element(owner, "output", { title: dynamic(() => `Count ${count()}`) }, [
         text(owner, count),
@@ -545,6 +551,7 @@ describe("browser component lifetimes", () => {
     let state!: State<number>;
     const App = defineComponent((owner) => {
       const client = createClient(owner);
+
       state = client.state(0);
       client.cleanup(() => pending);
       client.cleanup(() => {
@@ -553,6 +560,7 @@ describe("browser component lifetimes", () => {
       return element(owner, "span");
     });
     const app = mount(target, App, {}, { onError: (error) => errors.push(error) });
+
     await app.settled();
 
     const disposal = app.dispose();
@@ -572,6 +580,7 @@ describe("browser component lifetimes", () => {
     }
 
     const error = await result;
+
     expect(error).toBeInstanceOf(AggregateError);
     expect((error as AggregateError).errors).toStrictEqual([failure]);
     expect(errors).toStrictEqual([]);
@@ -600,6 +609,7 @@ describe("browser component lifetimes", () => {
     expect(reads).toBe(0);
     expect(result).toBeInstanceOf(AggregateError);
     const failure = (result as AggregateError).errors[0];
+
     expect(failure).toMatchObject({ kind: "cleanup-observation", incomplete: true });
     expect(failure.cause).toBeInstanceOf(TypeError);
   });
@@ -610,6 +620,7 @@ describe("browser component lifetimes", () => {
       createClient(owner).cleanup(() => app.dispose());
       return null;
     });
+
     app = mount(container(), App, {});
 
     const result = await app.dispose().then(
@@ -637,6 +648,7 @@ describe("browser component lifetimes", () => {
     let state!: State<number>;
     const App = defineComponent((owner) => {
       const client = createClient(owner);
+
       state = client.state(0);
       client.cleanup(() => {
         calls.push("async");
@@ -649,6 +661,7 @@ describe("browser component lifetimes", () => {
       return element(owner, "span");
     });
     const app = mount(target, App, {}, { onError: (error) => errors.push(error) });
+
     await app.settled();
 
     app.disposeSync();
@@ -664,10 +677,12 @@ describe("browser component lifetimes", () => {
       () => undefined,
       (error: unknown) => error,
     );
+
     expect(app.dispose()).toBe(joined);
     rejectCleanup(asyncFailure);
 
     const failure = await outcome;
+
     expect(failure).toBeInstanceOf(AggregateError);
     expect((failure as AggregateError).errors).toStrictEqual([syncFailure, asyncFailure]);
     expect(calls).toStrictEqual(["sync", "async"]);

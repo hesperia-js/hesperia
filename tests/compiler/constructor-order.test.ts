@@ -30,6 +30,7 @@ async function compiledConstructor(): Promise<Construct> {
 
   try {
     const generated = await import(pathToFileURL(filename).href);
+
     return generated.make as Construct;
   } finally {
     await unlink(filename);

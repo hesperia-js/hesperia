@@ -97,6 +97,7 @@ let recoveryRouter: Router | undefined;
 
 if (recoveryRuntime && recoveryHost) {
   const host = recoveryHost;
+
   recoveryRouter = new Router({
     window,
     pageCacheSize: 1,
@@ -104,6 +105,7 @@ if (recoveryRuntime && recoveryHost) {
 
     resolve(url) {
       const page = url.pathname === "/async-recovery-away" ? recoveryAwayPage : recoveryPage;
+
       return {
         params: {},
         departingOwners: host.departingOwners([]),

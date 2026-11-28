@@ -6,6 +6,7 @@ const library = dlopen("kernel32.dll", {
 });
 let restoreFailed = false;
 let restoreError;
+
 try {
   if (!library.symbols.SetConsoleCtrlHandler(null, 0)) {
     throw new Error("Could not restore witness Ctrl+C processing.");
@@ -14,6 +15,7 @@ try {
   restoreFailed = true;
   restoreError = error;
 }
+
 try {
   library.close();
 } catch (error) {
@@ -23,8 +25,10 @@ try {
       "Witness Ctrl+C restoration and cleanup failed.",
     );
   }
+
   throw error;
 }
+
 if (restoreFailed) throw restoreError;
 
 writeFileSync(process.argv[2], "ready\n", { flag: "wx" });

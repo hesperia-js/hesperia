@@ -27,6 +27,7 @@ export async function selectNavigationMode(
       NavigateEvent?: typeof NavigateEvent;
       NavigationPrecommitController?: unknown;
     };
+
     return [
       ...(browser.navigation?.currentEntry ? [] : ["Navigation.currentEntry"]),
       ...(typeof browser.NavigateEvent?.prototype.intercept === "function"
@@ -53,6 +54,7 @@ export async function selectNavigationMode(
       traversals: [],
       admissions: [],
     };
+
     window.goldenNavigationWitness = witness;
 
     window.addEventListener("popstate", () => witness.traversals.push(window.location.href));
@@ -61,6 +63,7 @@ export async function selectNavigationMode(
 
     const prototype = NavigateEvent.prototype;
     const intercept = prototype.intercept;
+
     prototype.intercept = function (options) {
       const precommit = options?.precommitHandler;
 
@@ -68,6 +71,7 @@ export async function selectNavigationMode(
 
       const destination = this.destination;
       const navigationType = this.navigationType;
+
       return Reflect.apply(intercept, this, [
         {
           ...options,

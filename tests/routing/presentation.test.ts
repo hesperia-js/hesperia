@@ -13,10 +13,12 @@ afterEach(() => {
 function setup(html: string) {
   const platform = new Window({ url: "https://example.test/" });
   const window = platform as unknown as globalThis.Window;
+
   window.history.scrollRestoration = "auto";
   window.document.body.innerHTML = html;
   const runtime = createRuntimeRoot(window.document.body);
   const scrolls: number[][] = [];
+
   window.scrollTo = ((x: number, y: number) => {
     scrolls.push([x, y]);
   }) as typeof window.scrollTo;
@@ -83,6 +85,7 @@ test.each([true, false])(
     Object.defineProperty(window, "scrollY", { get: () => position });
 
     const intent = presentation.begin();
+
     position = 240;
 
     platform.dispatchEvent(new platform.Event("scroll"));
@@ -131,6 +134,7 @@ test("a route fragment receives one scroll and focus; owner disposal removes tem
   );
   const details = window.document.querySelector<HTMLElement>("#details")!;
   let fragmentScrolls = 0;
+
   details.scrollIntoView = () => {
     fragmentScrolls++;
   };
@@ -196,6 +200,7 @@ test("history focus resolves a recreated control by id and rejects a disabled re
 
   const snapshot = presentation.capture();
   const replacement = window.document.createElement("input");
+
   replacement.id = "search";
 
   original.replaceWith(replacement);

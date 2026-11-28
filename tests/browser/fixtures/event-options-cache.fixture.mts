@@ -28,6 +28,7 @@ const router = new Router({
 
   resolve(url) {
     const page = url.pathname === "/events/two" ? second : first;
+
     return {
       params: {},
       departingOwners: host.departingOwners([]),
@@ -60,6 +61,7 @@ router.installHistoryNavigation();
 
 function waitForRoute(path: string): Promise<void> {
   const expected = new URL(path, window.location.href).href;
+
   return new Promise((resolve, reject) => {
     let active = true;
     const timeout = window.setTimeout(() => {

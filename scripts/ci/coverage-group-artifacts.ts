@@ -64,6 +64,7 @@ function runRelativeDirectory(family: CoverageFamilyId, runId: string): string {
       : family === "browser-css"
         ? "coverage/browser-css-runs"
         : "coverage/runs";
+
   return `${root}/${runId}`;
 }
 
@@ -101,6 +102,7 @@ export function writeCoverageGroup(options: {
   const files = Object.fromEntries(
     filesIn(expected).map((name) => [name, sha256(join(expected, name))]),
   );
+
   mkdirSync(options.bundlePath);
 
   cpSync(expected, join(options.bundlePath, "evidence", directory), {

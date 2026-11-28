@@ -177,6 +177,7 @@ export function navigationReservationFor(window: Window): NavigationReservation 
 
 function domException(window: Window, message: string, name: string): DOMException {
   const Constructor = (window as Window & { DOMException?: typeof DOMException }).DOMException;
+
   return Constructor ? new Constructor(message, name) : new DOMException(message, name);
 }
 
@@ -230,6 +231,7 @@ class WindowNavigationReservation implements NavigationReservation {
   private readonly initialGate = new Promise<void>((resolve) => {
     this.initialStarted = resolve;
   });
+
   private latestStartup: Promise<unknown> | undefined;
   private pendingFallback: PendingFallbackCall | undefined;
   private activeFallbackCall: PendingFallbackCall | undefined;
@@ -250,6 +252,7 @@ class WindowNavigationReservation implements NavigationReservation {
     this.nativeNavigation = nativeNavigationFor(window);
     const EventTargetConstructor = (window as Window & { EventTarget?: typeof EventTarget })
       .EventTarget;
+
     this.fallbackTarget = EventTargetConstructor ? new EventTargetConstructor() : new EventTarget();
 
     if (!this.native) {
@@ -265,6 +268,7 @@ class WindowNavigationReservation implements NavigationReservation {
       const timing = window.performance.getEntriesByType("navigation")[0] as
         | PerformanceNavigationTiming
         | undefined;
+
       this.fallbackActivation = {
         from: null,
         entry: initial.entry,
@@ -314,6 +318,7 @@ class WindowNavigationReservation implements NavigationReservation {
         },
         { current: true, preserve: current, apiState: tracked.navigationState },
       );
+
       initial.state = tracked.navigationState;
 
       if (this.fallbackActivation)
@@ -487,6 +492,7 @@ class WindowNavigationReservation implements NavigationReservation {
     this.initialStarted();
 
     const queued = this.pendingFallback;
+
     this.pendingFallback = undefined;
 
     if (queued) this.latestStartup = this.runFallback(queued);
@@ -595,6 +601,7 @@ class WindowNavigationReservation implements NavigationReservation {
 
         if (property === "back" || property === "forward" || property === "traverseTo") {
           const method = Reflect.get(current, property, current) as unknown;
+
           return typeof method === "function"
             ? (...args: unknown[]) => {
                 this.cancelPendingDocumentReload(
@@ -651,6 +658,7 @@ class WindowNavigationReservation implements NavigationReservation {
           ].includes(property as string)) ||
         Reflect.has(current, property),
     });
+
     return facade as HesperiaNavigation;
   }
 
@@ -720,6 +728,7 @@ class WindowNavigationReservation implements NavigationReservation {
 
       if (typeof value === "function") {
         const listener = value as EventListener;
+
         (this as unknown as Record<string, unknown>)[`handler:${type}`] = listener;
 
         this.fallbackTarget.addEventListener(type, listener);
@@ -743,6 +752,7 @@ class WindowNavigationReservation implements NavigationReservation {
     if (!native) throw new RenderFault("navigation-inactive", "Native Navigation is unavailable");
 
     const result = native.navigate(target.href, options);
+
     return result as RequiredNavigationResult;
   }
 
@@ -1022,6 +1032,7 @@ class WindowNavigationReservation implements NavigationReservation {
     }
 
     const signalController = new AbortController();
+
     this.activeFallbackCall = call;
     this.activeFallbackController = signalController;
     const issued = this.createFallbackNavigateEvent(
@@ -1065,6 +1076,7 @@ class WindowNavigationReservation implements NavigationReservation {
       if (signalController.signal.aborted) throw signalController.signal.reason;
 
       const redirected = issued.resolved;
+
       call.target = redirected.target;
       call.navigationType = redirected.navigationType as "push" | "replace" | "reload";
       call.history =
@@ -1104,8 +1116,10 @@ class WindowNavigationReservation implements NavigationReservation {
               },
             )
           : this.fallbackRecordForUrl(call.target.href, call.state);
+
         record.state = tracked ? tracked.navigationState : call.state;
         const entry = record.entry;
+
         call.committedEntry = entry;
 
         call.result.resolveCommitted(entry);
@@ -1162,6 +1176,7 @@ class WindowNavigationReservation implements NavigationReservation {
             { current: true, prune: true, apiState: tracked.navigationState },
           )
         : this.fallbackRecordForUrl(result.url, call.state);
+
       record.state = tracked ? tracked.navigationState : call.state;
 
       if (call.navigationType === "reload") {
@@ -1417,6 +1432,7 @@ class WindowNavigationReservation implements NavigationReservation {
     const current = this.fallbackCurrentKey
       ? this.fallbackRecords.get(this.fallbackCurrentKey)
       : undefined;
+
     return this.recordFallbackEntry(
       {
         key: `hesperia-fallback-${url}`,
@@ -1503,6 +1519,7 @@ class WindowNavigationReservation implements NavigationReservation {
 
     const changed =
       options.notify && (replaced || previousCurrent !== record || navigationType === "reload");
+
     record.key = entry.key;
     record.index = entry.index;
     record.url = entry.url;
@@ -1571,6 +1588,7 @@ class WindowNavigationReservation implements NavigationReservation {
 
   private createEvent(type: string, init?: EventInit): Event {
     const EventConstructor = (this.window as Window & { Event?: typeof Event }).Event;
+
     return EventConstructor ? new EventConstructor(type, init) : new Event(type, init);
   }
 
@@ -1812,6 +1830,7 @@ class WindowNavigationReservation implements NavigationReservation {
           ? { target, history: detail.history === "replace" ? "replace" : "push" }
           : undefined,
       );
+
       detail.result = result;
 
       void result.committed.catch(() => undefined);

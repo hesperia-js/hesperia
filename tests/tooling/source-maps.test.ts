@@ -259,5 +259,6 @@ test("final browser maps preserve plugin source identities, source roots, and ca
 
 function position(source: string, offset: number): { line: number; column: number } {
   const prefix = source.slice(0, offset);
+
   return { line: prefix.split("\n").length, column: offset - prefix.lastIndexOf("\n") - 1 };
 }

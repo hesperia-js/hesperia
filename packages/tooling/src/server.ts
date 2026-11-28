@@ -91,6 +91,7 @@ export async function previewProject(
           build as InProcessTargetedCapturedBuild | InProcessTargetedDeploymentCapturedBuildV4,
           choice,
         );
+
         resources.push(resource);
 
         if (resource.kind !== "browser") throw new ProjectError("Preview requires a browser host");
@@ -200,6 +201,7 @@ async function previewWithRetainedAssets(
       capture.deployment?.version === 2 ? { applicationOrigin: previewOrigin } : undefined,
       capture.deployment,
     );
+
     resources.push(resource);
 
     const root = resource.host.generatedAssets.root;
@@ -426,6 +428,7 @@ export async function devProject(
 
       throw error;
     }
+
     const exact = entries.find((entry) => entry === name);
 
     if (exact !== undefined) return exact;
@@ -576,6 +579,7 @@ export async function devProject(
     const segments = projectRelativeSegments(target.path);
 
     if (segments === undefined) return [target];
+
     if (segments.length === 0)
       return [{ ...target, path: canonicalProjectRoot, identityPath: canonicalProjectRoot }];
 
@@ -1082,6 +1086,7 @@ export async function devProject(
 
       if (!filterCoversTarget) return false;
       if (registration.recursive && isWithin(directory, targetPath)) return true;
+
       if (
         !targetEntryExists(target) &&
         directory === requestedDirectory &&
@@ -1093,7 +1098,9 @@ export async function devProject(
         )
       )
         return true;
+
       if (target.kind === "file") return dirname(targetPath) === directory;
+
       if (targetIsPresentDirectory)
         return directory === targetPath && (!recursive || registration.recursive);
 
@@ -1145,6 +1152,7 @@ export async function devProject(
         let registration: WatcherRegistration | undefined;
         const watcher = watch(directory, { recursive: requested.recursive }, (_event, filename) => {
           if (!registration || dependencyWatchers.get(directory) !== registration) return;
+
           if (filename === null) {
             rebuild();
             return;
@@ -1158,6 +1166,7 @@ export async function devProject(
             rebuild();
           }
         });
+
         registration = {
           watcher,
           recursive: requested.recursive,
@@ -1243,6 +1252,7 @@ export async function devProject(
       while (pending && !closed) {
         pending = false;
         const controller = new AbortController();
+
         buildAbort = controller;
 
         try {
@@ -1466,6 +1476,7 @@ export async function devProject(
               clients.delete(controller);
             },
           });
+
           return new Response(stream, {
             headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
           });
@@ -1656,6 +1667,7 @@ export async function devProject(
 
       if (result && !result.ok) failures.push(result.error);
       if (failures.length === 1) throw failures[0];
+
       if (failures.length)
         throw new AggregateError(failures, "Development server cleanup failed", {
           cause: failures[0],
@@ -1806,6 +1818,7 @@ function publishDevelopmentCapture(
 
 function canonicalSource(filename: string): string {
   const path = resolve(filename).replaceAll("\\", "/");
+
   return process.platform === "win32" ? path.toLowerCase() : path;
 }
 
@@ -1835,6 +1848,7 @@ function developmentFingerprint(
 function developmentClientSource(assetRoot: string): string {
   const eventsURL = JSON.stringify(`${assetRoot}/events`);
   const warningsURL = JSON.stringify(`${assetRoot}/warnings`);
+
   return `const warningsURL = ${warningsURL};
 let receivedPublication = new URL(import.meta.url).searchParams.get("publication") ?? "";
 addEventListener("hesperia:warning", event => { if (typeof event.detail === "string") void fetch(warningsURL, { method: "POST", body: event.detail }).catch(() => {}); });

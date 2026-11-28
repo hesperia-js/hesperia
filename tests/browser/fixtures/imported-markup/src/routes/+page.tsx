@@ -23,6 +23,7 @@ export default function Page() {
         id="mount-direct"
         on:click={() => {
           const frame = document.createElement("iframe");
+
           frame.id = "direct-frame";
           frame.srcdoc = "<!doctype html><html><head></head><body></body></html>";
 

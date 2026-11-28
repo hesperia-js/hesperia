@@ -7,6 +7,7 @@ type NativeNavigationWindow = {
 /** Read-only feature check for the async admission hook required by Hesperia. */
 export function supportsNativeNavigation(window: Window): boolean {
   const candidate = window as unknown as NativeNavigationWindow;
+
   return (
     candidate.navigation !== undefined &&
     typeof candidate.NavigateEvent?.prototype?.intercept === "function" &&

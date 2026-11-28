@@ -328,6 +328,7 @@ async function cancelInstalledCreatorJson(
     finishOutput = resolve;
   });
   const command = [process.execPath];
+
   if (preload) command.push("--preload", preload);
   command.push(entry, destination, "--json", "--host", "none");
   const child = Bun.spawn(command, {
@@ -376,6 +377,7 @@ async function cancelInstalledCreatorJson(
       Promise.all([childExit, outputClosed]).then(([code]) => code),
       timedOut,
     ]);
+
     return {
       exitCode,
       output: normalizeTerminalOutput(output),
@@ -401,6 +403,7 @@ async function cancelInstalledCreatorJson(
     throw error;
   } finally {
     if (timeout) clearTimeout(timeout);
+
     if (!childFinished) {
       if (process.platform === "win32") {
         await terminateIntegratedServerProcess(child);
@@ -409,6 +412,7 @@ async function cancelInstalledCreatorJson(
         await childExit;
       }
     }
+
     if (child.terminal && !child.terminal.closed) child.terminal.close();
   }
 }
@@ -458,8 +462,10 @@ async function cancelWindowsInstalledCreator(
   let fixtureFailed = false;
   let fixtureError: unknown;
   const cleanupErrors: unknown[] = [];
+
   try {
     const [code, out, err] = await Promise.race([Promise.all([exit, stdout, stderr]), timeout]);
+
     if (code !== 0) throw new Error(`Windows Creator fixture failed (${code})\n${err}\n${out}`);
     result = JSON.parse(out) as WindowsCancellationResult;
     expect(result.job).toStrictEqual({ remainingMembers: 1, limitTerminations: 0, disarmed: true });
@@ -472,17 +478,20 @@ async function cancelWindowsInstalledCreator(
     fixtureError = error;
   } finally {
     if (timer) clearTimeout(timer);
+
     if (helper.exitCode === null) {
       try {
         helper.kill();
       } catch (error) {
         cleanupErrors.push(error);
       }
+
       try {
         const retired = await Promise.race([
           exit.then(() => true),
           Bun.sleep(5000).then(() => false),
         ]);
+
         if (!retired)
           cleanupErrors.push(new Error("Windows Creator fixture retirement is unconfirmed"));
       } catch (error) {
@@ -490,15 +499,19 @@ async function cancelWindowsInstalledCreator(
       }
     }
   }
+
   if (fixtureFailed && cleanupErrors.length > 0) {
     throw new AggregateError(
       [fixtureError, ...cleanupErrors],
       "Windows Creator fixture and cleanup failed",
     );
   }
+
   if (fixtureFailed) throw fixtureError;
+
   if (cleanupErrors.length > 0)
     throw new AggregateError(cleanupErrors, "Windows Creator fixture cleanup failed");
+
   if (!result) throw new Error("Windows Creator fixture produced no result");
   return result;
 }
@@ -655,29 +668,36 @@ test("packed creator defaults to Elysia and builds a selectable no-host applicat
       port: 0,
       fetch(request) {
         const pathname = new URL(request.url).pathname;
+
         if (pathname === proofPath) {
           return Response.json({
             live: Boolean(heldRequest && !heldRequest.signal.aborted),
             ageMs: heldAt ? Date.now() - heldAt : null,
           });
         }
+
         registryRequests++;
+
         if (blockRegistry) {
           if (pathname.startsWith(activeRegistryPath)) {
             if (!heldRequest) {
               heldRequest = request;
               heldAt = Date.now();
             }
+
             notifyInstallerStarted();
           }
+
           return new Promise<Response>((resolve) => blockedRequests.push(resolve));
         }
+
         return new Response("Not found", { status: 404 });
       },
     });
 
     try {
       const failedApplication = join(workspace, "Failed JSON Frontend");
+
       workspaceRemovable = false;
       const failedJson = await runInstalledCreatorJson(
         driver,
@@ -689,6 +709,7 @@ test("packed creator defaults to Elysia and builds a selectable no-host applicat
         },
       );
       const failed = parseCreatorJson(failedJson.stdout);
+
       workspaceRemovable = failed.retirement === "complete";
 
       expect(failedJson.exitCode).toBe(1);
@@ -716,6 +737,7 @@ test("packed creator defaults to Elysia and builds a selectable no-host applicat
       expect(failedJson.stderr).toContain("Dependency installation failed");
 
       const observationPreload = join(workspace, "installer-observation-failure.mjs");
+
       await writeFile(
         observationPreload,
         `const spawn = Bun.spawn;
@@ -736,6 +758,7 @@ AbortSignal.prototype.addEventListener = function (type, ...args) {
 `,
       );
       const unobservedApplication = join(workspace, "Unobserved JSON Frontend");
+
       workspaceRemovable = false;
       const unobservedJson = await runInstalledCreatorJson(
         driver,
@@ -748,6 +771,7 @@ AbortSignal.prototype.addEventListener = function (type, ...args) {
         observationPreload,
       );
       const unobserved = parseCreatorJson(unobservedJson.stdout);
+
       workspaceRemovable = unobservedJson.stderr.includes("__creator_installer_exited__");
 
       expect(unobservedJson.exitCode).toBe(1);
@@ -778,10 +802,12 @@ AbortSignal.prototype.addEventListener = function (type, ...args) {
       expect(unobservedJson.stderr).toContain("__creator_installer_exited__");
 
       const cancelledApplication = join(workspace, "Cancelled JSON Frontend");
+
       blockRegistry = true;
       workspaceRemovable = false;
       const creatorEntry = join(driver, "node_modules/create-hesperia/dist/cli.js");
       let cancelled: { readonly exitCode: number; readonly output: string };
+
       if (process.platform === "win32") {
         activeRegistryPath = "/direct/";
         const windows = await cancelWindowsInstalledCreator(
@@ -793,6 +819,7 @@ AbortSignal.prototype.addEventListener = function (type, ...args) {
           join(workspace, "json-cancel-cache"),
           join(workspace, "windows-cancellation-observation"),
         );
+
         cancelled = { exitCode: windows.exitCode, output: windows.stderr + windows.stdout };
       } else {
         const terminal = await cancelInstalledCreatorJson(
@@ -806,21 +833,26 @@ AbortSignal.prototype.addEventListener = function (type, ...args) {
           },
           installerStarted,
         );
+
         expect(terminal.interruptBytes).toBe(1);
         expect(terminal.terminalExitObserved).toBe(true);
         cancelled = terminal;
       }
+
       const jsonStart = cancelled.output.lastIndexOf('{"schemaVersion":');
+
       expect(jsonStart).toBeGreaterThanOrEqual(0);
       const cancelledResult = JSON.parse(cancelled.output.slice(jsonStart).trim()) as Record<
         string,
         unknown
       >;
+
       workspaceRemovable = cancelledResult.retirement === "complete";
 
       if (cancelled.exitCode !== 130) {
         const { status } = cancelledResult;
         const knownStatus = status === "created" || status === "failed" || status === "cancelled";
+
         console.error("Creator JSON cancellation unexpected exit", {
           exitCode: cancelled.exitCode,
           status: knownStatus ? status : "unknown",

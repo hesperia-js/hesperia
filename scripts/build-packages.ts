@@ -34,6 +34,7 @@ function isRecord(value: unknown): value is JsonRecord {
 
 function isInside(parent: string, child: string): boolean {
   const path = relative(resolve(parent), resolve(child));
+
   return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
 }
 
@@ -327,6 +328,7 @@ export async function discoverPackageBuildPlan(
       .filter(([, dependencies]) => dependencies.size > 0)
       .map(([name]) => name)
       .sort();
+
     throw new Error(`Cyclic workspace build dependencies: ${cyclic.join(", ")}`);
   }
 

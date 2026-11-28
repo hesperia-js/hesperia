@@ -2007,6 +2007,7 @@ export async function captureTypingInputEnvironment(
     checkingInputs: Object.freeze(
       checkingInputs.captured.map(({ filename, source, digest }) => {
         const digestMatchesSource = digest === sourceDigest(source);
+
         if (!digestMatchesSource) gaps.add("checking-input-digest-mismatch");
         return Object.freeze({ filename, source, digest, digestMatchesSource });
       }),
@@ -2525,6 +2526,7 @@ function isAllowedToolingProjection(
 
   for (const key of Reflect.ownKeys(source.checking)) {
     if (key === "diagnostics" || key === "modules") continue;
+
     if (
       (source.checking as unknown as Record<PropertyKey, unknown>)[key] !==
       (mapped.checking as unknown as Record<PropertyKey, unknown>)[key]
@@ -2550,6 +2552,7 @@ function isAllowedToolingProjection(
 
     for (const key of Reflect.ownKeys(before)) {
       if (key === "diagnostics") continue;
+
       if (
         (before as unknown as Record<PropertyKey, unknown>)[key] !==
         (after as unknown as Record<PropertyKey, unknown>)[key]
@@ -2583,6 +2586,7 @@ function isAllowedToolingProjection(
 
     for (const key of beforeKeys) {
       if (key === "diagnostics" || key === "map") continue;
+
       if (
         (before as unknown as Record<PropertyKey, unknown>)[key] !==
         (after as unknown as Record<PropertyKey, unknown>)[key]
@@ -2828,6 +2832,7 @@ function compileResultFingerprint(result: CompileResult): string {
     if (typeof key !== "string" || key === "diagnostics" || key === "map") continue;
 
     const value = (result as unknown as Record<string, unknown>)[key];
+
     fields[key] =
       key === "ir" && typeof value === "object" && value !== null
         ? digestCanonicalModule(value as CanonicalModule)

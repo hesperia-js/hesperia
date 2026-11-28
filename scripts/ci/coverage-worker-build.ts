@@ -60,11 +60,13 @@ export interface WorkerCoverageFixtureBuildOptions<T> {
 
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
+
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
 function coverageCompilerEnvironment(): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = { ...process.env };
+
   delete environment.BUN_OPTIONS;
   delete environment.NODE_OPTIONS;
 
@@ -140,6 +142,7 @@ function declarationShape(path: string, source: string): string {
     .split(/\r?\n/u)
     .filter((line) => /^\s*\/\/\//u.test(line))
     .map((line) => line.trim());
+
   return JSON.stringify({
     syntax: stripPositions(parsed.program),
     directives,
@@ -415,6 +418,7 @@ export async function buildCoverageWorkerGraph(options: {
         >;
       };
       const resource = manifest.imports?.["#hesperia-elysia-resources"];
+
       if (
         manifest.name !== "@hesperia/elysia" ||
         resource?.types !== "./dist/package-resources.d.ts" ||
@@ -428,6 +432,7 @@ export async function buildCoverageWorkerGraph(options: {
       const originalSource = join(packagePath, "src", "package-resources.ts");
       const resourceSource = prepared.get(canonicalPath(originalSource));
       const preparedSource = join(sourceDirectory, "package-resources.ts");
+
       if (
         !resourceSource ||
         !existsSync(preparedSource) ||
@@ -445,6 +450,7 @@ export async function buildCoverageWorkerGraph(options: {
       const declarationBytes = readFileSync(declarationPath);
       const stagedManifest = join(buildDirectory, "package.json");
       const stagedDeclaration = join(outDirectory, "package-resources.d.ts");
+
       mkdirSync(outDirectory, { recursive: true });
       writeFileSync(stagedManifest, manifestBytes, { flag: "wx" });
       writeFileSync(stagedDeclaration, declarationBytes, { flag: "wx" });
@@ -681,6 +687,7 @@ export async function buildCoverageWorkerGraph(options: {
           canonicalPath(item.originalPath) === resourceOriginal &&
           canonicalPath(item.compiledPath) === resourceCompiled,
       );
+
       if (
         resourceOutputs.length !== 1 ||
         !readFileSync(elysiaPrivateInputs.manifestPath).equals(elysiaPrivateInputs.manifestBytes) ||
@@ -822,6 +829,7 @@ export async function withCoverageWorkerBuild<T>(options: {
   const scopedBuilds: WorkerCoverageBuildRecord[] = [];
   const originalBuild = Bun.build;
   let wrappedBuild!: typeof Bun.build;
+
   wrappedBuild = ((buildOptions: Parameters<typeof Bun.build>[0]) => {
     if (
       typeof buildOptions.root !== "string" ||
@@ -868,6 +876,7 @@ export async function withCoverageWorkerBuild<T>(options: {
     const promise = Reflect.apply(originalBuild, Bun, [
       { ...buildOptions, plugins: [plugin, ...(buildOptions.plugins ?? [])] },
     ]) as ReturnType<typeof Bun.build>;
+
     return promise.then((result) => {
       scopedBuilds.push({
         kind,
@@ -1176,6 +1185,7 @@ export async function withCoverageWorkerFixtureBuild<T>(
     const promise = Reflect.apply(originalBuild, Bun, [
       { ...buildOptions, plugins: [plugin, ...(buildOptions.plugins ?? [])] },
     ]) as ReturnType<typeof Bun.build>;
+
     return promise.then((result) => {
       scopedBuilds.push({ kind: "fixture", entrypoints: [...entrypoints], substitutions });
 

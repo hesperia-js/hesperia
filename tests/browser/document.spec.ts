@@ -38,6 +38,7 @@ test("document installation replaces the native shell and activates its bound in
           documentFixture: { previous: Element; errors: unknown[]; effects: number };
         }
       ).documentFixture;
+
       return {
         removed: fixture.previous.parentNode === null,
         errors: fixture.errors,

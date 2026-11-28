@@ -199,6 +199,7 @@ export async function createOperationCallAnalyzer(
   const isOptions = async (type: Type): Promise<boolean> => {
     const raw = await project.checker.getNonNullableType(type);
     const symbol = await raw?.getSymbol();
+
     return symbol !== undefined && optionSymbols.has(symbol.id);
   };
 
@@ -326,6 +327,7 @@ export async function createOperationCallAnalyzer(
 
 function nodeKey(node: Node): string {
   const source = node.getSourceFile();
+
   return `${source.fileName.replaceAll("\\", "/").toLowerCase()}:${node.getStart(source)}:${node.end}`;
 }
 
@@ -335,5 +337,6 @@ function authoredSpan(
   mapOffset: (offset: number) => number,
 ): SourceSpan {
   const start = mapOffset(node.getStart(source));
+
   return { start, end: Math.max(start, mapOffset(node.end - 1) + 1) };
 }

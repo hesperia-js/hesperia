@@ -57,8 +57,10 @@ export function stylePlanSource(
       path.startsWith("./") || path.startsWith("../")
         ? `new URL(${JSON.stringify(path)},import.meta.url).href`
         : JSON.stringify(path);
+
     return `{id:${JSON.stringify(root.id)},revision:${JSON.stringify(root.revision)},href:${href}${linkMetadata.has(root.id) ? `,link:${JSON.stringify(linkMetadata.get(root.id))}` : ""}}`;
   });
+
   return [
     `import { createInternalStyleRuntime } from ${JSON.stringify(runtimeModule)};`,
     `export const styles = createInternalStyleRuntime({assets:[${assets.join(",")}],owners:${JSON.stringify(topology.owners)},entries:${JSON.stringify(topology.entries)},compositions:${JSON.stringify(compositions)}});`,

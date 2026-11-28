@@ -126,6 +126,7 @@ function artifactRecords(directory: string): CoverageArtifact[] {
 
 function lcovCount(record: string, name: "LH" | "FNH"): number {
   const match = record.match(new RegExp(`^${name}:(\\d+)$`, "mu"));
+
   return match ? Number(match[1]) : 0;
 }
 
@@ -395,6 +396,7 @@ test("coverage runner records the typing-evidence TypeScript process", () => {
 
   expect(result.status, result.stdout + result.stderr).toBe(0);
   const summary = result.summary;
+
   if (!summary?.outputDirectory || summary.status !== "completed")
     throw new Error(
       `Project analysis coverage did not complete: ${result.stdout}\n${result.stderr}`,
@@ -557,6 +559,7 @@ test("a fresh launcher Bun run captures CSS and driver sources into the full cur
       artifact.ownerId === "bun-tests" &&
       bootstrapSources.every((source) => {
         const authoredPath = resolve(repoPath, source.replaceAll("/", sep));
+
         return Object.values(artifact.coverage).some((file) => {
           if (resolve(file.path) !== authoredPath || !file.inputSourceMap) return false;
 
@@ -652,6 +655,7 @@ test("a fresh launcher Bun run captures CSS and driver sources into the full cur
       if (!line.startsWith("SF:")) return false;
 
       const source = line.slice(3).replaceAll("\\", "/");
+
       return (
         source === "packages/tooling/src/css-bundling.ts" ||
         source.endsWith("/packages/tooling/src/css-bundling.ts")

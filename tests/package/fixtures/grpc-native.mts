@@ -400,6 +400,7 @@ async function main(): Promise<void> {
 
     const deadlineStore = graph.api.query(create(ServiceAll.method.unary.input, { value: "D" }));
     const deadlineOutcome = captureFailure(deadlineStore.ready);
+
     pendingCalls.push(deadlineOutcome);
 
     void deadlineOutcome.catch(() => undefined);
@@ -437,6 +438,7 @@ async function main(): Promise<void> {
     checks.push("deadline");
 
     const cancellationController = new AbortController();
+
     parents.push(cancellationController);
 
     const cancellationGraph = createGraph({ contract, abortSignal: cancellationController.signal });

@@ -85,6 +85,7 @@ function parseJson(value: string, label: string): unknown {
     return JSON.parse(value) as unknown;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+
     throw new Error(`${label} is not valid JSON: ${detail}`);
   }
 }

@@ -117,6 +117,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
+
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
@@ -254,6 +255,7 @@ function readConfig(): WorkerCaptureConfig {
 
 function exactPathFilter(paths: readonly string[]): RegExp {
   const escaped = paths.map((path) => path.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
+
   return new RegExp(`^(?:${escaped.join("|")})$`, process.platform === "win32" ? "iu" : "u");
 }
 
@@ -511,6 +513,7 @@ function writeWorkerSeed(
     sourcePopulation: config.template.sourcePopulation,
     coverage: config.template.seedCoverage,
   });
+
   return writeCoverageFragment({
     directory: config.outputDirectory,
     contextId: `project-worker-seed-${invocationId}`,
@@ -532,6 +535,7 @@ function expectedTypeScriptApiExecutablePath(): string {
   const require = createRequire(typescriptPackageJsonPath);
   const packageJsonPath = require.resolve(`${platformPackage}/package.json`);
   const executableName = process.platform === "win32" ? "tsc.exe" : "tsc";
+
   return realpathSync(join(dirname(packageJsonPath), "lib", executableName));
 }
 
@@ -616,6 +620,7 @@ function supportInvocationDetails(
             ),
           )
           .digest("hex");
+
   return {
     executablePath,
     executableRealPath,
@@ -647,11 +652,13 @@ async function installParentCapture(config: WorkerCaptureConfig): Promise<void> 
   let abortingSignal: AbortSignal | undefined;
   const receiptPath = resolve(config.outputDirectory, "worker-invocations.json");
   const originalAbort = AbortController.prototype.abort;
+
   AbortController.prototype.abort = function wrappedAbort(
     this: AbortController,
     reason?: Parameters<AbortController["abort"]>[0],
   ): void {
     const previous = abortingSignal;
+
     abortingSignal = this.signal;
 
     try {
@@ -661,6 +668,7 @@ async function installParentCapture(config: WorkerCaptureConfig): Promise<void> 
     }
   };
   const originalThrowIfAborted = AbortSignal.prototype.throwIfAborted;
+
   AbortSignal.prototype.throwIfAborted = function wrappedThrowIfAborted(): void {
     try {
       originalThrowIfAborted.call(this);
@@ -702,6 +710,7 @@ async function installParentCapture(config: WorkerCaptureConfig): Promise<void> 
           supportInvocations.push(record);
 
           const child = originalSpawn(command);
+
           record.spawnSucceeded = true;
           record.childPid = child.pid;
 
@@ -754,6 +763,7 @@ async function installParentCapture(config: WorkerCaptureConfig): Promise<void> 
       HESPERIA_COVERAGE_WORKER_OWNER_ID: ownerId,
     };
     const child = originalSpawn(command, { ...options, env: environment });
+
     record.spawnSucceeded = true;
     record.childPid = child.pid;
     const originalKill = child.kill.bind(child);
@@ -785,6 +795,7 @@ async function installParentCapture(config: WorkerCaptureConfig): Promise<void> 
 
         if (existsSync(capturePath)) {
           const content = readFileSync(capturePath, "utf8");
+
           record.packageCaptureReceipt = {
             fileName: basename(capturePath),
             sha256: createHash("sha256").update(content).digest("hex"),

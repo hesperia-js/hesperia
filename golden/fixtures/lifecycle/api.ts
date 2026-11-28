@@ -69,6 +69,7 @@ const numbers = createStream<string, number, string>({
       waiting: undefined,
       ended: false,
     };
+
     currentSession = session;
 
     markStreamProgress();
@@ -141,6 +142,7 @@ export function emitNumber(value: number): void {
 
   if (session.waiting) {
     const resolve = session.waiting;
+
     session.waiting = undefined;
 
     resolve({ done: false, value });

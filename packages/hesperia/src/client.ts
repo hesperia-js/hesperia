@@ -214,6 +214,7 @@ const uncompiledClient = {
   form: missingCompilation,
   unsafeHTML: missingCompilation,
 };
+
 export const client: Client = uncompiledClient;
 
 /** Compiler-bound local state authoring operation. */

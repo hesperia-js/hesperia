@@ -10,6 +10,7 @@ const recovery = createQuery({
     if (!response.ok) throw new Error(await response.text());
 
     const result = (await response.json()) as { readonly value: string | null };
+
     return result.value ?? undefined;
   },
 });
@@ -20,6 +21,7 @@ const contract = defineContract({
 });
 const graph = createGraph({ contract });
 const graphApi = graph.api;
+
 export const api = withAeolia(graph, contract);
 
 interface CapturedSource {
@@ -85,6 +87,7 @@ export function resetState(id: number) {
 export function resetIdentity(name: string) {
   const original = captured.get(name);
   const current = graphApi.recovery(name);
+
   return {
     graphApi: graph.api === graphApi,
     key: original?.source.key === current.key,
@@ -101,6 +104,7 @@ export function savedQueryValue(name: string) {
 
 export function savedSourceState(name: string) {
   const source = captured.get(name)?.source;
+
   return {
     status: source?.status.get(),
     pending: source?.pending.get(),
@@ -120,6 +124,7 @@ export function probeStaleAccessor(name: string) {
 function errorState(error: unknown) {
   const reason = error instanceof Error ? error : new Error(String(error));
   const kind = "kind" in reason && typeof reason.kind === "string" ? reason.kind : undefined;
+
   return { threw: true as const, name: reason.name, message: reason.message, kind };
 }
 

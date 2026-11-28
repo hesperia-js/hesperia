@@ -5,6 +5,7 @@ import { api, emitNumber } from "./api.ts";
 function Consumer(props: Component.Props<{ name: string }>) {
   const feed = api.events.numbers("shared");
   const name = props.name();
+
   return (
     <output id={`stream-${name}`} data-consumer={name}>
       {feed.status()}:{feed.value() ?? "empty"}

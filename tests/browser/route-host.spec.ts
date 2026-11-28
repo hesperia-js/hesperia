@@ -53,6 +53,7 @@ async function captureRouteHostCoverage(
           coverage: Reflect.get(globalThis, "__hesperiaCoverage__"),
         }),
       });
+
       return { status: result.status, body: await result.text() };
     },
     {

@@ -162,6 +162,7 @@ export function stylex(): Plugin<StyleXSourceData> {
       if (!rules.length && !assetReferences.length) return undefined;
 
       const watch = uniqueWatches(assetReferences.map((item) => item.filename));
+
       return {
         code: result.code,
         ...(result.map ? { map: result.map as PluginSourceMap } : {}),
@@ -194,6 +195,7 @@ export function stylex(): Plugin<StyleXSourceData> {
           start: 0,
           end: 0,
         };
+
         return {
           styles: [],
           diagnostics: [
@@ -220,6 +222,7 @@ export function stylex(): Plugin<StyleXSourceData> {
         assetReferences,
         origin,
       };
+
       return { styles: [style] };
     },
   };
@@ -373,6 +376,7 @@ function isStylexCreateCall(call: BabelNode, path: BabelPath): boolean {
   if (callee.type !== "MemberExpression" || callee.object?.type !== "Identifier") return false;
 
   const property = callee.computed ? callee.property?.value : callee.property?.name;
+
   return (
     property === "create" && isNamespaceImport(path.scope.getBinding(callee.object.name ?? ""))
   );
@@ -380,6 +384,7 @@ function isStylexCreateCall(call: BabelNode, path: BabelPath): boolean {
 
 function isNamespaceImport(binding: BabelImportBinding | undefined): boolean {
   const specifier = binding?.path.node;
+
   return (
     (specifier?.type === "ImportNamespaceSpecifier" ||
       specifier?.type === "ImportDefaultSpecifier") &&
@@ -389,6 +394,7 @@ function isNamespaceImport(binding: BabelImportBinding | undefined): boolean {
 
 function isNamedCreateImport(binding: BabelImportBinding | undefined): boolean {
   const specifier = binding?.path.node;
+
   return (
     specifier?.type === "ImportSpecifier" &&
     (specifier.imported?.name === "create" || specifier.imported?.value === "create") &&
@@ -398,6 +404,7 @@ function isNamedCreateImport(binding: BabelImportBinding | undefined): boolean {
 
 function importedFromStylex(binding: BabelImportBinding | undefined): boolean {
   const parent = binding?.path.parentPath?.node;
+
   return parent?.type === "ImportDeclaration" && parent.source?.value === "@stylexjs/stylex";
 }
 
@@ -548,6 +555,7 @@ function rebaseUrl(
     .split("/")
     .map((segment) => (segment === "." || segment === ".." ? segment : encodeURIComponent(segment)))
     .join("/");
+
   return {
     value: `${encodedPath.startsWith(".") ? encodedPath : `./${encodedPath}`}${suffix}`,
     filename: target,
@@ -586,6 +594,7 @@ function decodeCssEscapes(value: string): string {
     .replace(/\\(?:\r\n|[\n\r\f])/gu, "")
     .replace(/\\([\da-f]{1,6})\s?/giu, (_match, hex: string) => {
       const codePoint = Number.parseInt(hex, 16);
+
       return codePoint === 0 || codePoint > 0x10ffff ? "\uFFFD" : String.fromCodePoint(codePoint);
     })
     .replace(/\\([^\da-f\n\r\f])/giu, "$1");
@@ -626,6 +635,7 @@ function authoredOrigin(
         return { filename: context.filename };
 
       const content = mappedContent ?? context.authored;
+
       return {
         filename,
         start: offsetAt(content, originalStart.line, originalStart.column),
@@ -643,6 +653,7 @@ function normalizeSourceMapForTrace(map: PluginSourceMap, mapBase: string): Sour
   const { sourceRoot, ...withoutSourceRoot } = map as PluginSourceMap & {
     readonly sourceRoot?: string;
   };
+
   return {
     ...withoutSourceRoot,
     sources: map.sources.map((source) => sourceMapUrl(source, sourceRoot, mapBase)),
@@ -669,6 +680,7 @@ function sourceMapUrl(source: string, sourceRoot: string | undefined, mapBase: s
 
   if (sourceRoot && /^[a-z][a-z\d+.-]*:/iu.test(sourceRoot)) {
     const root = new URL(sourceRoot);
+
     root.pathname = root.pathname.endsWith("/") ? root.pathname : `${root.pathname}/`;
     root.search = "";
     root.hash = "";
@@ -681,6 +693,7 @@ function sourceMapUrl(source: string, sourceRoot: string | undefined, mapBase: s
 function sameSourcePath(first: string, second: string): boolean {
   const left = resolve(first).replaceAll("\\", "/");
   const right = resolve(second).replaceAll("\\", "/");
+
   return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
@@ -705,6 +718,7 @@ function absoluteAuthoredFilename(source: string, currentFilename: string): stri
 function positionAt(source: string, offset: number): { line: number; column: number } {
   const before = source.slice(0, offset);
   const lastLine = before.lastIndexOf("\n");
+
   return { line: before.split("\n").length, column: offset - lastLine - 1 };
 }
 

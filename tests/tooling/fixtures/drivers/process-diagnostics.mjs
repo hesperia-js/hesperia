@@ -167,6 +167,7 @@ export function startProcessDiagnostics({ directory, label }) {
     const intervalMs = now - previousSample;
     const userMicros = cpu.user - previousCpu.user;
     const systemMicros = cpu.system - previousCpu.system;
+
     previousCpu = cpu;
     previousSample = now;
 
@@ -238,6 +239,7 @@ export function startProcessDiagnostics({ directory, label }) {
     try {
       const now = performance.now();
       const gapMs = now - previousTick;
+
       previousTick = now;
       largestGapMs = Math.max(largestGapMs, gapMs);
 

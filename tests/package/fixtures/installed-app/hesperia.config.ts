@@ -7,6 +7,7 @@ export default defineConfig({
       importTypes: {
         palette: async (input) => {
           const value = await input.file.blob.text();
+
           return {
             declaration: {
               code: "declare const value: string; export default value;",

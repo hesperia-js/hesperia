@@ -174,6 +174,7 @@ async function renderedJson(locator: Locator): Promise<unknown> {
 
 async function disposeGraphQLFixtureInBrowser(): Promise<void> {
   const fixture = (globalThis as unknown as GraphQLBrowserControls).graphqlFixture;
+
   if (!fixture) throw new Error("The GraphQL browser fixture is unavailable");
   await fixture.dispose();
 }

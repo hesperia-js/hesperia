@@ -84,6 +84,7 @@ export async function bootstrapApplication(
     prepareModule?.("routes");
 
     const [shell, table] = await Promise.all([modules.shell(), modules.routes()]);
+
     runtime = createRuntimeRoot(window.document);
 
     installRootProjectPolicy(runtime.owner, shell as Component<unknown>);
@@ -153,6 +154,7 @@ export async function bootstrapApplication(
 
       let resolve!: () => void;
       let reject!: (cause: unknown) => void;
+
       disposal = new Promise<void>((accept, fail) => {
         resolve = accept;
         reject = fail;
@@ -179,6 +181,7 @@ export async function bootstrapApplication(
       } catch (cause) {
         if (mode === "sync") {
           reporterFailure = { cause };
+
           try {
             ownerRetirement = mountedRuntime.owner.dispose(reason);
           } catch (failure) {
@@ -202,10 +205,12 @@ export async function bootstrapApplication(
           if (outcome.status === "fulfilled") return [];
 
           const cause: unknown = outcome.reason;
+
           return cause instanceof AggregateError && cause.message === "Component cleanup failed"
             ? [...cause.errors]
             : [cause];
         });
+
         failures.push(...synchronousFailures);
 
         if (failures.length) reject(new AggregateError(failures, "Application disposal failed"));
@@ -229,6 +234,7 @@ export async function bootstrapApplication(
           : synchronousFailures;
 
         if (failures.length === 1) throw failures[0];
+
         if (failures.length > 1)
           throw new AggregateError(failures, "Application synchronous disposal failed");
       },
@@ -274,6 +280,7 @@ function browserModulePreparer(
   return (key) => {
     if (!Object.hasOwn(imports, key)) return;
     const head = window.document.head;
+
     if (!head) return;
 
     for (const path of imports[key]!) {
@@ -281,6 +288,7 @@ function browserModulePreparer(
       prepared.add(path);
 
       const link = window.document.createElement("link");
+
       link.rel = "modulepreload";
       link.crossOrigin = deployment.moduleCredentials;
       link.href = root + path.slice(1);

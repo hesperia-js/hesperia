@@ -115,6 +115,7 @@ test("the emitted check command updates route types and rejects stale parameter 
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
     ]);
+
     return { code, output: stdout + stderr };
   };
 

@@ -283,6 +283,7 @@ export function classifyBrowserStaticPath(
   if (captured.publicFiles.includes(relative)) return { kind: "public", urlPath: relative };
 
   const pageURL = new URL(url.href);
+
   pageURL.pathname = relative;
   const match = matchRoute(manifests.get(captured)!, pageURL);
 

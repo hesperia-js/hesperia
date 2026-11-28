@@ -138,6 +138,7 @@ function preparedWithChildren(
       ? Object.freeze([name, children] as const)
       : Object.freeze([name, value] as const),
   );
+
   return {
     definition: prepared.definition,
     entries: Object.freeze(entries),
@@ -157,12 +158,14 @@ function asyncRouteDefinition(
   onReady: (ready: Promise<void>) => void,
 ): Component<unknown> {
   const schema = Object.fromEntries(prepared.schema);
+
   return defineComponent(
     (owner, props) => {
       const incoming = Object.fromEntries(
         prepared.entries.map(([name]) => {
           const value = (props as Record<string, unknown>)[name];
           const slot = prepared.schema.get(name);
+
           return [
             name,
             slot?.kind === "value" && typeof value === "function"
@@ -171,6 +174,7 @@ function asyncRouteDefinition(
           ];
         }),
       );
+
       return asyncBoundary(
         owner,
         "filesystem-loading",
@@ -287,6 +291,7 @@ function instantiatePart(
   }
 
   const tree = prepareTree(owner, () => output);
+
   return { owner, tree, instance, children, contentOwner, handledFailure, failureState, ready };
 }
 
@@ -540,6 +545,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
           const selected = buildingCandidate ?? active ?? candidate;
           const shouldActivate =
             buildingCandidate === selected || (selected.installed && active === selected);
+
           selected.styleSelection = module.errorStyleKey;
 
           if (!selected.styles) return;
@@ -556,6 +562,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
 
               selected.styles?.activate(selected.styleSelection);
             });
+
             selected.styleReady = selected.styleReady
               ? Promise.all([selected.styleReady, ready]).then(() => undefined)
               : ready;
@@ -581,6 +588,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
             parent,
             ownerIdentity("layout", common.length + index),
           );
+
           owner.deferStructural = true;
 
           staged.push(owner);
@@ -651,6 +659,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
           module: suffixModules[index]!,
         }));
         const suffixChildValues = suffixChildOutlets;
+
         candidate.layers = [...common, ...suffixLayers];
         candidate.page = page;
         candidate.ready = Promise.all([page?.ready, candidate.styleReady]).then(() => undefined);
@@ -660,6 +669,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
             ? childValue
             : (previous?.childValues[index] ?? runtime.context.document.createDocumentFragment()),
         );
+
         candidate.childValues = [...commonChildValues, ...suffixChildValues];
         candidate.layerProps = route.layouts.map((_, index) =>
           preparedWithChildren(layoutPrepared[index]!, candidate.childValues[index]!),
@@ -672,6 +682,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
 
       candidate.build = () => {
         const previousBuilding = buildingCandidate;
+
         buildingCandidate = candidate;
 
         try {
@@ -824,6 +835,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
           const failure = [...candidate.layers, ...(candidate.page ? [candidate.page] : [])].find(
             (part) => part.failureState.handled,
           );
+
           return failure ? { error: failure.failureState.error } : undefined;
         },
 
@@ -853,6 +865,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
 
           if (failedCommonIndex >= 0) {
             const retainedCount = failedCommonIndex + 1;
+
             candidate.common = common.slice(0, retainedCount);
             candidate.layers = candidate.layers.slice(0, retainedCount);
             candidate.commonProps = candidate.commonProps.slice(0, retainedCount);
@@ -1039,6 +1052,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
           );
         },
       };
+
       return prepared;
     } catch (error) {
       disposeOwnerSyncPreservingFailure(staged[0]!, error);

@@ -102,6 +102,7 @@ test("a cleanup fault during an effect failure can replace an enclosing boundary
           },
           (innerContent) => {
             const state = createClient(innerContent).state(false);
+
             fail = () => state.set(true);
 
             createClient(innerContent).effect(() => {
@@ -211,6 +212,7 @@ test("an effect fault replaces only its boundary and cleans connected content pa
       },
       (contentOwner) => {
         const state = createClient(contentOwner).state(false);
+
         fail = () => state.set(true);
 
         createClient(contentOwner).cleanup(() =>
@@ -293,6 +295,7 @@ test("settled called during old content removal waits for the connected fallback
       },
       (contentOwner) => {
         const state = createClient(contentOwner).state(false);
+
         fail = () => state.set(true);
 
         createClient(contentOwner).effect(() => {
@@ -433,12 +436,14 @@ test("a rejected async child replaces its loading view and never activates faile
 
 test("an async failure in detached work prepares its error view without activating it", async () => {
   const target = container();
+
   target.textContent = "current route";
   const runtime = createRuntimeRoot(target);
 
   runtime.owner.commit();
 
   const candidate = new Owner(runtime.context, runtime.owner, "candidate");
+
   candidate.commitDeferred = true;
   let reject!: (reason: unknown) => void;
   const query = new Promise<string>((_resolve, no) => {
@@ -530,6 +535,7 @@ test("a split error-boundary range forwards the original fault to its enclosing 
           () => "inner error",
           (innerContent) => {
             const state = createClient(innerContent).state(false);
+
             fail = () => state.set(true);
 
             createClient(innerContent).effect(() => {
@@ -578,6 +584,7 @@ test("a missing error-boundary range reaches the root once and disposes its owne
       () => "error",
       (contentOwner) => {
         const state = createClient(contentOwner).state(false);
+
         fail = () => state.set(true);
 
         createClient(contentOwner).effect(() => {

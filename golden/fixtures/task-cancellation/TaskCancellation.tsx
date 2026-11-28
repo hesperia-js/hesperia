@@ -56,6 +56,7 @@ export default function TaskCancellation() {
 
   function start(): void {
     const run = action.run();
+
     currentRun = run;
     currentOutcome = Promise.resolve(run).then(
       (value) => ({ kind: "resolved", value }),

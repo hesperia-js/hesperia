@@ -44,6 +44,7 @@ function ItemRow(props: Component.Props<ItemRowProps>) {
 async function SelectedDetail(props: Component.Props<{ id: string }>) {
   const view = api.items.detail(props.id());
   const detail = await view;
+
   return (
     <section id="selected-detail" data-detail-id={props.id()}>
       <h2>Selected item</h2>

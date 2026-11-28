@@ -95,6 +95,7 @@ export function createRouteTable(input: RouteTableInput): RouteTableSource {
     const segments = `[${node.segments.map((part) => `{kind:${JSON.stringify(part.kind)},value:${JSON.stringify(part.value)}}`).join(",")}]`;
     const children = `[${node.children.map((child) => nodeIds.get(child)!).join(",")}]`;
     const viewStyles = input.styleMetadata?.views.get(node.id);
+
     return `{id:${JSON.stringify(node.id)},pattern:${JSON.stringify(node.pattern)},segments:${segments},files:{${files.join(",")}},children:${children}${viewStyles ? `,viewStyles:${JSON.stringify(viewStyles)}` : ""}}`;
   };
 
@@ -105,6 +106,7 @@ export function createRouteTable(input: RouteTableInput): RouteTableSource {
   const rootExpression = nodeIds.get(input.manifest.root)!;
   const routes = `[${input.manifest.routes.map((node) => nodeIds.get(node)!).join(",")}]`;
   const code = `${declarations}\nconst routeTable={version:1,root:${rootExpression},routes:${routes}};\nexport {routeTable};\nexport default routeTable;\n`;
+
   return { code, modules };
 }
 
@@ -193,5 +195,6 @@ function validateRouteStyleMetadata(manifest: RouteManifest, metadata: RouteStyl
 
 function sourceKey(filename: string): string {
   const normalized = resolve(filename).replaceAll("\\", "/");
+
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }

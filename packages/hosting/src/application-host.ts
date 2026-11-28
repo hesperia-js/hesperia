@@ -84,6 +84,7 @@ async function createBrowserHost(
 ): Promise<ApplicationHost> {
   const { mountPathname, generatedAssets } = deployment;
   const applicationOrigin = deployment.version === 2 ? deployment.applicationOrigin : undefined;
+
   resolveMountPath(snapshot);
   const assets = await validateAssets(snapshot);
   const publicFiles = await validatePublicFiles(snapshot);
@@ -235,6 +236,7 @@ function acceptsHTML(accept: string | null): boolean {
     if (!quality) return true;
 
     const value = Number(quality.slice(2));
+
     return Number.isFinite(value) && value > 0;
   });
 }
@@ -244,5 +246,6 @@ function staticResponse(request: Request, blob: Blob, contentType = blob.type): 
     return new Response(null, { status: 405, headers: { allow: "GET, HEAD" } });
 
   const headers = new Headers({ "content-type": contentType, "content-length": String(blob.size) });
+
   return new Response(request.method === "HEAD" ? null : blob, { status: 200, headers });
 }

@@ -60,6 +60,7 @@ export function canonicalizeMountURL(value: string): string {
   });
 
   const url = new URL("https://hesperia.invalid");
+
   url.pathname = `/${decodedSegments.join("/")}`;
   const canonical = url.pathname;
 
@@ -105,6 +106,7 @@ export function canonicalizePublicFilePath(relativePath: string): string {
   }
 
   const url = new URL("https://hesperia.invalid");
+
   url.pathname = encodedPath;
 
   return url.pathname;

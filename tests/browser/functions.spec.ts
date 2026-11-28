@@ -57,6 +57,7 @@ test("named and anonymous function components keep ownership through recursion a
           functionsFixture: { bodyExecutions(): string[]; directCallFault: unknown };
         }
       ).functionsFixture;
+
       return { bodies: fixture.bodyExecutions(), fault: fixture.directCallFault };
     }),
   ).toStrictEqual({

@@ -114,6 +114,7 @@ export function createThrottle<Callback extends SchedulingCallback>(
 
   function dequeue(): QueuedCall<Result> {
     const call = pendingCalls[pendingIndex] as QueuedCall<Result>;
+
     pendingCalls[pendingIndex] = undefined;
     pendingIndex += 1;
 
@@ -131,6 +132,7 @@ export function createThrottle<Callback extends SchedulingCallback>(
   function rejectPending(error: unknown): void {
     const calls = pendingCalls;
     const start = pendingIndex;
+
     pendingCalls = [];
     pendingIndex = 0;
 
@@ -265,6 +267,7 @@ export function createThrottle<Callback extends SchedulingCallback>(
 
     if (strict) {
       let index = strictIndex;
+
       while (index < strictTicks.length && currentTime - strictTicks[index]! >= interval) {
         index += 1;
       }
@@ -308,6 +311,7 @@ export function createThrottle<Callback extends SchedulingCallback>(
       if (!hasCapacity(currentTime)) break;
 
       const call = dequeue();
+
       reserve(currentTime);
       invoke(call);
     }

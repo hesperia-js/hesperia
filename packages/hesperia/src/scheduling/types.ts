@@ -134,6 +134,7 @@ export function invalidArgumentType(
   ) as TypeError & {
     code: "ERR_INVALID_ARG_TYPE";
   };
+
   error.code = "ERR_INVALID_ARG_TYPE";
   return error;
 }
@@ -147,6 +148,7 @@ export function argumentOutOfRange(
   const error = new RangeError(
     `The value of "${name}" is out of range. It must be ${expected}. Received ${String(value)}`,
   ) as RangeError & { code: "ERR_OUT_OF_RANGE" };
+
   error.code = "ERR_OUT_OF_RANGE";
   return error;
 }
@@ -160,6 +162,7 @@ export function invalidArgumentValue(
   const error = new TypeError(
     `The "${name}" argument ${reason}. Received ${describeReceivedValue(value)}`,
   ) as TypeError & { code: "ERR_INVALID_ARG_VALUE" };
+
   error.code = "ERR_INVALID_ARG_VALUE";
   return error;
 }
@@ -223,6 +226,7 @@ export function createAbortError(
   includeCause = cause !== undefined,
 ): Error & { code: "ABORT_ERR"; cause?: unknown } {
   const error = new Error(message) as Error & { code: "ABORT_ERR"; cause?: unknown };
+
   error.name = "AbortError";
   error.code = "ABORT_ERR";
 
@@ -242,6 +246,7 @@ export function createThrottledError(): Error & { code: "ERR_THROTTLED" } {
   const error = new Error("The call was dropped by the throttled function") as Error & {
     code: "ERR_THROTTLED";
   };
+
   error.code = "ERR_THROTTLED";
 
   return error;

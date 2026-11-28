@@ -24,6 +24,7 @@ export async function runToolingMain(arguments_: readonly string[]): Promise<voi
   try {
     const command = parseCommand(arguments_);
     const root = process.cwd();
+
     switch (command.name) {
       case "help":
         console.log(usage);

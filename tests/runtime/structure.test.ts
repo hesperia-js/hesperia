@@ -88,6 +88,7 @@ describe("structural ownership and recovery", () => {
     });
     const app = mount(target, App, {});
     const original = [...target.querySelectorAll("input")];
+
     original[0]!.value = "local state";
 
     rows.set([
@@ -131,6 +132,7 @@ describe("structural ownership and recovery", () => {
     const App = defineComponent((owner) => {
       attach = createClient(owner).state(false);
       const binding = createClient(owner).unsafeBind<{ read(): number }>();
+
       return region(owner, "child", () =>
         componentItem(
           Child,
@@ -249,6 +251,7 @@ describe("structural ownership and recovery", () => {
     );
     const App = defineComponent((owner) => {
       const client = createClient(owner);
+
       selected = client.state(false);
       first = client.unsafeBind();
       second = client.unsafeBind();
@@ -481,6 +484,7 @@ describe("structural ownership and recovery", () => {
       incoming = createClient(owner).state({ value: 1, required: 2 });
       return region(owner, "conditional", () => {
         const values = incoming();
+
         return componentItem(
           Row,
           values as { value?: number; required: number },
@@ -518,6 +522,7 @@ describe("structural ownership and recovery", () => {
     const Row = defineComponent<{ value: number }>(
       (owner, props) => {
         const client = createClient(owner);
+
         bodyProps = props;
         local = client.state(10);
 
@@ -537,6 +542,7 @@ describe("structural ownership and recovery", () => {
       update = createClient(owner).state(1);
       return region(owner, "row", () => {
         const value = update();
+
         return componentItem(
           Row,
           {
@@ -641,8 +647,10 @@ describe("structural ownership and recovery", () => {
     });
     const App = defineComponent((owner) => {
       const client = createClient(owner);
+
       choose = client.state(true);
       const bind = client.bind<{ name(): string }>();
+
       readBinding = bind;
 
       client.effect(() => {

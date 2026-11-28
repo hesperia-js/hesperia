@@ -166,6 +166,7 @@ export function componentFactoryExpression(
 /** Whether a source file is a conventional browser component entry. */
 export function isConventionalComponentFilename(filename: string): boolean {
   const normalized = filename.replaceAll("\\", "/").toLowerCase();
+
   return (
     normalized === "app.tsx" ||
     /(?:^|\/)(?:\+page|\+layout|\+loading|\+error|\+not-found)\.tsx$/u.test(normalized)

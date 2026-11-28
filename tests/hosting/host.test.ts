@@ -27,6 +27,7 @@ const sources = new Map([
 async function sha256Hex(value: string): Promise<string> {
   const bytes = await new Blob([value]).arrayBuffer();
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -51,6 +52,7 @@ async function fixture(mount = "/source"): Promise<Fixture> {
     startupAsset: "/assets/nested/start.js",
     assets,
   };
+
   return { build: { hosting, files }, sources };
 }
 
@@ -119,6 +121,7 @@ describe("createHost", () => {
   test("rejects unknown fields in a direct version 2 public-file record", async () => {
     const { build } = await publicFixture();
     const record = build.hosting.publicFiles[0]! as unknown as { debug?: boolean };
+
     record.debug = true;
 
     await expect(createHost(build)).rejects.toThrow("unexpected fields");
@@ -133,6 +136,7 @@ describe("createHost", () => {
         message: "duplicate public file storage path: assets/published.txt",
         mutate(build) {
           const records = build.hosting.publicFiles as (typeof build.hosting.publicFiles)[number][];
+
           records.push({ ...records[0]! });
         },
       },
@@ -142,6 +146,7 @@ describe("createHost", () => {
           const records = build.hosting.publicFiles as (typeof build.hosting.publicFiles)[number][];
           const original = records[0]!;
           const urlPath = `${original.urlPath}/child`;
+
           records.push({ ...original, relativePath: `${original.relativePath}/child`, urlPath });
           (build.publicFiles as Map<string, Blob>).set(
             urlPath,
@@ -193,6 +198,7 @@ describe("createHost", () => {
 
     for (const scenario of cases) {
       const { build } = await publicFixture();
+
       scenario.mutate(build);
 
       await expect(createHost(build)).rejects.toThrow(scenario.message);
@@ -502,6 +508,7 @@ describe("createHost", () => {
     expect(startup?.status).toBe(200);
     expect(await startup?.text()).toContain("start(");
     const head = host.handle(request("/source/deploy/startup.js", { method: "HEAD" }));
+
     expect(head?.status).toBe(200);
     expect(head?.body).toBeNull();
     expect(
@@ -575,16 +582,19 @@ describe("createHost", () => {
 
   test("rejects malformed records, mismatched maps, invalid digests and unsafe inventory paths", async () => {
     const badVersion = await fixture();
+
     (badVersion.build.hosting as unknown as { version: number }).version = 4;
 
     await expect(createHost(badVersion.build)).rejects.toThrow("version");
 
     const badMode = await fixture();
+
     (badMode.build.hosting as unknown as { mode: string }).mode = "preview";
 
     await expect(createHost(badMode.build)).rejects.toThrow("mode");
 
     const unexpectedField = await fixture();
+
     (unexpectedField.build.hosting as unknown as { debug: boolean }).debug = true;
 
     await expect(createHost(unexpectedField.build)).rejects.toThrow("unexpected fields");
@@ -600,11 +610,13 @@ describe("createHost", () => {
     await expect(createHost(unknownFile.build)).rejects.toThrow("do not match");
 
     const wrongDigest = await fixture();
+
     (wrongDigest.build.hosting.assets[0] as { sha256: string }).sha256 = "f".repeat(64);
 
     await expect(createHost(wrongDigest.build)).rejects.toThrow("digest mismatch");
 
     const unsafeContentType = await fixture();
+
     (unsafeContentType.build.hosting.assets[0] as { contentType: string }).contentType =
       "text/javascript\r";
 
@@ -636,6 +648,7 @@ describe("createHost", () => {
     }
 
     const missingStartup = await fixture();
+
     (missingStartup.build.hosting as unknown as { startupAsset: string }).startupAsset =
       "/assets/not-present.js";
 

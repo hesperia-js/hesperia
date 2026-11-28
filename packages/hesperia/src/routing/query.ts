@@ -70,6 +70,7 @@ export function readonlyQueryParams(search: string): ReadonlyQueryParams {
     set: deny,
     sort: deny,
   });
+
   return view;
 }
 

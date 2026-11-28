@@ -74,6 +74,7 @@ export function currentRenderOwner(): Owner | undefined {
 /** Identify a scheduler render pass that can suspend on reset-unavailable data. */
 export function isScheduledRender(owner: Owner): boolean {
   const current = renderOwners[renderOwners.length - 1];
+
   return current?.owner === owner && current.scheduled;
 }
 
@@ -853,6 +854,7 @@ export class Owner {
     }
 
     const operation = makeOwnerRetirementOperation(this, mode, reportSynchronous);
+
     bindOwnerRetirementAliases(this, operation);
 
     if (mode === "sync") observeSyncRetirementPromise(operation);
@@ -934,6 +936,7 @@ export class Owner {
 
     if (this.styleLifecycle) {
       const binding = this.styleLifecycle;
+
       this.styleLifecycle = undefined;
 
       try {
@@ -1024,6 +1027,7 @@ export function registerOwnerDisposalPromiseAlias(owner: Owner, alias: Promise<v
   }
 
   const aliases = ownerRetirementAliasesByOwner.get(owner) ?? new Set<Promise<void>>();
+
   aliases.add(alias);
   ownerRetirementAliasesByOwner.set(owner, aliases);
 }
@@ -1122,6 +1126,7 @@ export function resumeOwnerResources(owner: Owner): void {
 /** Run cleanup without adding dependencies to a surrounding render or effect. */
 export function runCleanup<T>(cleanup: () => T): T {
   const priorRenderOwners = renderOwners.splice(0);
+
   cleanupDepth++;
 
   try {
