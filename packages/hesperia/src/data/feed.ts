@@ -174,6 +174,7 @@ export function createFeed<T, V = T>(
         if (status === "failed") failProjection(projection!.error.get());
         else if (status === "closed") projectionClosed = true;
       });
+
       stopProjection = () => {
         stopValue();
 
@@ -248,6 +249,7 @@ export function createFeed<T, V = T>(
   const latestValue: Accessor<T | undefined> = () =>
     read(() => {
       const currentSource = sourceCell.get();
+
       return currentSource === undefined ? undefined : currentSource.value.get();
     });
 

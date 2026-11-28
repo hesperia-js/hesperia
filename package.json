@@ -62,6 +62,7 @@
     "@jridgewell/trace-mapping": "0.3.31",
     "@playwright/test": "1.65.0",
     "@standard-schema/spec": "1.1.0",
+    "@stylistic/eslint-plugin": "6.0.1",
     "@types/bun": "1.4.2",
     "@types/node": "22.20.2",
     "@types/ws": "8.18.1",

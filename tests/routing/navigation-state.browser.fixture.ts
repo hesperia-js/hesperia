@@ -31,6 +31,7 @@ const router = new Router({
 
       prepare() {
         const main = document.createElement("main");
+
         main.textContent = url.pathname;
         return {
           owners: [],

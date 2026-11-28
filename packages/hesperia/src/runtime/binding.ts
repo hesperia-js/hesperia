@@ -148,6 +148,7 @@ function attach(binding: Binding<unknown>, owner: Owner, target: object): Bindin
   }
 
   const attachment = { owner, target };
+
   record.attachment = attachment;
   record.published = false;
 
@@ -172,6 +173,7 @@ export function attachComponentBinding<T>(binding: Binding<T>, owner: Owner): Wr
   let published: T | undefined;
   let hasPublished = false;
   const read = (() => current()) as WritableBinding<T>;
+
   read.set = (value: T) => {
     owner.assertActive();
 
@@ -242,6 +244,7 @@ export function attachElementBinding<T extends Element>(
   element: T,
 ): void {
   const record = attach(binding, owner, element);
+
   record.published = true;
 
   record.value.set(element);

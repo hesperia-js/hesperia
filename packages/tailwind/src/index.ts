@@ -15,5 +15,6 @@ export function tailwind(options: TailwindOptions = {}): Plugin {
   const processed = postcss({
     plugins: [tailwindPostcss({ base, optimize: false })],
   });
+
   return Object.freeze({ ...processed, name: "@hesperia/tailwind" });
 }

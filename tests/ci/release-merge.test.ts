@@ -127,6 +127,7 @@ test("merged candidate preflight rejects a non-advancing first-parent version an
         new Response(child.stdout).text(),
         new Response(child.stderr).text(),
       ]);
+
       return { status, stdout, stderr };
     }
 

@@ -29,6 +29,7 @@ function deferred<T>() {
   const promise = new Promise<T>((accept) => {
     resolve = accept;
   });
+
   return { promise, resolve };
 }
 
@@ -50,6 +51,7 @@ function developmentEvents(reader: ReadableStreamDefaultReader<Uint8Array>) {
 
       if (boundary >= 0) {
         const event = pending.slice(0, boundary);
+
         pending = pending.slice(boundary + 2);
 
         if (event.includes(expected)) return event;
@@ -153,6 +155,7 @@ test("development captures declaration revisions and serves only successful rebu
           )?.digest,
       );
     let initialAssetHashes: ReadonlyMap<string, string> | undefined;
+
     server = await devProject(
       root,
       { port: 0, report: (message) => reports.push(message) },
@@ -160,6 +163,7 @@ test("development captures declaration revisions and serves only successful rebu
         const build = await prepareBuild(projectRoot, true);
         const record = await recordFromBuild(build);
         const capture = { build, record };
+
         successfulCaptures.push(capture);
         initialAssetHashes ??= new Map(
           build.hosting.assets.map((asset) => [asset.path, asset.sha256]),
@@ -219,6 +223,7 @@ test("development captures declaration revisions and serves only successful rebu
     const events = await fetch(new URL("/_hesperia/events", server.url), {
       signal: AbortSignal.timeout(15_000),
     });
+
     reader = events.body!.getReader();
     const nextEvent = developmentEvents(reader);
 

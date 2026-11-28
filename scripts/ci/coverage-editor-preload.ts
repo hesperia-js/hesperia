@@ -66,5 +66,6 @@ process.once("exit", (exitCode) => {
 
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
+
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }

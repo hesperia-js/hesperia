@@ -83,6 +83,7 @@ export function createDebounce<Callback extends SchedulingCallback>(
 
   function rejectPending(error: unknown): void {
     const calls = pendingCalls;
+
     pendingCalls = [];
 
     for (const call of calls) call.reject(error);
@@ -158,8 +159,10 @@ export function createDebounce<Callback extends SchedulingCallback>(
 
   function invokePending(): void {
     const arguments_ = latestArguments;
+
     latestArguments = undefined;
     const calls = pendingCalls;
+
     pendingCalls = [];
 
     if (calls.length > 0 && arguments_ !== undefined) invoke(arguments_, calls);
@@ -196,6 +199,7 @@ export function createDebounce<Callback extends SchedulingCallback>(
 
     if (timeout !== undefined && pendingCalls.length > 0) {
       const lastPending = pendingCalls[pendingCalls.length - 1];
+
       if (lastPending !== undefined) void lastPending.promise.catch(() => undefined);
 
       if (rejectOnCancel) rejectPending(createAbortError("The debounced call was superseded"));
@@ -215,6 +219,7 @@ export function createDebounce<Callback extends SchedulingCallback>(
       pendingCalls.push(call);
       latestArguments = arguments_;
     }
+
     return call.promise;
   }
 

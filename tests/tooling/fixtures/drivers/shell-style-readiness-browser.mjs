@@ -14,6 +14,7 @@ for (const engine of [chromium, firefox, webkit]) {
 
     for (const mode of modes) {
       const page = await browser.newPage();
+
       page.setDefaultTimeout(5000);
       /** @type {string[]} */
       const errors = [];
@@ -49,6 +50,7 @@ for (const engine of [chromium, firefox, webkit]) {
           startup[0],
           `window.fixtureStartup = "pending"; ${startup[1]}.then(() => window.fixtureStartup = "ready", error => { window.fixtureStartup = "failed"; window.fixtureError = String(error); });`,
         );
+
         await route.fulfill({
           response,
           body,
@@ -62,6 +64,7 @@ for (const engine of [chromium, firefox, webkit]) {
           release = resolve;
         },
       );
+
       await page.route("**/*.css", async (route) => {
         if (mode !== "ready" && (await page.evaluate(() => document.title === "Styled shell"))) {
           await page.evaluate(() => {

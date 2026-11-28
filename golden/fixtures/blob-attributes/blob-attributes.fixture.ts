@@ -37,6 +37,7 @@ const created: string[] = [];
 const revoked: string[] = [];
 const createObjectURL = window.URL.createObjectURL.bind(window.URL);
 const revokeObjectURL = window.URL.revokeObjectURL.bind(window.URL);
+
 window.URL.createObjectURL = (blob) => {
   const url = createObjectURL(blob);
 
@@ -104,6 +105,7 @@ Object.assign(window, {
       if (foreignApplication) throw new Error("The foreign File fixture is already mounted");
 
       const frame = document.createElement("iframe");
+
       frame.id = "foreign-file-frame";
       frame.src = "about:blank";
       const loaded = new Promise<void>((resolve) =>
@@ -121,6 +123,7 @@ Object.assign(window, {
 
       const create = foreignWindow.URL.createObjectURL.bind(foreignWindow.URL);
       const revoke = foreignWindow.URL.revokeObjectURL.bind(foreignWindow.URL);
+
       foreignWindow.URL.createObjectURL = (blob) => {
         const url = create(blob);
 

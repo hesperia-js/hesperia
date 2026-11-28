@@ -85,6 +85,7 @@ function streamGraph(name: string, backend: ReturnType<typeof testBackend>) {
     key: () => `${name}/shared`,
     open: backend.stream<void, number>(name),
   });
+
   return createGraph({
     contract: defineContract({ namespace: "feed-tests", operations: { stream } }),
     idleMs: 5,
@@ -421,6 +422,7 @@ describe("owner-bound shared feeds", () => {
     const backend = testBackend();
     const graph = streamGraph("suspended", backend);
     const current = makeOwner();
+
     current.context.scheduler = new Scheduler(current);
     const latest = createFeed(current, () => graph.api.stream(undefined) as StreamStore<number>);
     const history = latest.project({ kind: "accumulate", max: 4 });
@@ -509,6 +511,7 @@ describe("owner-bound shared feeds", () => {
     const backend = testBackend();
     const graph = streamGraph("direct-collected", backend);
     const current = makeOwner();
+
     current.context.scheduler = new Scheduler(current);
     const source = graph.api.stream(undefined) as StreamStore<number>;
     const history = createFeed(current, source, { kind: "accumulate", max: 4 });
@@ -546,6 +549,7 @@ describe("owner-bound shared feeds", () => {
     const factoryBackend = testBackend();
     const factoryGraph = streamGraph("factory-collected", factoryBackend);
     const factoryOwner = makeOwner();
+
     factoryOwner.context.scheduler = new Scheduler(factoryOwner);
     const factoryHistory = createFeed(
       factoryOwner,
@@ -588,6 +592,7 @@ describe("owner-bound shared feeds", () => {
     const secondBackend = testBackend();
     const secondGraph = streamGraph("resume-second", secondBackend);
     const current = makeOwner();
+
     current.context.scheduler = new Scheduler(current);
     let useSecond = false;
     const history = createFeed<number, readonly number[]>(

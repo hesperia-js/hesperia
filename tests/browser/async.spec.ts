@@ -37,6 +37,7 @@ async function captureAsyncPageCoverage(
           coverage: Reflect.get(globalThis, "__hesperiaCoverage__"),
         }),
       });
+
       return { status: result.status, body: await result.text() };
     },
     {
@@ -338,6 +339,7 @@ test("reset recovers consumed async sources and leaves unrelated rendered owners
           globalThis as unknown as { asyncRecoveryControl: AsyncRecoveryControl }
         ).asyncRecoveryControl.savedSourceState("parent"),
       );
+
       return state;
     })
     .toMatchObject({ status: "ready", pending: false, value: "B-parent" });
@@ -351,6 +353,7 @@ test("reset recovers consumed async sources and leaves unrelated rendered owners
           ).asyncRecoveryControl.resetState(id),
         resetB,
       );
+
       return state.status;
     })
     .toBe("pending");
@@ -381,6 +384,7 @@ test("reset recovers consumed async sources and leaves unrelated rendered owners
   const retainedIdentity = await page.evaluate(() => {
     const control = (globalThis as unknown as { asyncRecoveryControl: AsyncRecoveryControl })
       .asyncRecoveryControl;
+
     return {
       parent: control.resetIdentity("parent"),
       child: control.resetIdentity("child"),
@@ -470,6 +474,7 @@ test("reset recovers consumed async sources and leaves unrelated rendered owners
           globalThis as unknown as { asyncRecoveryControl: AsyncRecoveryControl }
         ).asyncRecoveryControl.savedSourceState("child"),
       );
+
       return state;
     })
     .toMatchObject({ status: "ready", pending: false, valueIsUndefined: true });
@@ -483,6 +488,7 @@ test("reset recovers consumed async sources and leaves unrelated rendered owners
           ).asyncRecoveryControl.resetState(id),
         resetC,
       );
+
       return state.status;
     })
     .toBe("pending");
@@ -500,6 +506,7 @@ test("reset recovers consumed async sources and leaves unrelated rendered owners
           ).asyncRecoveryControl.resetState(id),
         resetC,
       );
+
       return state.status;
     })
     .toBe("fulfilled");
@@ -544,6 +551,7 @@ test("reset recovers consumed async sources and leaves unrelated rendered owners
   const savedValues = await page.evaluate(() => {
     const control = (globalThis as unknown as { asyncRecoveryControl: AsyncRecoveryControl })
       .asyncRecoveryControl;
+
     return {
       parent: control.savedQueryValue("parent"),
       child: control.savedQueryValue("child"),

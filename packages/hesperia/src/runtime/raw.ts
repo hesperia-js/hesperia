@@ -26,6 +26,7 @@ export function rawHTML(
   parent.context.warn("unsafe HTML inserts application-supplied markup without sanitization");
 
   const owner = new Owner(parent.context, parent, `${parent.identity}/${slot}`);
+
   owner.executingBody = false;
   const document = parent.context.document;
   const fragment = document.createDocumentFragment();

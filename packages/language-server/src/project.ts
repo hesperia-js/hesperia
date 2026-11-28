@@ -125,6 +125,7 @@ export class EditorProject {
       const symbol = native
         ? await native.getSymbol()
         : await checker.getSymbolAtPosition(position.filename, position.offset);
+
       return {
         type: await checker.typeToString(type),
         documentation: symbol ? await symbol.getDocumentationComment(checker) : "",
@@ -211,6 +212,7 @@ export class EditorProject {
           ["__hesperia_element", "__hesperia_component"].includes(call.expression.text)
         ) {
           const contextual = await checker.getContextualType(object);
+
           symbol = contextual ? await checker.getPropertyOfType(contextual, token.text) : undefined;
 
           if (
@@ -265,6 +267,7 @@ export class EditorProject {
         : new Promise<void>((resolve) => {
             this.#resolveDrained = resolve;
           });
+
     this.#disposePromise = (async () => {
       await drained;
 

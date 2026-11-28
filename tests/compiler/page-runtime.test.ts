@@ -58,6 +58,7 @@ export default function User(props: Page.Props<{ queryParams: { page?: string };
     };
 
     const errors: unknown[] = [];
+
     app = mount(
       window.document.body as unknown as Element,
       generated.default,

@@ -9,6 +9,7 @@ import {
 
 function isInside(parent: string, child: string): boolean {
   const path = relative(resolve(parent), resolve(child));
+
   return path !== "" && path !== ".." && !path.startsWith(`..${sep}`);
 }
 

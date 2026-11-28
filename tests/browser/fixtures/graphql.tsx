@@ -118,7 +118,9 @@ function SubscriptionLifecycleJourney() {
 
 export default function GraphQLNative() {
   if (subscriptionMode === "events") return <SubscriptionEventsJourney />;
+
   if (subscriptionMode === "reset" || subscriptionMode === "dispose")
     return <SubscriptionLifecycleJourney />;
+
   throw new Error("The GraphQL fixture requires a subscription mode");
 }

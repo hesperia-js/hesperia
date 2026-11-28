@@ -47,6 +47,7 @@ test("custom import handlers share captured Blob bytes but retain each importer'
         inputs.push({ importer: input.importer, blob: input.file.blob });
 
         const value = `${await input.file.blob.text()}:${input.importer === first ? "first" : "second"}`;
+
         return {
           declaration: {
             code: "declare const value: string; export default value;",
@@ -777,6 +778,7 @@ function mappedSourceStages(filename: string, vendor: string, vendorSource: stri
     (_match, drive: string) =>
       process.platform === "win32" ? `file:///${drive.toLowerCase()}:` : `file:///${drive}:`,
   );
+
   return [
     {
       name: "first-map",
@@ -837,5 +839,6 @@ function mappedSourceStages(filename: string, vendor: string, vendorSource: stri
 
 function positionAt(source: string, offset: number): { line: number; column: number } {
   const preceding = source.slice(0, offset);
+
   return { line: preceding.split("\n").length, column: offset - preceding.lastIndexOf("\n") - 1 };
 }

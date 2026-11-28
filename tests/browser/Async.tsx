@@ -65,6 +65,7 @@ async function AwaitingParent(): Promise<Rendered> {
 
 function IndependentParent() {
   const binding = client.bind<ChildOutput>();
+
   return <RefusedChild bind={binding} />;
 }
 

@@ -159,6 +159,7 @@ export function scanRouteFiles(rootPath: string, sourcePaths: readonly string[])
   };
 
   const tree = build("", []);
+
   return Object.freeze({ root: tree, routes: Object.freeze(pages.sort(compareRoutes)) });
 }
 

@@ -619,6 +619,7 @@ test("language server discards superseded builds and delayed results from older 
       textDocument: { uri },
       position: { line: 0, character: 20 },
     });
+
     await oldHoverStarted.promise;
 
     await streams.clientConnection.sendNotification("textDocument/didChange", {
@@ -656,6 +657,7 @@ test("language server does not publish an initial configuration error after shut
     const configurationUri = pathToFileURL(configurationFilename).href;
     const streams = createProtocolHarness();
     const workerStarted = deferred<void>();
+
     type WorkerResult = Awaited<ReturnType<NonNullable<Parameters<typeof startLanguageServer>[3]>>>;
     let rejectWorker!: (reason: Error) => void;
     let workerAttached = false;
@@ -996,12 +998,14 @@ test("language server shutdown waits for an in-flight semantic request before di
       textDocument: { uri },
       position: { line: 0, character: 20 },
     });
+
     await hoverStarted.promise;
     let shutdownSettled = false;
     const shutdown = streams.clientConnection.sendRequest("shutdown").then((result) => {
       shutdownSettled = true;
       return result;
     });
+
     await disposalStarted.promise;
     await new Promise<void>((accept) => setImmediate(accept));
 
@@ -1045,6 +1049,7 @@ function resultFor(filename: string, code: string, message: string): ProjectChec
 
 function protocolPosition(source: string, offset: number): { line: number; character: number } {
   const before = source.slice(0, offset);
+
   return {
     line: before.split("\n").length - 1,
     character: offset - before.lastIndexOf("\n") - 1,
@@ -1086,6 +1091,7 @@ function fakeProject(
   let finishDisposal: (() => void) | undefined;
   let disposePromise: Promise<void> | undefined;
   let isDisposed = false;
+
   return {
     diagnostics,
 
@@ -1142,6 +1148,7 @@ function deferred<T>() {
   const promise = new Promise<T>((accept) => {
     resolve = accept;
   });
+
   return { promise, resolve };
 }
 

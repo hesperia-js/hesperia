@@ -101,6 +101,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
+
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
@@ -231,6 +232,7 @@ function positiveSources(artifact: CoverageArtifact): readonly string[] {
 
 async function chooseBrowserPort(): Promise<number> {
   const server = createServer();
+
   await new Promise<void>((resolveListen, reject) => {
     server.once("error", reject);
 
@@ -261,6 +263,7 @@ function writeCanonicalSeed(options: {
     population: options.sourcePopulation,
     coverage: options.coverage,
   });
+
   return writeCoverageFragment({
     directory: options.outputDirectory,
     contextId: "browser-css-canonical-seed",
@@ -596,6 +599,7 @@ function readOwnedArtifacts(options: {
 
   if (supportProfile) {
     const support = run.supportArtifacts;
+
     supportSeed = support.find((artifact) => artifact.kind === "seed");
     supportHits = support.find((artifact) => artifact.kind === "hits");
 

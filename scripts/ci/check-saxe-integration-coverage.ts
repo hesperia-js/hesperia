@@ -243,6 +243,7 @@ function sha256(value: string | Uint8Array): string {
 function samePath(left: string, right: string): boolean {
   const normalize = (value: string) => {
     const resolved = resolve(value).replaceAll("\\", "/");
+
     return process.platform === "win32" ? resolved.toLowerCase() : resolved;
   };
 
@@ -535,6 +536,7 @@ function gitOutput(repoPath: string, args: readonly string[]): string {
     }).trim();
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+
     fail(`read-only Git identity check failed: ${detail}`);
   }
 }
@@ -592,6 +594,7 @@ function validateExecutionLogs(
   repoPath: string,
 ): Record<string, unknown> {
   const stdout = readLog(inputDirectory, runRoot, inputs.execution.stdout, "stdout");
+
   readLog(inputDirectory, runRoot, inputs.execution.stderr, "stderr");
   const summaries: Record<string, unknown>[] = [];
 
@@ -911,6 +914,7 @@ export async function checkSaxeIntegrationCoverage(options: {
   const coverageBySource = new Map(
     merged.files().map((path) => {
       const source = relative(repoPath, path).split(sep).join("/");
+
       return [source, merged.fileCoverageFor(path).toJSON()] as const;
     }),
   );

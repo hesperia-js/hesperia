@@ -42,6 +42,7 @@ export function generatePageDeclarations(
     )
     .filter((filename) => {
       const prefix = `${normalize(routeRoot)}/`;
+
       return normalize(filename).startsWith(prefix);
     });
   let manifest: RouteManifest | undefined;
@@ -75,6 +76,7 @@ export function generatePageDeclarations(
   }
 
   const declaration = `${PAGE_DECLARATION_MARKER}\nexport {};\ndeclare global {\n${aliases.join("\n")}\n}\n`;
+
   return {
     declaration: {
       filename: options.root === undefined ? "hesperia.d.ts" : join(root, "hesperia.d.ts"),
@@ -99,5 +101,6 @@ function routeType(segments: readonly RouteSegment[]): string {
 
     return "";
   });
+
   return `{ ${fields.filter(Boolean).join(" ")} }`;
 }

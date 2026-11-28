@@ -24,6 +24,7 @@ function deferred<T>() {
   const promise = new Promise<T>((yes) => {
     resolve = yes;
   });
+
   return { promise, resolve };
 }
 
@@ -36,6 +37,7 @@ function browser() {
 
   const events: string[] = [];
   const nativeScrollTo = window.scrollTo.bind(window);
+
   window.scrollTo = ((x: number, y: number) => {
     nativeScrollTo(x, y);
 
@@ -46,6 +48,7 @@ function browser() {
 
 function mouse(window: globalThis.Window, init: MouseEventInit): MouseEvent {
   const Constructor = (window as unknown as { MouseEvent: typeof MouseEvent }).MouseEvent;
+
   return new Constructor("click", init);
 }
 
@@ -66,6 +69,7 @@ function page(
     },
   } as unknown as RuntimeContext;
   const owner = new Owner(context, null, label);
+
   context.scheduler = new Scheduler(owner);
   const node = window.document.createElement("main");
 
@@ -137,10 +141,13 @@ function presentationPage(
     },
   } as unknown as RuntimeContext;
   const owner = new Owner(context, null, label);
+
   context.scheduler = new Scheduler(owner);
   const main = window.document.createElement("main");
+
   main.tabIndex = -1;
   const control = window.document.createElement("button");
+
   control.id = "remembered-focus";
 
   main.append(
@@ -261,6 +268,7 @@ test("superseded pending guards cancel immediately and cannot later install", as
     }),
   });
   const slow = router.navigate("/slow", { history: "push" });
+
   await entered.promise;
   const fast = router.navigate("/fast", { history: "replace" });
 
@@ -307,6 +315,7 @@ test("late prepared candidates are disposed and never replace a newer committed 
     }),
   });
   const slow = router.navigate("/slow", { history: "push" });
+
   await entered.promise;
 
   await router.navigate("/fast", { history: "replace" });
@@ -361,6 +370,7 @@ test("query-only navigation retains the page while changed parameters remount", 
 
   const node = window.document.querySelector("main");
   const length = window.history.length;
+
   events.length = 0;
 
   router.updateQuery("tab", "second", { history: "push", state: { tab: 2 } });
@@ -505,9 +515,11 @@ test("fragment-only navigation retains the route lifetime and applies native fra
         bodies++;
         const prepared = page(window, inputs, url.pathname, events);
         const fragment = window.document.createElement("a");
+
         fragment.id = "details";
         fragment.tabIndex = -1;
         const focus = fragment.focus.bind(fragment);
+
         fragment.focus = (options?: FocusOptions) => {
           events.push("fragment-focus");
 
@@ -541,6 +553,7 @@ test("fragment-only navigation retains the route lifetime and applies native fra
 
   const node = window.document.querySelector("main");
   const length = window.history.length;
+
   events.length = 0;
 
   const result = await router.navigate("/one#details", {
@@ -618,6 +631,7 @@ test("a superseded query-only guard leaves the current page until the newer quer
   const node = window.document.querySelector("main");
   const length = window.history.length;
   const slow = router.navigate("/1?tab=slow", { history: "push" });
+
   await entered.promise;
   const fast = router.navigate("/1?tab=fast", { history: "push" });
 
@@ -794,6 +808,7 @@ test("retained layout owners survive page commits while departing page owners cl
         });
 
         const shared = layout;
+
         return {
           ...fresh,
           owners: [shared, child],
@@ -865,6 +880,7 @@ test("explicit cancellation and failed preparation preserve the committed owner 
 
   events.length = 0;
   const candidate = router.navigate("/cancel", { history: "push" });
+
   await waiting.promise;
 
   router.cancel();
@@ -899,6 +915,7 @@ test("link interception preserves native escape paths and releases its listener"
 
       prepare(inputs) {
         const prepared = page(window, inputs, url.pathname, events);
+
         return {
           ...prepared,
 
@@ -913,6 +930,7 @@ test("link interception preserves native escape paths and releases its listener"
   });
   const remove = router.listenToLinks();
   const sameOrigin = window.document.createElement("a");
+
   sameOrigin.href = "/next";
   sameOrigin.textContent = "next";
 
@@ -929,6 +947,7 @@ test("link interception preserves native escape paths and releases its listener"
   expect(router.url).toBe("https://example.test/next");
 
   const external = window.document.createElement("a");
+
   external.href = "https://other.test/away";
 
   window.document.body.append(external);
@@ -1367,6 +1386,7 @@ test("native precommit history traversal restores before the physical URL change
     url: "https://example.test/two",
     getState: () => null,
   } as NavigationHistoryEntry;
+
   navigation.currentEntry = firstEntry;
 
   function TestNavigateEvent() {}
@@ -1543,6 +1563,7 @@ test("restoring a cached route checks the current outgoing owner", async () => {
       prepare(inputs) {
         bodies++;
         const prepared = page(window, inputs, url.pathname, events, true);
+
         current = prepared;
 
         if (url.pathname === "/two") {
@@ -1594,6 +1615,7 @@ test("restoring a cached route checks the current outgoing owner", async () => {
   const outgoingNode = window.document.querySelector("main");
   const outgoingOwner = current.owners[0]!;
   const installsBefore = events.filter((event) => event === "install:two").length;
+
   veto = true;
 
   window.history.back();
@@ -1631,6 +1653,7 @@ test("restoring a cached route checks the current outgoing owner", async () => {
     completed = true;
     return result;
   });
+
   await departureEntered.promise;
   await new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -1688,6 +1711,7 @@ test("cancelled loading composition restores the outgoing owner without aborting
       prepare(inputs) {
         if (url.pathname === "/first") {
           const result = page(window, inputs, "first", events, true);
+
           firstNode = window.document.querySelector<HTMLElement>("main");
           return result;
         }
@@ -1703,6 +1727,7 @@ test("cancelled loading composition restores the outgoing owner without aborting
 
   firstNode = window.document.querySelector<HTMLElement>("main");
   const pending = router.navigate("/slow", { history: "push" });
+
   await entered.promise;
 
   expect(events).toContain("install:loading");
@@ -1745,6 +1770,7 @@ test("query updates restore a parked active page and publish the new query", asy
 
   const firstNode = window.document.querySelector("main");
   const pending = router.navigate("/slow", { history: "push" });
+
   await entered.promise;
 
   expect(events).toContain("install:loading");
@@ -1790,6 +1816,7 @@ test("disposing after explicit cancellation does not restore a parked owner", as
   await router.navigate("/first", { history: "replace" });
 
   const pending = router.navigate("/slow", { history: "push" });
+
   await entered.promise;
 
   expect(events).toContain("install:loading");
@@ -1831,6 +1858,7 @@ test("superseding a loading composition keeps the outgoing page cacheable", asyn
   await router.navigate("/first", { history: "replace" });
 
   const slow = router.navigate("/slow", { history: "push" });
+
   await entered.promise;
   const fast = router.navigate("/fast", { history: "push" });
 
@@ -1859,6 +1887,7 @@ test("router disposal releases cached and active owners after either cleanup thr
 
       prepare() {
         const label = url.pathname;
+
         return {
           owners: [],
 

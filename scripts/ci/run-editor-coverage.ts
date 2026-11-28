@@ -115,6 +115,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
+
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
@@ -127,6 +128,7 @@ function timestamp(value: unknown): number | undefined {
   }
 
   const parsed = Date.parse(value);
+
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
@@ -161,6 +163,7 @@ function linuxTimestampNs(value: unknown): bigint | undefined {
   if (!Number.isSafeInteger(wholeMilliseconds)) return undefined;
 
   const fractionNs = BigInt((match[2] ?? "").padEnd(9, "0"));
+
   return BigInt(wholeMilliseconds) * 1_000_000n + fractionNs;
 }
 
@@ -171,6 +174,7 @@ function isTimestamp(value: unknown): value is string {
 function commandLineArgument(commandLine: string, name: string): string | undefined {
   const pattern = new RegExp("(?:^|\\s)--" + name + '(?:=|\\s+)(?:"([^"]+)"|([^\\s]+))', "iu");
   const match = pattern.exec(commandLine);
+
   return (match?.[1] ?? match?.[2])?.replace(/^["']|["']$/gu, "");
 }
 
@@ -316,6 +320,7 @@ function verifyCodeExecutable(
 
 function cleanBuildEnvironment(): NodeJS.ProcessEnv {
   const environment = { ...process.env };
+
   delete environment.BUN_OPTIONS;
   delete environment.NODE_OPTIONS;
 
@@ -910,6 +915,7 @@ function parseLinuxExecve(text: string): {
 
       if (/[0-7]/u.test(escaped)) {
         const octal = escaped + (/^[0-7]{0,2}/u.exec(text.slice(cursor))?.[0] ?? "");
+
         cursor += octal.length - 1;
         value += String.fromCharCode(Number.parseInt(octal, 8));
         continue;
@@ -1759,6 +1765,7 @@ function validateLinuxTraceClosure(
           throw new Error(`Linux trace contains nested unfinished syscalls in ${file.file}`);
 
         const marker = line.indexOf("<unfinished ...>");
+
         pending = { name: unfinished[1]!, prefix: line.slice(0, marker), line: index + 1 };
         continue;
       }
@@ -2149,6 +2156,7 @@ function validateLinuxTraceClosure(
       "CLONE_VFORK",
       "SIGCHLD",
     ]);
+
     return creator.flags.length > 0 && creator.flags.every((flag) => allowed.has(flag));
   };
 
@@ -2513,6 +2521,7 @@ function validateLinuxTraceClosure(
             "Linux reparent creator-group exit",
           );
           const terminalNs = linuxTraceTimestampNs(terminal);
+
           return terminalNs > latest ? terminalNs : latest;
         }, 0n);
         const creatorBirth = creatorByPid.get(rawCreatorPid);
@@ -2667,12 +2676,14 @@ function validateLinuxExecLineage(
       if (!isRecord(rawImage) || rawImage.executablePath !== codeExecutable) return false;
 
       const observedAtNs = linuxTimestampNs(rawImage.observedAt);
+
       return observedAtNs !== undefined && observedAtNs > afterNs && observedAtNs < beforeNs;
     });
   };
 
   const hasCodeProcImage = (pid: number): boolean => {
     const event = eventByPid.get(pid);
+
     return (
       event !== undefined &&
       Array.isArray(event.executions) &&
@@ -2916,6 +2927,7 @@ function hasLinuxNodeServiceProcHistory(
     if (!isRecord(image)) return false;
 
     const observedAtNs = linuxTimestampNs(image.observedAt);
+
     return (
       image.executablePath === event.executablePath &&
       (isLinuxNodeServiceArgv(image.argv) ||
@@ -2940,6 +2952,7 @@ function hasLinuxCurrentProcImageAfterExec(
   if (!isRecord(current)) return false;
 
   const observedAtNs = linuxTimestampNs(current.observedAt);
+
   return (
     current.executablePath === event.executablePath &&
     transition.resolvedPath === event.executablePath &&
@@ -3027,6 +3040,7 @@ function hasLinuxAcknowledgementSampleAfterExec(
       JSON.stringify(image.argv) === JSON.stringify(argv) &&
       linuxTimestampNs(image.observedAt) === sampleStartedAtNs,
   );
+
   return matches.length === 1;
 }
 
@@ -3170,6 +3184,7 @@ function validateLinuxNativeObservation(
     if (!Array.isArray(argv)) return false;
 
     const prefix = `--${name}=`;
+
     return argv.some(
       (argument, index) =>
         typeof argument === "string" &&
@@ -4286,6 +4301,7 @@ function sourceCoverage(
 ): CoverageFile | undefined {
   const absolute = resolve(repoPath, source.replaceAll("/", sep));
   const entry = Object.entries(coverage).find(([path]) => resolve(path) === absolute)?.[1];
+
   return entry && typeof entry === "object" ? (entry as CoverageFile) : undefined;
 }
 
@@ -4297,6 +4313,7 @@ function supportArtifactSourcesMatch(
   const expected = sources
     .map((source) => canonicalPath(resolve(repoPath, source.replaceAll("/", sep))))
     .sort();
+
   return JSON.stringify(actual) === JSON.stringify(expected);
 }
 
@@ -4950,6 +4967,7 @@ async function validateCapturedRun(
         (requireHit &&
           profile.requiredHitSources.some((source) => {
             const file = hit && sourceCoverage(hit.coverage, source);
+
             return !file || !hasHits(file);
           })) ||
         (rawCoverage !== undefined &&
@@ -5185,6 +5203,7 @@ async function verifyArtifactRejections(
         }
 
         const terminalNs = linuxTraceTimestampNs(terminal);
+
         return terminalNs > latest ? terminalNs : latest;
       }, 0n);
     };
@@ -5239,6 +5258,7 @@ async function verifyArtifactRejections(
         }
 
         const creatorEvent = eventByPid.get(Number(event.creator.parentPid));
+
         return (
           !creatorEvent ||
           (creatorEvent.ownerRole === undefined && !protectedPids.has(Number(creatorEvent.pid)))
@@ -5576,6 +5596,7 @@ async function verifyArtifactRejections(
             const target = events.find((event) => {
               const processExitTime = timestamp(event.processExitTime);
               const exitObservedAt = timestamp(event.exitObservedAt);
+
               return (
                 Number.isSafeInteger(event.pid) &&
                 processExitTime !== undefined &&
@@ -5723,6 +5744,7 @@ async function verifyArtifactRejections(
         if (!identity) throw new Error("Validated canonical fragment has an invalid filename");
 
         const foreignPid = Number(identity[1]) === 1 ? "2" : "1";
+
         invalidOwnerFilename = `${prefix}${foreignPid}-${identity[2]}-${identity[3]}.json`;
 
         renameSync(join(directory, selected), join(directory, invalidOwnerFilename));
@@ -5864,6 +5886,7 @@ function nativeKillConditionError(
     typeof value === "string" && value.length > 240 ? `${value.slice(0, 240)}...` : value,
   );
   const bounded = observed && observed.length > 2000 ? `${observed.slice(0, 2000)}...` : observed;
+
   return new Error(`${message}; rejected ${rejectedCondition[0]}; observed=${bounded}`);
 }
 
@@ -6250,11 +6273,13 @@ function verifyLinuxNativeKillRejection(
 
       if (argument.startsWith(`--${name}=`)) {
         const value = argument.slice(`--${name}=`.length);
+
         return expected === undefined ? value : value === expected;
       }
 
       if (argument === `--${name}`) {
         const value = argv[index + 1];
+
         return expected === undefined
           ? typeof value === "string"
             ? value
@@ -6288,6 +6313,7 @@ function verifyLinuxNativeKillRejection(
             hasFlag(exec.argv, "extensionTestsPath", coverageHostPath) === true,
         )
       : false;
+
     return (
       event.executablePath === context.code.executablePath &&
       event.ownerRole === undefined &&
@@ -6501,6 +6527,7 @@ function verifyLinuxNativeKillRejection(
     const procArgv = event.procArgv;
     const latest = latestExecByPid.get(Number(event.pid));
     const argv = latest?.argv;
+
     return (
       event.executablePath === context.code.executablePath &&
       Array.isArray(procArgv) &&
@@ -7148,6 +7175,7 @@ function runNativeEditorTest(options: {
   readonly outputDirectory: string;
 }) {
   const { code, environment, extensionRoot, coverageHostPath, outputDirectory } = options;
+
   return process.platform === "linux"
     ? spawnSync(
         "python3",
@@ -7227,6 +7255,7 @@ async function main(): Promise<void> {
     const artifactVerification =
       verification === "artifacts" || verification === "artifacts-and-native";
     const code = verifyCodeExecutable(codePathInput, expectedVersion);
+
     runId = randomUUID();
     outputDirectory = join(outputRoot, runId);
     const buildDirectory = join(buildRoot, runId);

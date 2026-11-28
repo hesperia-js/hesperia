@@ -20,9 +20,11 @@ if ("publicFiles" in build) {
     files,
     publicFiles: build.publicFiles,
   };
+
   captured = publicCapture;
 } else {
   const browserCapture: CapturedBrowserBuild = { hosting: build.hosting, files };
+
   captured = browserCapture;
 }
 

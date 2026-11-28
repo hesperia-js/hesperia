@@ -327,6 +327,7 @@ export function createTaskController<Input, Output, Prepared = Input>(
     owner.assertActive();
 
     const previousId = nextId;
+
     current?.cancel(cancellationReason("Form validation reset"));
 
     if (disposed || nextId !== previousId) return;

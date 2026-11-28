@@ -26,6 +26,7 @@ function readModulePaths(
 
     if (!files.has(path) || seen.has(path))
       throw new TypeError("Browser module preload names a missing or repeated artifact");
+
     seen.add(path);
   }
 
@@ -49,10 +50,12 @@ export async function readBrowserModulePreloads(
   if (!source) return { modules: [] };
 
   const record: unknown = JSON.parse(await source.text());
+
   if (!isRecord(record))
     throw new TypeError("Browser module preloads must be supplied as an object");
 
   const modules = readModulePaths(record.modules, files);
+
   if (modules[0] !== startupAsset)
     throw new TypeError("Browser module preloads must start with this capture's startup module");
 
@@ -62,6 +65,7 @@ export async function readBrowserModulePreloads(
     throw new TypeError("Browser module preload metadata has an unsupported shape");
 
   const imports: Record<string, readonly string[]> = Object.create(null);
+
   for (const [key, paths] of Object.entries(record.imports))
     imports[key] = readModulePaths(paths, files);
 

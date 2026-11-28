@@ -4,7 +4,72 @@
   "categories": {
     "correctness": "error"
   },
-  "rules": {},
+  "jsPlugins": [
+    {
+      "name": "@stylistic",
+      "specifier": "@stylistic/eslint-plugin"
+    }
+  ],
+  "rules": {
+    "@stylistic/padding-line-between-statements": [
+      "error",
+      {
+        "blankLine": "always",
+        "prev": ["const", "let", "var", "using"],
+        "next": "*"
+      },
+      {
+        "blankLine": "any",
+        "prev": ["const", "let", "var", "using"],
+        "next": ["const", "let", "var", "using"]
+      },
+      {
+        "blankLine": "always",
+        "prev": "*",
+        "next": {
+          "selector": ":matches(IfStatement, ForStatement, ForInStatement, ForOfStatement, WhileStatement, DoWhileStatement, SwitchStatement, TryStatement)",
+          "lineMode": "multiline"
+        }
+      },
+      {
+        "blankLine": "always",
+        "prev": {
+          "selector": ":matches(IfStatement, ForStatement, ForInStatement, ForOfStatement, WhileStatement, DoWhileStatement, SwitchStatement, TryStatement)",
+          "lineMode": "multiline"
+        },
+        "next": "*"
+      }
+    ],
+    "@stylistic/lines-between-class-members": [
+      "error",
+      "always",
+      {
+        "exceptAfterSingleLine": true
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": [
+        "packages/create-hesperia/templates/frontend/hesperia.d.ts",
+        "packages/tooling/src/vendor/saxe/**",
+        "tests/data/fixtures/grpc/service-all_pb.ts"
+      ],
+      "rules": {
+        "@stylistic/padding-line-between-statements": "off",
+        "@stylistic/lines-between-class-members": "off"
+      }
+    },
+    {
+      "files": [
+        "tests/tooling/fixtures/applications/stylex-integration/development/dual-use/src/cards/Card.tsx",
+        "tests/tooling/fixtures/applications/stylex-integration/development/image-only/src/cards/Card.tsx"
+      ],
+      "rules": {
+        "@stylistic/padding-line-between-statements": "off"
+      }
+    }
+  ],
   "env": {
     "builtin": true
   }

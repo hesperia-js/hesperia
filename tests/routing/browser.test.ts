@@ -22,6 +22,7 @@ beforeAll(async () => {
     throw new AggregateError(build.logs, "Routing browser fixture did not bundle");
 
   const script = await build.outputs[0]!.text();
+
   server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -70,6 +71,7 @@ for (const engine of [chromium, firefox, webkit]) {
           ).routingFixture;
           const main = document.querySelector("main")!;
           const heading = document.createElement("h2");
+
           heading.id = "detail";
           heading.textContent = "Details";
           heading.style.marginTop = "1000px";
@@ -107,6 +109,7 @@ for (const engine of [chromium, firefox, webkit]) {
           const fixture = (window as unknown as { routingFixture: { router: Router } })
             .routingFixture;
           const heading = document.createElement("h2");
+
           heading.id = "other";
           heading.textContent = "Other details";
           heading.style.marginTop = "700px";
@@ -130,6 +133,7 @@ for (const engine of [chromium, firefox, webkit]) {
               };
             }
           ).routingFixture;
+
           fixture.guardPending = true;
           fixture.guardStarted = false;
           fixture.hashSettled = false;
@@ -170,6 +174,7 @@ for (const engine of [chromium, firefox, webkit]) {
               routingFixture: { guardPending: boolean; releaseGuard: (allow: boolean) => void };
             }
           ).routingFixture;
+
           fixture.guardPending = false;
 
           fixture.releaseGuard(true);
@@ -192,6 +197,7 @@ for (const engine of [chromium, firefox, webkit]) {
               events: (window as unknown as { routingFixture: { events: string[] } }).routingFixture
                 .events,
             }));
+
             throw new Error(`Fragment history restoration failed: ${JSON.stringify(state)}`, {
               cause,
             });
@@ -312,6 +318,7 @@ for (const engine of [chromium, firefox, webkit]) {
         );
 
         const outer = (nativeHistoryState() as { __hesperiaHistory: Entry }).__hesperiaHistory;
+
         return {
           distinct: outer.trackerId !== inner.trackerId || outer.id !== inner.id,
           consecutive: outer.position === inner.position + 1,
@@ -577,6 +584,7 @@ for (const engine of [chromium, firefox, webkit]) {
             routingFixture: { beforeBackNode?: HTMLElement };
           }
         ).routingFixture;
+
         fixture.beforeBackNode = document.querySelector("main")!;
 
         document.querySelector<HTMLButtonElement>("#route-focus")!.focus();
@@ -610,6 +618,7 @@ for (const engine of [chromium, firefox, webkit]) {
               routingFixture: { beforeBackNode?: HTMLElement };
             }
           ).routingFixture;
+
           return {
             recreated: fixture.beforeBackNode !== document.querySelector("main"),
             focus: document.activeElement?.id,
@@ -753,6 +762,7 @@ for (const engine of [chromium, firefox, webkit]) {
       await page.evaluate(() => {
         const fixture = (window as unknown as { routingFixture: { guardPending: boolean } })
           .routingFixture;
+
         fixture.guardPending = true;
 
         history.back();
@@ -769,6 +779,7 @@ for (const engine of [chromium, firefox, webkit]) {
           const fixture = window as unknown as {
             routingFixture: { lastNode?: Node };
           };
+
           return {
             sameNode: fixture.routingFixture.lastNode === document.querySelector("main"),
             text: document.querySelector("main")?.textContent,
@@ -793,6 +804,7 @@ for (const engine of [chromium, firefox, webkit]) {
       await page.evaluate(() => {
         const fixture = (window as unknown as { routingFixture: { guardPending: boolean } })
           .routingFixture;
+
         fixture.guardPending = false;
 
         history.back();
@@ -826,6 +838,7 @@ for (const engine of [chromium, firefox, webkit]) {
       const directory = mkdtempSync(resolve(diagnosticsRoot, "pending-traversal-"));
       const label = `${engine.name()}-${mode}`;
       const driver = startProcessDiagnostics({ directory, label: "bun-driver" });
+
       serverDiagnostics = driver;
       const started = Date.now();
       let browser: Awaited<ReturnType<typeof engine.launch>> | undefined;
@@ -897,6 +910,7 @@ for (const engine of [chromium, firefox, webkit]) {
             NavigateEvent?: { prototype?: { intercept?: unknown } };
             NavigationPrecommitController?: unknown;
           };
+
           return (
             candidate.navigation !== undefined &&
             typeof candidate.NavigateEvent?.prototype?.intercept === "function" &&
@@ -932,6 +946,7 @@ for (const engine of [chromium, firefox, webkit]) {
             };
           };
           const fixture = candidate.routingFixture;
+
           fixture.guardPending = true;
           fixture.guardStarted = false;
 
@@ -974,6 +989,7 @@ for (const engine of [chromium, firefox, webkit]) {
         const result = await page.evaluate(async () => {
           const router = (window as unknown as { routingFixture: { router: Router } })
             .routingFixture.router;
+
           return router.navigate("/programmatic", {
             history: "push",
             state: { entry: "programmatic" },
@@ -1025,6 +1041,7 @@ for (const engine of [chromium, firefox, webkit]) {
         const finalRoute = await page.evaluate(() => {
           const router = (window as unknown as { routingFixture: { router: Router } })
             .routingFixture.router;
+
           return {
             pathname: location.pathname,
             content: document.querySelector("main")?.textContent,

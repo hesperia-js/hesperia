@@ -520,6 +520,7 @@ test("a targeted browser capture serves its recorded route and drains on close",
 
   try {
     const written = await targetedFixture(root, declarations[0], "binary");
+
     await writeTargetedRouting(written, browserRouting(["/raw/caf%C3%A9%20%23%25.bin"]));
 
     const resource = await createTargetedHost(await readTargetedBuild(root));
@@ -579,6 +580,7 @@ test("V4 deployment readback retains old unknown and selected single origins", a
 
   try {
     const written = await targetedFixture(root);
+
     await writeTargetedRouting(written, browserRouting());
     const captured = await readTargetedBuild(root);
     const oldDeployment = resolveCapturedDeployment(captured.inventory);
@@ -611,6 +613,7 @@ test("V4 deployment readback retains old unknown and selected single origins", a
       generatedAssets: { baseURL: "https://static.example.test/deploy/" },
       applicationOrigin: "https://example.test",
     });
+
     await writeRecord(selected);
     const restored = await readTargetedBuild(root);
 
@@ -623,6 +626,7 @@ test("V4 deployment readback retains old unknown and selected single origins", a
       { mountURL: "/preview" },
       restored.deployment,
     );
+
     expect(moved.version).toBe(2);
     if (moved.version !== 2) throw new Error("Expected selected origin");
     expect(moved.applicationOrigin).toBe("https://example.test");
@@ -650,6 +654,7 @@ test("a targeted host rejects a generated startup on its checked page destinatio
         },
       ],
     };
+
     await writeTargetedRouting(written, routing);
     const captured = await readTargetedBuild(root);
 
@@ -705,6 +710,7 @@ test.each(["/dashboard/", "http://localhost/dashboard/"])(
           },
         ],
       };
+
       await writeTargetedRouting(written, routing);
 
       const resource = await createTargetedHost(await readTargetedBuild(root), {
@@ -746,6 +752,7 @@ test("a targeted browser host snapshots and serves an explicit preview mount", a
 
   try {
     const written = await targetedFixture(root, declarations[0], "binary");
+
     await writeTargetedRouting(written, browserRouting(["/raw/caf%C3%A9%20%23%25.bin"]));
 
     const captured = await readTargetedBuild(root);
@@ -786,6 +793,7 @@ test("a targeted browser host rejects invalid mount selections without invoking 
 
   try {
     const written = await targetedFixture(root);
+
     await writeTargetedRouting(written, browserRouting());
 
     const captured = await readTargetedBuild(root);
@@ -840,6 +848,7 @@ test.each([
 
   try {
     const written = await targetedFixture(root);
+
     await writeTargetedRouting(written, policy);
     await expect(createTargetedHost(await readTargetedBuild(root))).rejects.toThrow(error);
   } finally {
@@ -994,8 +1003,10 @@ test("readTargetedBuild retains coherent server pages and rejects crossed refere
     expect(Object.hasOwn(globalThis, "q2ReaderEntryEvaluated")).toBe(false);
 
     const crossedEntry = structuredClone(record);
+
     crossedEntry.hosting.serverPages[1].serverEntry.exportName = "otherEntry";
     const missingResume = structuredClone(record);
+
     missingResume.hosting.serverPages[1].resumeAsset = "/assets/missing-resume.mjs";
 
     for (const [invalid, message] of [

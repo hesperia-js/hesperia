@@ -272,6 +272,7 @@ export function createElysiaHttpApi<Client extends object>(
     operations,
   });
   const graph = createGraph({ contract });
+
   return markImportedApi(
     graph,
     contract,
@@ -311,6 +312,7 @@ function checkedRouteEffects(
 
 function effectRequest(input: RouteInvocation): EffectRequest {
   const request = normalizeRequest(input.request);
+
   return {
     params: Object.fromEntries(input.params.map(({ name, value }) => [name, value])),
     body: readProperty(request, "body"),
@@ -355,6 +357,7 @@ function selectedEffectInvocation(route: RouteEntry, value: unknown): RouteInvoc
 
 function makeRouteEntries(routeFacts: readonly AppRouteFact[]): readonly RouteEntry[] {
   const seen = new Set<string>();
+
   return routeFacts.map((fact, index) => {
     const method = fact.method.toUpperCase();
     const path = normalizeRoutePath(fact.path);
@@ -381,6 +384,7 @@ function routeKey(path: string, method: string): string {
 
 function normalizeRoutePath(path: string): string {
   const segments = path.split("/").filter(Boolean);
+
   return segments.length === 0 ? "/" : `/${segments.join("/")}`;
 }
 
@@ -409,6 +413,7 @@ function createQueryVariantRegistry(): QueryVariantRegistry {
 
     if (variants.size === 0) byRoute.delete(routeId);
   });
+
   return {
     byRoute,
     byInvocation: new WeakMap(),
@@ -423,6 +428,7 @@ function queryKey(
   registry: QueryVariantRegistry,
 ): string {
   const variant = internQueryVariant(route, input, registry);
+
   return `elysia:${route.operation}:${variant.id}`;
 }
 
@@ -520,6 +526,7 @@ function snapshotPathParams(value: readonly PathCapture[]): {
   const snapshot = Object.freeze(
     value.map((capture) => Object.freeze({ ...capture, value: String(capture.value) })),
   );
+
   return {
     value: snapshot,
     signature: requireSnapshotSignature(JSON.stringify(snapshot)),
@@ -650,6 +657,7 @@ function createRouteFacade(
     apply(_target, _thisArgument, args) {
       const provided = readPathParams(args[0]);
       const additions = nextDynamicCaptures(pathSegments, captures, provided, routes);
+
       return createRouteFacade(
         bound,
         routes,
@@ -806,6 +814,7 @@ function pathSegmentMatches(
     );
 
   const name = pathParameterName(routeSegment);
+
   return (
     pathSegment === `:${name}` &&
     captures.some((capture) => capture.pathIndex === pathIndex && capture.name === name)
@@ -864,6 +873,7 @@ function makeRouteMember(
         { params: captures, request: normalizeRequest(request) } satisfies RouteInvocation,
         options,
       ]);
+
       return query;
     };
   }

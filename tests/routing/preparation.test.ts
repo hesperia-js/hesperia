@@ -31,6 +31,7 @@ function deferred<T>() {
   const promise = new Promise<T>((yes) => {
     resolve = yes;
   });
+
   return { promise, resolve };
 }
 
@@ -68,9 +69,11 @@ function preparedPage(
     const node = element(owner, "main", {}, [
       `${label}:${inputs.queryParams().get("tab") ?? "none"}`,
     ]);
+
     node.dataset.route = label;
     return node;
   });
+
   return {
     owner,
     owners: [owner],
@@ -154,6 +157,7 @@ function preparedAsyncPage(
 
     observer.observe(tree.fragment, { childList: true, subtree: true });
   });
+
   return {
     owner,
     tree,
@@ -201,6 +205,7 @@ test("router keeps the committed page visible while a detached candidate waits, 
   events.length = 0;
 
   const pending = router.navigate("/slow", { history: "push" });
+
   await entered.promise;
 
   expect(window.document.body.textContent).toBe("/current:none");
@@ -323,6 +328,7 @@ test("nested async content settles detached and activates hooks and events only 
 
   events.length = 0;
   const pending = router.navigate("/async?tab=ready", { history: "push" });
+
   await entered.promise;
 
   expect(window.document.body.textContent).toBe("current:none");

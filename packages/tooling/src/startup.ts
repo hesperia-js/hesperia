@@ -29,5 +29,6 @@ export function browserStartupHtml(script: string, mountPath = "/"): string {
   const entryPath = script.startsWith("/") ? script : `/${script}`;
   const mountPrefix = mountPath === "/" ? "" : mountPath;
   const importPath = `${mountPrefix}${entryPath}`;
+
   return `<!doctype html>\n<html><head><meta charset="utf-8"></head><body><script type="module">import { start } from ${JSON.stringify(importPath)}; await start(${JSON.stringify(mountPath)});</script></body></html>\n`;
 }

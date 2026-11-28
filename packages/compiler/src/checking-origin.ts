@@ -118,11 +118,14 @@ export function captureCheckingModules(
 
     for (let index = 0; index < modules.length; index++) {
       const item = Object.getOwnPropertyDescriptor(modules, String(index));
+
       if (!item || !("value" in item)) return undefined;
       const value: unknown = item.value;
+
       if (typeof value !== "object" || value === null) return undefined;
       const filename = Object.getOwnPropertyDescriptor(value, "filename");
       const source = Object.getOwnPropertyDescriptor(value, "source");
+
       if (
         !filename ||
         !("value" in filename) ||
@@ -134,6 +137,7 @@ export function captureCheckingModules(
         return undefined;
 
       const module = Object.freeze({ filename: filename.value, source: source.value });
+
       copied.push(module);
       facts.push(
         Object.freeze({
@@ -166,15 +170,18 @@ export function nativePopulation(
       sourceDigest: string;
       nativeKey: string;
     }[] = [];
+
     for (const fact of captured.sourceFacts) {
       const path = isAbsolute(fact.filename)
         ? resolve(fact.filename)
         : resolve(root, fact.filename);
       const nativeKey = normalizeFilename(path);
+
       if (keys.has(nativeKey)) return undefined;
       keys.add(nativeKey);
       population.push(Object.freeze({ ...fact, nativeKey }));
     }
+
     return Object.freeze(population);
   } catch {
     return undefined;
@@ -202,6 +209,7 @@ export function issueNativeCheckingOrigin(
     _result: ProjectCheckingResult,
     _checkingInputs: ProjectCheckingResult["checkingInputs"],
   ): void => {};
+
   if (!population || session.project !== project) return refuse;
 
   if (internalResult.diagnostics.some((item) => item.severity === "error"))
@@ -219,15 +227,19 @@ export function issueNativeCheckingOrigin(
 
   const analysisFacts = new Map<string, CheckedAnalysisOrigin>();
   const expectedAnalysisNames: string[] = [];
+
   for (const module of population) {
     const view = views.get(module.nativeKey);
+
     if (!view || view.source !== finalFiles.get(module.nativeKey)) return refuse;
 
     if (!/\.(?:ts|tsx|mts)$/u.test(module.filename)) continue;
     expectedAnalysisNames.push(module.filename);
     const analysis = analyses.get(module.filename);
+
     if (!analysis || analysis.authoredSourceDigest !== module.sourceDigest) return refuse;
     const emission = captureEmissionAnalysis(analysis);
+
     if (!emission) return refuse;
     analysisFacts.set(
       module.filename,
@@ -252,6 +264,7 @@ export function issueNativeCheckingOrigin(
   const viewEntries = freezeEntries(views);
   const fixedResult = encodeFixedResult(internalResult);
   const sessionShape = encodeSessionShape(session);
+
   if (!fixedResult || !sessionShape) return refuse;
 
   const owner: Owner = Object.freeze({
@@ -289,6 +302,7 @@ export function issueNativeCheckingOrigin(
         return;
 
       const encoding = encodeIssuedResult(result);
+
       if (encoding === undefined) return;
       resultOwners.set(result, Object.freeze({ owner, result, checkingInputs, encoding }));
     } catch {
@@ -305,6 +319,7 @@ export function checkedSourceOrigin(
   try {
     const owner = sessionOwners.get(session);
     const resultRecord = resultOwners.get(result);
+
     if (
       !owner ||
       !resultRecord ||
@@ -314,6 +329,7 @@ export function checkedSourceOrigin(
       !issuedResultIntact(result, resultRecord)
     )
       return undefined;
+
     return owner;
   } catch {
     return undefined;
@@ -329,6 +345,7 @@ export function nativeCheckingSessionGuard(
 ): (() => boolean) | undefined {
   try {
     const owner = sessionOwners.get(session);
+
     if (
       !owner ||
       owner.inputSnapshot !== inputSnapshot ||
@@ -360,8 +377,10 @@ export function checkedAnalysisOrigin(
 ): { readonly origin: CheckedSourceOrigin; readonly fact: CheckedAnalysisOrigin } | undefined {
   try {
     const found = analysisOwners.get(analysis);
+
     if (!found || !found.owner.isActive()) return undefined;
     const mapOffset = ownData(analysis, "mapOffset");
+
     if (
       !mapOffset.ok ||
       found.fact.analysis !== analysis ||
@@ -370,6 +389,7 @@ export function checkedAnalysisOrigin(
       !sourceOwnerIntact(found.owner.session, found.owner)
     )
       return undefined;
+
     return { origin: found.owner, fact: found.fact };
   } catch {
     return undefined;
@@ -469,6 +489,7 @@ function issueDiagnosticCheckingSession(
           return;
 
         const encoding = encodeIssuedResult(result);
+
         if (encoding === undefined) return;
 
         diagnosticResultOwners.set(
@@ -579,6 +600,7 @@ export function diagnosticCheckingSessionGuard(
 export function checkedDataEncoding(value: unknown, includeIdentity = true): string | undefined {
   try {
     const encoded = encodeData(value, new WeakSet<object>(), includeIdentity);
+
     return encoded === undefined ? undefined : JSON.stringify(encoded);
   } catch {
     return undefined;
@@ -587,6 +609,7 @@ export function checkedDataEncoding(value: unknown, includeIdentity = true): str
 
 export function analysisFingerprint(analysis: ModuleAnalysis): string | undefined {
   const result = ownData(analysis, "result");
+
   if (!result.ok || typeof result.value !== "object" || result.value === null) return undefined;
   const canonical = ownData(result.value, "ir");
   const semanticHash = ownData(result.value, "semanticHash");
@@ -595,6 +618,7 @@ export function analysisFingerprint(analysis: ModuleAnalysis): string | undefine
   const normalized = ownData(analysis, "normalized");
   const props = ownData(analysis, "componentProps");
   const operations = ownData(analysis, "operationCalls");
+
   if (
     !canonical.ok ||
     !semanticHash.ok ||
@@ -607,10 +631,12 @@ export function analysisFingerprint(analysis: ModuleAnalysis): string | undefine
     return undefined;
 
   let normalizedCode: unknown;
+
   if (normalized.value === undefined) {
     normalizedCode = undefined;
   } else if (typeof normalized.value === "object" && normalized.value !== null) {
     const code = ownData(normalized.value, "code");
+
     if (!code.ok) return undefined;
     normalizedCode = code.value;
   } else {
@@ -629,6 +655,7 @@ export function analysisFingerprint(analysis: ModuleAnalysis): string | undefine
     },
     false,
   );
+
   return encoded === undefined ? undefined : digest(encoded);
 }
 
@@ -648,8 +675,10 @@ function captureEmissionAnalysis(
       operations: analysis.operationCalls,
     });
     const encoded = checkedDataEncoding(projection, false);
+
     if (encoded === undefined) return undefined;
     const fingerprint = digest(encoded);
+
     if (fingerprint !== analysisFingerprint(analysis)) return undefined;
 
     // Freeze only our descriptor copy, after recording its original descriptor shape.
@@ -683,20 +712,24 @@ function copyPlainData<T>(value: T, active = new WeakSet<object>()): T {
   if (value === null || typeof value !== "object") {
     if (typeof value === "function" || typeof value === "symbol" || typeof value === "bigint")
       throw new TypeError("Unsupported checked analysis value.");
+
     return value;
   }
 
   if (active.has(value)) throw new TypeError("Cyclic checked analysis value.");
   const prototype = Object.getPrototypeOf(value);
   const array = Array.isArray(value);
+
   if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null)
     throw new TypeError("Unsupported checked analysis prototype.");
+
   const copied: object = array ? [] : Object.create(prototype);
 
   active.add(value);
 
   for (const key of Reflect.ownKeys(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
+
     if (!descriptor || !("value" in descriptor))
       throw new TypeError("Checked analysis requires own data properties.");
 
@@ -715,6 +748,7 @@ function freezePlainData(value: unknown): void {
 
   for (const key of Reflect.ownKeys(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
+
     if (descriptor && "value" in descriptor) freezePlainData(descriptor.value);
   }
 
@@ -728,6 +762,7 @@ function ownData(
   try {
     if (typeof value !== "object" || value === null) return { ok: false };
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
+
     if (!descriptor) return { ok: true, value: undefined };
     if (!("value" in descriptor)) return { ok: false };
     return { ok: true, value: descriptor.value };
@@ -752,6 +787,7 @@ function sourceOwnerIntact(session: CheckingSession, owner: Owner): boolean {
 
   for (const fact of owner.analyses.values()) {
     const mapOffset = ownData(fact.analysis, "mapOffset");
+
     if (
       !mapOffset.ok ||
       mapOffset.value !== fact.mapOffset ||
@@ -759,6 +795,7 @@ function sourceOwnerIntact(session: CheckingSession, owner: Owner): boolean {
     )
       return false;
   }
+
   return true;
 }
 
@@ -774,6 +811,7 @@ function issuedResultIntact(result: ProjectCheckingResult, record: ResultRecord)
 function sameMapKeys(map: ReadonlyMap<string, unknown>, expected: readonly string[]): boolean {
   if (map.size !== expected.length) return false;
   let index = 0;
+
   for (const key of map.keys()) if (key !== expected[index++]) return false;
   return true;
 }
@@ -788,8 +826,10 @@ function sameEntries<T>(
 ): boolean {
   if (map.size !== entries.length) return false;
   let index = 0;
+
   for (const [key, value] of map)
     if (key !== entries[index]?.[0] || value !== entries[index++]?.[1]) return false;
+
   return true;
 }
 
@@ -809,6 +849,7 @@ function encodeResultFields(
     if (Object.getPrototypeOf(result) !== Object.prototype) return undefined;
     const fields = Reflect.ownKeys(result).map((key) => {
       const descriptor = Object.getOwnPropertyDescriptor(result, key);
+
       if (!descriptor || !("value" in descriptor)) throw new TypeError();
       const shape = [
         encodeKey(key),
@@ -816,12 +857,16 @@ function encodeResultFields(
         descriptor.configurable,
         descriptor.writable,
       ];
+
       if (omitCheckingInputValue && key === "checkingInputs")
         return [shape, "dynamic-checking-inputs"];
+
       const value = encodeData(descriptor.value);
+
       if (value === undefined) throw new TypeError();
       return [shape, value];
     });
+
     return JSON.stringify(fields);
   } catch {
     return undefined;
@@ -834,10 +879,13 @@ function encodeSessionShape(session: CheckingSession): string | undefined {
     return JSON.stringify(
       Reflect.ownKeys(session).map((key) => {
         const descriptor = Object.getOwnPropertyDescriptor(session, key);
+
         if (!descriptor) throw new TypeError();
         const shape = [encodeKey(key), descriptor.enumerable, descriptor.configurable];
+
         if ("value" in descriptor)
           return [shape, "value", descriptor.writable, identity(descriptor.value)];
+
         return [
           shape,
           "accessor",
@@ -862,29 +910,38 @@ function encodeData(
     if (Object.is(value, -0)) return ["number", "-0"];
     return ["number", value];
   }
+
   if (value === null || typeof value !== "object") {
     if (typeof value === "function" || typeof value === "symbol" || typeof value === "bigint")
       return undefined;
+
     return [typeof value, value];
   }
+
   if (active.has(value)) return undefined;
   const prototype = Object.getPrototypeOf(value);
+
   if (prototype !== Array.prototype && prototype !== Object.prototype && prototype !== null)
     return undefined;
 
   active.add(value);
   const properties: unknown[] = [];
+
   for (const key of Reflect.ownKeys(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
+
     if (!descriptor || !("value" in descriptor)) {
       active.delete(value);
       return undefined;
     }
+
     const child = encodeData(descriptor.value, active, includeIdentity);
+
     if (child === undefined) {
       active.delete(value);
       return undefined;
     }
+
     properties.push([
       encodeKey(key),
       descriptor.enumerable,
@@ -893,6 +950,7 @@ function encodeData(
       child,
     ]);
   }
+
   active.delete(value);
   return includeIdentity
     ? [
@@ -910,10 +968,12 @@ function encodeData(
 function encodeKey(key: PropertyKey): unknown {
   if (typeof key !== "symbol") return ["string", key];
   let id = symbolIds.get(key);
+
   if (id === undefined) {
     id = nextId++;
     symbolIds.set(key, id);
   }
+
   return ["symbol", key.description ?? "", id];
 }
 
@@ -925,6 +985,7 @@ function identity(value: unknown): unknown {
     typeof value === "boolean"
   )
     return [typeof value, value];
+
   if (typeof value === "object" && value !== null) return ["object", objectId(value)];
   if (typeof value === "function") return ["function", objectId(value)];
   if (typeof value === "undefined") return ["undefined"];
@@ -933,10 +994,12 @@ function identity(value: unknown): unknown {
 
 function objectId(value: object): number {
   let id = objectIds.get(value);
+
   if (id === undefined) {
     id = nextId++;
     objectIds.set(value, id);
   }
+
   return id;
 }
 

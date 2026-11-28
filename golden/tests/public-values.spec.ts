@@ -157,6 +157,7 @@ test("missing own undefined in an isolated emitted asset is caught by the same o
       if (mutant) throw new Error("The generated PUBLIC_SHAPE entry appeared in multiple assets");
 
       const changed = original.slice(0, first) + original.slice(first + publicShapeEntry.length);
+
       mutant = {
         assetPath: new URL(route.request().url()).pathname,
         originalSha256: hash(original),
@@ -224,8 +225,10 @@ test("missing own undefined in an isolated emitted asset is caught by the same o
   // Revisit in a context that has never loaded the intercepted module.
   const ordinaryContext = await browser.newContext();
   let ordinaryObservation: Observation | null;
+
   try {
     const ordinaryPage = await ordinaryContext.newPage();
+
     ordinaryPage.on("pageerror", (error) => pageErrors.push(error.message));
     const ordinaryResponse = await ordinaryPage.goto(page.url());
 

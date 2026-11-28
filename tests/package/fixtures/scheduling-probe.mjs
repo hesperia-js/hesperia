@@ -109,6 +109,7 @@ export async function verifySchedulingContract(scheduling) {
 
   const alreadyAborted = new AbortController();
   const abortReason = { source: "already-aborted" };
+
   alreadyAborted.abort(abortReason);
   assert.throws(
     () => debounce(() => undefined, 1, { signal: alreadyAborted.signal }),
@@ -123,6 +124,7 @@ export async function verifySchedulingContract(scheduling) {
   let coalesced;
   /** @type {string[]} */
   const coalescedCalls = [];
+
   /** @this {unknown} @param {string} value */
   function callback(value) {
     assert.strictEqual(this, coalesced);
@@ -134,6 +136,7 @@ export async function verifySchedulingContract(scheduling) {
   assert.equal(coalesced.length, 1);
   const first = coalesced("first");
   const latest = coalesced("latest");
+
   assert.strictEqual(coalesced.pending, latest);
   assert.equal(coalesced.pendingCount, 2);
   assert.deepEqual(await Promise.all([first, latest]), ["latest", "latest"]);
@@ -155,16 +158,19 @@ export async function verifySchedulingContract(scheduling) {
       ),
     ),
   );
+
   assert.deepEqual(failedCalls, [debounceFailure, debounceFailure]);
 
   const debounceThenableValue = { source: "debounce-thenable" };
   const assimilatingDebounce = debounce(() => foreignThenable(debounceThenableValue), 0);
+
   assert.strictEqual(await assimilatingDebounce(), debounceThenableValue);
 
   /** @type {string[]} */
   const leadingCalls = [];
   /** @type {import("hesperia/scheduling").DebouncedFunction<typeof leadingCallback>} */
   let leading;
+
   /** @this {unknown} @param {string} value */
   function leadingCallback(value) {
     assert.strictEqual(this, leading);
@@ -174,6 +180,7 @@ export async function verifySchedulingContract(scheduling) {
   leading = debounce(leadingCallback, 5, { leading: true });
   const immediate = leading("immediate");
   const trailing = leading("trailing");
+
   assert.deepEqual(await Promise.all([immediate, trailing]), ["immediate", "trailing"]);
   assert.deepEqual(leadingCalls, ["immediate", "trailing"]);
 
@@ -184,6 +191,7 @@ export async function verifySchedulingContract(scheduling) {
   let outerCallReturned = false;
   /** @type {import("hesperia/scheduling").DebouncedFunction<typeof recursiveCallback>} */
   let recursiveLeading;
+
   /** @param {string} value */
   function recursiveCallback(value) {
     if (value === "outer") {
@@ -200,6 +208,7 @@ export async function verifySchedulingContract(scheduling) {
   }
   recursiveLeading = debounce(recursiveCallback, 5, { leading: true });
   const recursiveOuter = recursiveLeading("outer");
+
   outerCallReturned = true;
   recursiveOrder.push("outer-returned");
   assert.deepEqual(recursiveOrder, ["outer-start", "inner-queued", "outer-returned"]);
@@ -223,6 +232,7 @@ export async function verifySchedulingContract(scheduling) {
     5,
     { leading: true },
   );
+
   assert.equal(await loneLeading(), "lone");
   await delay(15);
   assert.deepEqual(loneLeadingCalls, ["called"]);
@@ -231,6 +241,7 @@ export async function verifySchedulingContract(scheduling) {
   const echo = (value) => value;
   const flushed = debounce(echo, 60_000);
   const flushPromise = flushed("flushed");
+
   assert.equal(flushed.flush(), undefined);
   assert.equal(await flushPromise, "flushed");
   assert.equal(flushed.pending, null);
@@ -242,6 +253,7 @@ export async function verifySchedulingContract(scheduling) {
   );
   const current = superseded("current");
   const supersededError = await supersededResult;
+
   assert.ok(supersededError instanceof Error);
   assert.equal(supersededError.name, "AbortError");
   assert.equal(Reflect.get(supersededError, "code"), "ABORT_ERR");
@@ -254,14 +266,17 @@ export async function verifySchedulingContract(scheduling) {
     (error) => error,
   );
   const cancellationReason = { source: "explicit-cancel" };
+
   canceled.cancel(cancellationReason);
   const cancellationError = await canceledResult;
+
   assert.ok(cancellationError instanceof Error);
   assert.equal(cancellationError.name, "AbortError");
   assert.equal(Reflect.get(cancellationError, "code"), "ABORT_ERR");
   assert.strictEqual(cancellationError.cause, cancellationReason);
   assert.equal(canceled.pending, null);
   const afterCancel = canceled("reusable");
+
   assert.equal(canceled.flush(), undefined);
   assert.equal(await afterCancel, "reusable");
 
@@ -269,6 +284,7 @@ export async function verifySchedulingContract(scheduling) {
   const dropStarted = deferred();
   /** @type {import("hesperia/scheduling").ThrottledFunction<(value: string) => Promise<string>>} */
   let dropping;
+
   /** @this {unknown} @param {string} value */
   async function dropCallback(value) {
     assert.strictEqual(this, dropping);
@@ -278,11 +294,13 @@ export async function verifySchedulingContract(scheduling) {
   }
   dropping = throttle(dropCallback, 1, 60_000, { concurrency: 1, overflow: "drop" });
   const activeDropCall = dropping("active");
+
   await dropStarted.promise;
   const droppedResult = await dropping("dropped").then(
     () => null,
     (error) => error,
   );
+
   assert.ok(droppedResult instanceof Error);
   assert.equal(Reflect.get(droppedResult, "code"), "ERR_THROTTLED");
   assert.equal(droppedResult.message, "The call was dropped by the throttled function");
@@ -297,23 +315,28 @@ export async function verifySchedulingContract(scheduling) {
   const queueStarted = [];
   /** @type {import("hesperia/scheduling").ThrottledFunction<typeof queuedCallback>} */
   let queued;
+
   /** @this {unknown} @param {string} value */
   async function queuedCallback(value) {
     assert.strictEqual(this, queued);
     queueStarted.push(value);
     if (value === "one") await firstGate.promise;
+
     if (value === "two") {
       secondStarted.resolve();
       await secondGate.promise;
     }
+
     if (value === "three") thirdStarted.resolve();
     return value;
   }
   queued = throttle(queuedCallback, 3, 60_000, { concurrency: 1, maxPending: 2 });
   const one = queued("one");
+
   assert.deepEqual(queueStarted, ["one"]);
   const two = queued("two");
   const three = queued("three");
+
   assert.equal(queued.activeCount, 1);
   assert.equal(queued.pendingCount, 2);
   assert.strictEqual(queued.pending, three);
@@ -322,6 +345,7 @@ export async function verifySchedulingContract(scheduling) {
     () => null,
     (error) => error,
   );
+
   assert.ok(maxPendingResult instanceof Error);
   assert.equal(Reflect.get(maxPendingResult, "code"), "ERR_THROTTLED");
 
@@ -342,13 +366,16 @@ export async function verifySchedulingContract(scheduling) {
   const cancellationStarted = deferred();
   /** @type {string[]} */
   const cancellationCalls = [];
+
   /** @param {string} value */
   async function cancellationCallback(value) {
     cancellationCalls.push(value);
+
     if (value === "active") {
       cancellationStarted.resolve();
       await cancellationGate.promise;
     }
+
     return value;
   }
   const cancellable = throttle(cancellationCallback, 1, 60_000, {
@@ -356,6 +383,7 @@ export async function verifySchedulingContract(scheduling) {
     maxPending: 2,
   });
   const activeBeforeCancel = cancellable("active");
+
   await cancellationStarted.promise;
   const queuedBeforeCancel = cancellable("queued-before").then(
     () => null,
@@ -365,9 +393,11 @@ export async function verifySchedulingContract(scheduling) {
     () => null,
     (error) => error,
   );
+
   assert.equal(cancellable.activeCount, 1);
   assert.equal(cancellable.pendingCount, 2);
   const throttleCancellationReason = { source: "throttle-cancel" };
+
   cancellable.cancel(throttleCancellationReason);
   const canceledQueue = await Promise.all([queuedBeforeCancel, queuedAfterCancel]);
 
@@ -386,6 +416,7 @@ export async function verifySchedulingContract(scheduling) {
   assert.equal(cancellable.activeCount, 0);
   assert.equal(cancellable.hasImmediateCapacity(), true);
   const reusableAfterCancel = cancellable("reusable");
+
   assert.deepEqual(cancellationCalls, ["active", "reusable"]);
   assert.equal(cancellable.activeCount, 1);
   assert.equal(await reusableAfterCancel, "reusable");
@@ -399,6 +430,7 @@ export async function verifySchedulingContract(scheduling) {
     1,
     0,
   );
+
   assert.strictEqual(
     await failingThrottle().then(
       () => null,
@@ -409,6 +441,7 @@ export async function verifySchedulingContract(scheduling) {
 
   const rejectionFailure = new Error("throttle async failure");
   const rejectingThrottle = throttle(() => Promise.reject(rejectionFailure), 1, 0);
+
   assert.strictEqual(
     await rejectingThrottle().then(
       () => null,
@@ -419,12 +452,14 @@ export async function verifySchedulingContract(scheduling) {
 
   const throttleThenableValue = { source: "throttle-thenable" };
   const assimilatingThrottle = throttle(() => foreignThenable(throttleThenableValue), 1, 0);
+
   assert.strictEqual(await assimilatingThrottle(), throttleThenableValue);
 
   const capacityGates = [deferred(), deferred()];
   /** @type {string[]} */
   const capacityStarted = [];
   let capacityIndex = 0;
+
   /** @param {string} value */
   async function capacityCallback(value) {
     capacityStarted.push(value);
@@ -436,14 +471,17 @@ export async function verifySchedulingContract(scheduling) {
     return value;
   }
   const capacity = throttle(capacityCallback, 2, 60_000, { concurrency: 2 });
+
   assert.equal(capacity.hasImmediateCapacity(), true);
   assert.equal(capacity.hasImmediateCapacity(), true);
   const capacityOne = capacity("one");
   const capacityTwo = capacity("two");
+
   assert.deepEqual(capacityStarted, ["one", "two"]);
   assert.equal(capacity.activeCount, 2);
   assert.equal(capacity.hasImmediateCapacity(), false);
   const [capacityFirst, capacitySecond] = capacityGates;
+
   assert.ok(capacityFirst);
   assert.ok(capacitySecond);
   capacityFirst.resolve();
@@ -455,12 +493,14 @@ export async function verifySchedulingContract(scheduling) {
   /** @type {number[]} */
   const strictStarted = [];
   const interval = 2_000;
+
   /** @param {number} value */
   function fixedCallback(value) {
     fixedStarted.push(value);
     return value;
   }
   const fixed = throttle(fixedCallback, 2, interval);
+
   /** @param {number} value */
   function strictCallback(value) {
     strictStarted.push(value);
@@ -470,6 +510,7 @@ export async function verifySchedulingContract(scheduling) {
   const windowStartedAt = performance.now();
   const firstFixed = captureCall(() => fixed(1));
   const firstStrict = captureCall(() => strict(1));
+
   await waitUntilElapsed(windowStartedAt, interval * 0.25);
 
   const secondFixed = captureCall(() => fixed(2));
@@ -570,8 +611,10 @@ async function runChildMode() {
 
     const resolvedEntry = await realpath(fileURLToPath(entryUrl));
     const expectedEntry = await realpath(resolve(packageRoot, "dist/scheduling.js"));
+
     assert.equal(resolvedEntry, expectedEntry, "Expected the shipped default artifact, not source");
     const result = await verifySchedulingContract(await import(entryUrl));
+
     console.log(JSON.stringify({ ...result, runtime: "bun", entryUrl }));
     return;
   }
@@ -603,6 +646,7 @@ async function runChildMode() {
     const resolvedUrl = import.meta.resolve("hesperia/scheduling");
     const resolvedEntry = await realpath(fileURLToPath(resolvedUrl));
     const expectedEntry = await realpath(fileURLToPath(entryUrl));
+
     assert.equal(resolvedEntry, expectedEntry, "Expected the emitted Node conditional entry");
 
     /** @type {{ status: string, assertions: string } | undefined} */
@@ -618,6 +662,7 @@ async function runChildMode() {
         debounce: Reflect.get(nodeUtil, "debounce"),
         throttle: Reflect.get(nodeUtil, "throttle"),
       };
+
       assert.equal(typeof nativeApi.debounce, "function");
       assert.equal(typeof nativeApi.throttle, "function");
       nativeReference = await verifySchedulingContract(nativeApi);
@@ -625,9 +670,11 @@ async function runChildMode() {
       const nativeUtilDefault = Reflect.get(nodeUtil, "default");
       const originalDebounce = Reflect.get(nativeUtilDefault, "debounce");
       const originalThrottle = Reflect.get(nativeUtilDefault, "throttle");
+
       /** @param {string} name */
       function getterDescriptor(name) {
         const descriptor = Object.getOwnPropertyDescriptor(nativeUtilDefault, name);
+
         assert.ok(descriptor?.configurable && descriptor.get);
         return descriptor;
       }
@@ -638,6 +685,7 @@ async function runChildMode() {
       /** @param {() => Promise<{ status: string, assertions: string }>} run */
       async function withNativeDelegationTracking(run) {
         const calls = { debounce: 0, throttle: 0 };
+
         /** @this {unknown} @param {unknown[]} arguments_ */
         function wrappedDebounce(...arguments_) {
           calls.debounce += 1;
@@ -648,6 +696,7 @@ async function runChildMode() {
           calls.throttle += 1;
           return Reflect.apply(originalThrottle, this, arguments_);
         }
+
         try {
           Object.defineProperty(nativeUtilDefault, "debounce", {
             ...debounceDescriptor,
@@ -667,6 +716,7 @@ async function runChildMode() {
       }
 
       const failure = new Error("delegation probe failure");
+
       await assert.rejects(
         withNativeDelegationTracking(async () => {
           throw failure;
@@ -687,6 +737,7 @@ async function runChildMode() {
       const measured = await withNativeDelegationTracking(async () =>
         verifySchedulingContract(await import("hesperia/scheduling")),
       );
+
       result = measured.result;
       nativeDelegations = measured.calls;
       assert.ok(nativeDelegations.debounce > 0);
@@ -697,6 +748,7 @@ async function runChildMode() {
 
     assert.ok(result);
     const portableDefault = await verifySchedulingContract(await import(defaultEntryUrl));
+
     console.log(
       JSON.stringify({
         ...result,
@@ -732,13 +784,16 @@ async function runChildMode() {
     const [utility, action] = String(entryUrl).split(":");
     /** @type {unknown[]} */
     const events = [];
+
     console.log(JSON.stringify({ runtime: process.versions.node }));
 
     if (utility === "debounce") {
       const run = debounce(() => emit(events, "fired"), 100);
+
       if (action === "unref-before") run.unref();
       run();
       if (action === "unref-after") run.unref();
+
       if (action === "ref-after") {
         run.unref();
         assert.strictEqual(run.ref(), run);
@@ -749,10 +804,12 @@ async function runChildMode() {
         emit(events, value);
       }
       const run = throttle(throttleEvent, 1, 100);
+
       run("first");
       if (action === "unref-before") run.unref();
       run("second");
       if (action === "unref-after") run.unref();
+
       if (action === "ref-after") {
         run.unref();
         assert.strictEqual(run.ref(), run);

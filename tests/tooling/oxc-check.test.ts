@@ -110,6 +110,7 @@ describe("configured Oxc project checks", () => {
     const falseImportSnapshots = await Promise.all(
       ["commented.css", "string.css"].map(async (name) => {
         const filename = join(root, "styles", name);
+
         return { filename, source: await readFile(filename, "utf8") };
       }),
     );

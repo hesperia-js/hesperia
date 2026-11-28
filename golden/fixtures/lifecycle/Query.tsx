@@ -9,6 +9,7 @@ async function QueryResult(props: Component.Props<{ queryKey: string }>) {
   client.cleanup(() => recordQueryCleanup(queryKey));
 
   const value = await query;
+
   return (
     <output id="query-result" data-query-key={queryKey}>
       {value()}

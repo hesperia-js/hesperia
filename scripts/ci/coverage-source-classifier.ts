@@ -31,6 +31,7 @@ export function coverageSourceHasExecutableStatements(filename: string, source: 
   instrumenter.instrumentSync(source, filename);
 
   const coverage = instrumenter.lastFileCoverage();
+
   return (
     Object.keys(coverage.statementMap).length > 0 ||
     Object.keys(coverage.fnMap).length > 0 ||

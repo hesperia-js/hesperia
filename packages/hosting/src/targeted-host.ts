@@ -182,6 +182,7 @@ function browserResource(
 
     const resolve = resolveClose;
     const reject = rejectClose!;
+
     resolveClose = undefined;
     rejectClose = undefined;
 
@@ -338,6 +339,7 @@ function browserResource(
         if (response === undefined || response.body === null) return response;
 
         const tracked = ownResponse(response, release);
+
         transferred = true;
 
         return tracked;

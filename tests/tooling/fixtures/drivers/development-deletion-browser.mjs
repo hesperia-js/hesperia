@@ -50,20 +50,26 @@ if (driverMode === "reconnect-stream") {
   const waitFrame = async (predicate) => {
     for (let attempt = 0; attempt < 600; attempt++) {
       const match = frames.find(predicate);
+
       if (match) return match;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
+
     throw new Error("Timed out waiting for browser EventSource frame");
   };
+
   try {
     if (engineName !== "chromium") throw new Error("Reconnect control requires Chromium");
     const playwright = /** @type {typeof import("playwright")} */ (
       await import(playwrightModuleUrl)
     );
+
     browser = await playwright.chromium.launch(browserLaunchOptions("chromium"));
     const page = await browser.newPage();
+
     page.on("pageerror", (error) => pageErrors.push(error.message));
     const cdp = await page.context().newCDPSession(page);
+
     await cdp.send("Network.enable");
     cdp.on("Network.eventSourceMessageReceived", (event) => {
       if (frames.length < 32) frames.push(event);
@@ -73,6 +79,7 @@ if (driverMode === "reconnect-stream") {
     });
     cdp.on("Network.requestWillBeSent", (event) => {
       if (event.type === "EventSource") eventRequests.set(event.requestId, event.request.url);
+
       if (event.type === "Document" && new URL(event.request.url).pathname === "/b")
         documents.push({ url: event.request.url, timestamp: event.timestamp });
     });
@@ -82,12 +89,16 @@ if (driverMode === "reconnect-stream") {
       window.addEventListener("hesperia:dev-source-removal", () => globalThis.removals++);
     });
     const eventUrl = new URL("/_hesperia/events", applicationUrl);
+
     await page.route(eventUrl.href, async (route) => {
       const request = route.request();
+
       assert.equal(request.url(), eventUrl.href);
       routed.push(request.url());
+
       if (routed.length === 1) {
         const proxyUrl = new URL(eventUrl.pathname + eventUrl.search, reconnectProxyOrigin);
+
         await route.continue({ url: proxyUrl.href });
       } else {
         await route.continue();
@@ -96,6 +107,7 @@ if (driverMode === "reconnect-stream") {
     await page.goto(applicationUrl, { timeout: 30_000 });
     await page.waitForSelector("#a", { timeout: 30_000 });
     const initial = await waitFrame((frame) => JSON.parse(frame.data)?.type === "current");
+
     await page.locator("#to-other").click();
     await page.waitForSelector("#b", { timeout: 30_000 });
     await page.locator("#count").click();
@@ -105,10 +117,12 @@ if (driverMode === "reconnect-stream") {
       identity: globalThis.documentIdentity,
       count: document.querySelector("#count")?.textContent,
     }));
+
     assert.equal(before.origin, new URL(applicationUrl).origin);
     assert.equal(before.pathname, "/b");
     assert.equal(before.count, "1");
     const previousDocuments = documents.length;
+
     phase = "ready";
     await receipt({
       type: "ready",
@@ -118,6 +132,7 @@ if (driverMode === "reconnect-stream") {
     });
 
     const removed = await waitFrame((frame) => JSON.parse(frame.data)?.type === "source-removal");
+
     await page.waitForFunction(() => globalThis.removals > 0, null, { timeout: 30_000 });
     const afterRemoval = await page.evaluate(() => ({
       origin: location.origin,
@@ -125,6 +140,7 @@ if (driverMode === "reconnect-stream") {
       identity: globalThis.documentIdentity,
       count: document.querySelector("#count")?.textContent,
     }));
+
     assert.deepEqual(afterRemoval, before);
     assert.equal(removed.requestId, initial.requestId);
     const documentRequest = page.waitForRequest(
@@ -134,6 +150,7 @@ if (driverMode === "reconnect-stream") {
         new URL(request.url()).pathname === "/b",
       { timeout: 60_000 },
     );
+
     void documentRequest.catch(() => {});
     phase = "removal";
     await receipt({
@@ -147,6 +164,7 @@ if (driverMode === "reconnect-stream") {
       (frame) =>
         frame.requestId !== removed.requestId && JSON.parse(frame.data)?.type === "current",
     );
+
     phase = "current-observed";
     await receipt({
       type: "current",
@@ -154,6 +172,7 @@ if (driverMode === "reconnect-stream") {
       requestId: current.requestId,
       timestamp: current.timestamp,
     });
+
     if (
       current.eventId !== removed.eventId ||
       routed.length < 2 ||
@@ -162,19 +181,24 @@ if (driverMode === "reconnect-stream") {
       throw new Error(
         "Harness evidence failure: reconnect current or request did not match the cut",
       );
+
     let headers = requestHeaders.get(current.requestId);
+
     for (let attempt = 0; !headers && attempt < 100; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 50));
       headers = requestHeaders.get(current.requestId);
     }
+
     if (!headers) throw new Error("Harness evidence failure: CDP reconnect headers unavailable");
     const lastEventId = Object.entries(headers).find(
       ([name]) => name.toLowerCase() === "last-event-id",
     )?.[1];
+
     if (lastEventId !== removed.eventId)
       throw new Error(
         "Harness evidence failure: reconnect Last-Event-ID unavailable or mismatched",
       );
+
     phase = "recovery";
     await receipt({ type: "header-confirmed", requestId: current.requestId, lastEventId });
 
@@ -182,12 +206,14 @@ if (driverMode === "reconnect-stream") {
     let recoveredDocument = documents
       .slice(previousDocuments)
       .find((event) => event.timestamp > current.timestamp);
+
     for (let attempt = 0; !recoveredDocument && attempt < 100; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 50));
       recoveredDocument = documents
         .slice(previousDocuments)
         .find((event) => event.timestamp > current.timestamp);
     }
+
     assert.ok(recoveredDocument, "The recovered document request followed the reconnect current");
     await page.waitForFunction(
       (identity) =>
@@ -202,6 +228,7 @@ if (driverMode === "reconnect-stream") {
       identity: globalThis.documentIdentity,
       count: document.querySelector("#count")?.textContent,
     }));
+
     assert.equal(after.origin, before.origin);
     assert.notEqual(after.identity, before.identity);
     assert.equal(after.count, "0");
@@ -239,6 +266,7 @@ async function installRecorder(page) {
 
       try {
         const token = crypto.randomUUID();
+
         documentToken = token;
         /** @type {WeakMap<Node, number>} */
         const identities = new WeakMap();
@@ -253,6 +281,7 @@ async function installRecorder(page) {
         const pending = new Map();
         let nextTask = 0;
         const channel = new MessageChannel();
+
         setupCleanups.push(() => {
           pending.clear();
           channel.port1.close();
@@ -260,6 +289,7 @@ async function installRecorder(page) {
         });
         /** @type {{target: EventTarget, name: string, listener: EventListener, capture: boolean}[]} */
         const listeners = [];
+
         setupCleanups.push(() => {
           for (const item of listeners)
             item.target.removeEventListener(item.name, item.listener, item.capture);
@@ -337,6 +367,7 @@ async function installRecorder(page) {
 
             const matches = document.querySelectorAll("#count");
             const count = matches[0] ?? null;
+
             previousCount = count ?? previousCount;
             const navigation = window.navigation;
 
@@ -372,6 +403,7 @@ async function installRecorder(page) {
               captureError(error);
             }
           };
+
           target.addEventListener(name, listener, capture);
           listeners.push({ target, name, listener, capture });
         }
@@ -379,6 +411,7 @@ async function installRecorder(page) {
         channel.port1.onmessage = (event) => {
           try {
             const target = pending.get(event.data);
+
             pending.delete(event.data);
 
             if (target && !stopped) record("click-task", { clicked: describe(target) });
@@ -417,6 +450,7 @@ async function installRecorder(page) {
             }
 
             const task = ++nextTask;
+
             pending.set(task, /** @type {Element} */ (target.closest("#count")));
             channel.port2.postMessage(task);
           }
@@ -460,6 +494,7 @@ async function installRecorder(page) {
             captureError(error);
           }
         });
+
         setupCleanups.push(() => mutationObserver.disconnect());
         mutationObserver.observe(document, {
           subtree: true,
@@ -619,11 +654,13 @@ try {
   observer.dispose();
   throw error;
 }
+
 observer.mark("phase-complete", { phase });
 
 try {
   /** @type {Page} */
   const page = await browser.newPage();
+
   observedPage = page;
 
   if (diagnosticsDirectory)

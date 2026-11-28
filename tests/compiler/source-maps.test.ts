@@ -82,5 +82,6 @@ function position(source: string, offset: number): { line: number; column: numbe
   if (offset < 0) throw new Error("Expected generated token is absent.");
 
   const prefix = source.slice(0, offset);
+
   return { line: prefix.split("\n").length, column: offset - prefix.lastIndexOf("\n") - 1 };
 }

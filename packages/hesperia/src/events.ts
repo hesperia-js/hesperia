@@ -27,6 +27,7 @@ function withOption<Value extends EventInput, Option extends keyof ListenerOptio
 ): WithOption<Value, Option> {
   const handler = Array.isArray(value) ? value[0] : value;
   const options = Array.isArray(value) ? value[1] : undefined;
+
   return Object.freeze([
     handler,
     Object.freeze({ ...options, [option]: true }),

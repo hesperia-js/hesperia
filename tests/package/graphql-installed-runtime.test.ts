@@ -433,6 +433,7 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
           const rootVersion = name === "aeolia" ? rootAeolia : exactVersion(rootManifest, name);
 
           if (packagePeers[name] !== undefined) expect(packagePeers[name]).toBe(rootVersion);
+
           if (packageDependencies[name] !== undefined)
             expect(packageDependencies[name]).toBe(rootVersion);
 
@@ -444,6 +445,7 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
       await readFile(resolve(hesperiaPackageRoot, "package.json"), "utf8"),
     ) as PackageManifest;
     const hesperiaVersion = hesperiaManifest.version;
+
     assert.ok(hesperiaVersion, "Hesperia package manifest has no version");
     const versions = {
       [packageName]: packageVersion,
@@ -476,13 +478,16 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
     const cachePreparationRoot = join(workspace, "native-cache-preparation");
     const seedCache = process.env.HESPERIA_GRAPHQL_SEED_CACHE_DIR;
     let nativeCacheRoot = join(workspace, "native-install-cache");
+
     if (seedCache !== undefined) {
       const runnerTemp = process.env.RUNNER_TEMP;
+
       if (!isAbsolute(seedCache) || !runnerTemp || !isAbsolute(runnerTemp))
         throw new Error("The GraphQL seed cache and runner temp must be absolute paths");
 
       const expectedCache = await realpath(join(runnerTemp, "hesperia-graphql-package-cache"));
       const suppliedCache = await realpath(seedCache);
+
       if (suppliedCache !== expectedCache)
         throw new Error("The GraphQL seed cache is not the package job's dependency cache");
 
@@ -490,6 +495,7 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
       const lock = Bun.JSONC.parse(lockBytes.toString("utf8")) as {
         packages?: Record<string, unknown>;
       };
+
       if (!lock.packages) throw new Error("The workspace lock has no package records");
       const locked = new Set(
         Object.values(lock.packages).flatMap((entry) => {
@@ -509,12 +515,14 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
         ...nativeOverrides,
         "@standard-schema/spec": exactVersion(hesperiaManifest, "@standard-schema/spec"),
       };
+
       for (const [name, version] of Object.entries(cacheInputs)) {
         if (!locked.has(`${name}@${version}`))
           throw new Error(
             `The GraphQL cache input is not pinned in the workspace lock: ${name}@${version}`,
           );
       }
+
       nativeCacheRoot = suppliedCache;
       evidence.cacheSeed = {
         path: suppliedCache,
@@ -523,6 +531,7 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
       };
       console.info(`GraphQL installed runtime cache seed: ${JSON.stringify(evidence.cacheSeed)}`);
     }
+
     const nativeInstallEnv = { ...process.env, BUN_INSTALL_CACHE_DIR: nativeCacheRoot };
 
     await mkdir(cachePreparationRoot);
@@ -624,10 +633,12 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
       boundedTimeout(25_000, deadlineAt),
       nativeInstallEnv,
     );
+
     evidence.install = install;
 
     const generatedLock = await readFile(join(application, "bun.lock"), "utf8");
     const generatedLockIntegrity = archiveIntegrity(new TextEncoder().encode(generatedLock));
+
     evidence.phase = "installed";
     evidence.generatedLockIntegrity = generatedLockIntegrity;
 
@@ -658,6 +669,7 @@ test("an installed GraphQL archive executes its public Apollo adapter against th
       application,
       boundedTimeout(12_000, deadlineAt),
     );
+
     evidence.consumerStdout = consumer.stdout;
     evidence.consumerStderr = consumer.stderr;
     evidence.phase = "consumer-complete";

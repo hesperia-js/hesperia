@@ -839,6 +839,7 @@ class ClosureAnalysis {
               ? entry.specifier.imported
               : null;
         const nextPath = [...path, `${source}.${imported ?? "*"}`];
+
         return imported === null
           ? [{ module: dependency, path: nextPath }]
           : this.resolveExport(dependency, imported, nextPath, visited);
@@ -855,6 +856,7 @@ class ClosureAnalysis {
       if (!dependency) return undefined;
 
       const nextPath = [...path, `${indirect.source}.${indirect.imported ?? "*"}`];
+
       return indirect.imported === null
         ? [{ module: dependency, path: nextPath }]
         : this.resolveExport(dependency, indirect.imported, nextPath, visited);
@@ -2032,6 +2034,7 @@ function isNativeGlobalFunctionValue(
     expression.kind === "member" && isGlobalObjectExpression(expression.object, module)
       ? memberNames(expression, module)
       : undefined;
+
   return names !== undefined && names.length === 1 && names[0] === "Function";
 }
 
@@ -2040,6 +2043,7 @@ function memberNames(
   module?: ModuleInfo,
 ): readonly string[] | undefined {
   const direct = memberName(expression);
+
   return direct === undefined
     ? expression.computed
       ? finiteStringValues(expression.property, module)
@@ -2052,6 +2056,7 @@ function isFunctionMetadata(
   module?: ModuleInfo,
 ): boolean {
   const names = memberNames(expression, module);
+
   return (
     names !== undefined &&
     names.every((name) => name === "prototype" || name === "name" || name === "length") &&
@@ -2274,6 +2279,7 @@ function mayBeConstructorMember(expression: CanonicalExpression, module?: Module
   if (expression.kind !== "member") return false;
 
   const names = memberNames(expression, module);
+
   return names?.includes("constructor") === true;
 }
 
@@ -2348,6 +2354,7 @@ function knownOwnConstructorState(
   if (declarations.length !== 1) return "unknown";
 
   const initializer = declarations[0]?.initializer;
+
   return initializer && !isCanonicalChild(initializer)
     ? knownOwnConstructorState(initializer, module, seen)
     : "unknown";
@@ -2397,6 +2404,7 @@ function isKnownOwnConstructorMember(
     initializer !== undefined &&
     !isCanonicalChild(initializer) &&
     initial === true;
+
   return hasActiveCustomPropertyOverride(
     module,
     expression.referenceId,
@@ -2483,6 +2491,7 @@ function isFunctionBinding(
   if (binding.statement.kind !== "variable") return false;
 
   const declarations = binding.declarations ?? [];
+
   return (
     declarations.length > 0 &&
     declarations.every((declaration) => {
@@ -2490,6 +2499,7 @@ function isFunctionBinding(
         return false;
 
       const initializer = sequenceValue(declaration.initializer);
+
       return (
         initializer.kind === "arrow" ||
         initializer.kind === "function-expression" ||
@@ -2542,6 +2552,7 @@ function findContainingBlockPath(
     if (!containsOffset(statement.span, accessStart)) continue;
 
     const nested = findContainingStatementPath(statement, accessStart, path);
+
     return nested ?? path;
   }
 }
@@ -2619,6 +2630,7 @@ function findContainingStatementPath(
         : statement.init !== null
           ? findContainingExpressionPath(statement.init, accessStart, path)
           : undefined;
+
     return (
       nestedInit ??
       (statement.test !== null
@@ -2716,6 +2728,7 @@ function statementPropertyMutations(
   if (statement.kind === "variable") {
     return statement.declarations.flatMap((declaration) => {
       const initializer = declaration.initializer;
+
       return initializer !== null && !isCanonicalChild(initializer)
         ? expressionPropertyMutations(initializer, bindingId, property, module)
         : [];
@@ -3034,6 +3047,7 @@ function isGlobalObjectExpression(
     return false;
 
   const declarations = binding.declarations ?? [];
+
   return (
     declarations.length > 0 &&
     declarations.every(
@@ -3082,6 +3096,7 @@ function intrinsicCallableMember(
   if (declarations.length !== 1) return;
 
   const initializer = declarations[0]?.initializer;
+
   return initializer && !isCanonicalChild(initializer)
     ? intrinsicCallableMember(initializer, module, seen)
     : undefined;
@@ -3125,6 +3140,7 @@ function constantString(
   module: ModuleInfo | undefined,
 ): string | undefined {
   const values = finiteStringValues(expression, module);
+
   return values?.length === 1 ? values[0] : undefined;
 }
 
@@ -3332,6 +3348,7 @@ function authoredSpan(module: ModuleInfo, span: SourceSpan): SourceSpan {
 
   const end = module.mapOffset(span.end);
   const previous = module.mapOffset(span.end - 1);
+
   return { start, end: end > previous ? end : previous + 1 };
 }
 

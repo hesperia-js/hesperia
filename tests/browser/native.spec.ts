@@ -228,6 +228,7 @@ test("compiled event pairs retain native once, capture, passive, fault, and rele
   await capture.evaluate((node) => {
     window.eventOptionRemovals = [];
     const remove = node.removeEventListener.bind(node);
+
     node.removeEventListener = ((
       type: string,
       listener: EventListener | null,
@@ -243,6 +244,7 @@ test("compiled event pairs retain native once, capture, passive, fault, and rele
 
   await ordinary.evaluate((node) => {
     const remove = node.removeEventListener.bind(node);
+
     node.removeEventListener = ((
       type: string,
       listener: EventListener | null,

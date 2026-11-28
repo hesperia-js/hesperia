@@ -834,6 +834,7 @@ test("native gRPC works through the emitted package on Node 22.23.2", async () =
       remainingMs,
       "Node consumer did not complete native gRPC scenarios and cleanup",
     );
+
     completedRecord = completed;
     exitCode = childExitCode;
 
@@ -922,6 +923,7 @@ test("native gRPC works through the emitted package on Node 22.23.2", async () =
     }
 
     let evidenceWriteError: string | undefined;
+
     try {
       await Promise.all([
         writeFile(compileStdoutPath, compilerRun?.stdout.text() ?? "", "utf8"),

@@ -63,6 +63,7 @@ export function emitRouteGuardArtifact(
     artifact.modules.map((item) => [moduleKey(item.filename), item.filename]),
   );
   const modules = artifact.modules.map((item) => emitModule(item, filenames, options));
+
   return { entryFilename: artifact.entry.filename, modules };
 }
 
@@ -91,6 +92,7 @@ function emitModule(
       : [],
   );
   const map = composeMap(generated.map, item.map);
+
   return { filename: item.filename, code: generated.code, ...(map ? { map } : {}), imports };
 }
 
@@ -104,6 +106,7 @@ function composeMap(generated: unknown, normalized: unknown): SourceMap | undefi
   if (!map || typeof map !== "object") return undefined;
 
   const published = { ...(map as SourceMap), sourcesContent: undefined };
+
   delete (published as { sourcesContent?: readonly (string | null)[] }).sourcesContent;
   return published;
 }

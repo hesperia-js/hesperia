@@ -371,6 +371,7 @@ function resolveGate(gates, id, value) {
   if (!gate?.release) return false;
 
   const release = gate.release;
+
   gate.release = undefined;
   release(value);
   notifyGate(gate);
@@ -379,6 +380,7 @@ function resolveGate(gates, id, value) {
 }
 
 const queryFields = schema.getQueryType().getFields();
+
 queryFields.echo.resolve = (_root, { value }, context) => {
   context.session.resolverCalls.echo += 1;
 
@@ -441,9 +443,11 @@ const gateResolver = async (_root, { id }, context) => {
 
   return value;
 };
+
 queryFields.gate.resolve = gateResolver;
 
 const mutationFields = schema.getMutationType().getFields();
+
 mutationFields.writeThenFail.resolve = (_root, { value }, context) => {
   context.session.state.revision += 1;
   context.session.state.writes.push(value);
@@ -453,17 +457,20 @@ mutationFields.writeThenFail.resolve = (_root, { value }, context) => {
 mutationFields.waitAtGate.resolve = gateResolver;
 
 const receiptFields = schema.getType("MutationReceipt").getFields();
+
 receiptFields.failure.resolve = () => {
   throw new Error("fixture mutation field failure");
 };
 
 const partialFields = schema.getType("PartialResult").getFields();
+
 partialFields.ok.resolve = () => "partial-ok";
 partialFields.broken.resolve = () => {
   throw new Error("fixture partial field failure");
 };
 
 const subscriptionFields = schema.getSubscriptionType().getFields();
+
 subscriptionFields.events.resolve = (event) => event;
 subscriptionFields.events.subscribe = (_root, { id }, context) => {
   const subscription = getSubscription(context.session, id);
@@ -473,6 +480,7 @@ subscriptionFields.events.subscribe = (_root, { id }, context) => {
   return subscriptionEvents(context.session, subscription, incarnation);
 };
 const nativeEventFields = schema.getType("NativeEvent").getFields();
+
 nativeEventFields.broken.resolve = (event) => {
   if (event.broken) throw new Error("fixture subscription field failure");
 
@@ -594,6 +602,7 @@ async function handleControlRequest(request, response, url) {
     }
 
     const controller = new AbortController();
+
     controlWaitControllers.add(controller);
     response.once("close", () => {
       if (!response.writableEnded) controller.abort();
@@ -669,6 +678,7 @@ async function handleControlRequest(request, response, url) {
 
     const subscription = getSubscription(session, id);
     const controller = new AbortController();
+
     controlWaitControllers.add(controller);
     response.once("close", () => {
       if (!response.writableEnded) controller.abort();
@@ -806,6 +816,7 @@ async function handleControlRequest(request, response, url) {
 
     return true;
   }
+
   if (request.method === "POST" && url.pathname === "/__fixture/release") {
     const id = readGateId(url);
 

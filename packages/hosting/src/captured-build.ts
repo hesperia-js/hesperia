@@ -201,6 +201,7 @@ export async function validateTargetedCapturedBuild(
       browserSnapshot = captureInput({ hosting, files, publicFiles });
     } else {
       const serverFiles = snapshotBlobMap(inventory.serverFiles, "serverFiles");
+
       serverSnapshot = captureServerInput({ hosting, files, publicFiles, serverFiles });
       browserSnapshot = serverSnapshot.browserInput;
     }
@@ -340,6 +341,7 @@ export function captureInput(build: CapturedBuild, selection?: HostSelection): C
 
   const fileEntries = Array.from(sourceFiles);
   const files = new Map(fileEntries);
+
   if (assets.some((asset) => typeof asset.path !== "string"))
     throw new TypeError("asset path must be a string");
 
@@ -664,6 +666,7 @@ export function assertCanonicalAssetPath(path: string, label: string): void {
         return decoded.replaceAll("%", "%25");
       });
     const url = new URL("https://hesperia.invalid");
+
     url.pathname = `/${segments.join("/")}`;
     canonical = url.pathname;
   } catch {
@@ -934,6 +937,7 @@ function containsControlCharacters(value: string): boolean {
 
 async function digestHex(bytes: ArrayBuffer): Promise<string> {
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 

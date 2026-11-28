@@ -91,6 +91,7 @@ try {
 
   if (request.kind === "check") {
     const diagnostics = await checkProjectLocal(root);
+
     response = { ok: true, value: diagnostics };
   } else if (request.kind === "build") {
     const build = await prepareBuildLocal(root, request.development);
@@ -132,6 +133,7 @@ try {
     const configuration = await readConfiguration(root);
     const sources = new Map(request.sources);
     const wire = await preparePluginEditorWire(sources, root, configuration);
+
     response = { ok: true, value: wire };
   } else throw new TypeError("Unknown project worker request");
 } catch (error) {

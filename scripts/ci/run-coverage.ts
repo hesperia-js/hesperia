@@ -192,6 +192,7 @@ function preparedRuntimeSchema(prepared: PreparedCoverageSource): string {
 
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
+
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
@@ -201,6 +202,7 @@ function expectedTypeScriptApiExecutablePath(): string {
   const require = createRequire(typescriptPackageJsonPath);
   const packageJsonPath = require.resolve(`${platformPackage}/package.json`);
   const executableName = process.platform === "win32" ? "tsc.exe" : "tsc";
+
   return realpathSync(join(dirname(packageJsonPath), "lib", executableName));
 }
 
@@ -221,6 +223,7 @@ function escapeRegularExpression(value: string): string {
     "[",
     "]",
   ]);
+
   return [...value]
     .map((character) => (specialCharacters.has(character) ? `\\${character}` : character))
     .join("");
@@ -343,6 +346,7 @@ function hasCoverageHits(coverage: CoverageFile | undefined): boolean {
 
 function sourceHasHits(coverage: CoverageArtifact["coverage"], source: string): boolean {
   const authoredPath = resolve(repoPath, source.replaceAll("/", sep));
+
   return Object.entries(coverage).some(
     ([path, file]) => canonicalPath(path) === canonicalPath(authoredPath) && hasCoverageHits(file),
   );
@@ -390,9 +394,11 @@ function supportArtifactSourcesMatch(
   const expected = sources
     .map((source) => {
       const path = resolve(repoPath, source.replaceAll("/", sep));
+
       return process.platform === "win32" ? path.toLowerCase() : path;
     })
     .sort();
+
   return JSON.stringify(actual) === JSON.stringify(expected);
 }
 
@@ -422,6 +428,7 @@ function assertInstalledCliCapture(hits: readonly CoverageArtifact[]): void {
 
     const entries = Object.entries(artifact.coverage);
     const entryPaths = entries.map(([path]) => canonicalPath(path));
+
     return (
       entries.length === authoredPaths.length &&
       new Set(entryPaths).size === authoredPaths.length &&
@@ -512,6 +519,7 @@ function assertConfiguredPluginBuildCapture(
   const configuredGroups = configuredCandidates
     .flatMap((entry) => {
       const match = configuredGroupPattern.exec(entry.name);
+
       return match ? [{ ...entry, ordinal: Number(match[1]) }] : [];
     })
     .sort((left, right) => left.ordinal - right.ordinal);
@@ -530,6 +538,7 @@ function assertConfiguredPluginBuildCapture(
     if (artifact.ownerId !== ownerId) return false;
 
     const paths = Object.keys(artifact.coverage).map(canonicalPath);
+
     return (
       paths.length === authoredPaths.length &&
       new Set(paths).size === authoredPaths.length &&
@@ -1010,6 +1019,7 @@ function validateWorkerPackageCapture(
 
   const isElysiaDistPath = (path: string) => {
     const normalized = path.replaceAll("\\", "/").toLowerCase();
+
     return (
       normalized.includes("/packages/elysia/dist/") ||
       normalized.includes("/node_modules/@hesperia/elysia/dist/")
@@ -1578,6 +1588,7 @@ async function main(): Promise<void> {
       (elysiaWorkerOwnerTestPaths as readonly string[]).includes(path),
     );
     const expectedSources = inventoryCoverageSources(repoPath);
+
     runId = randomUUID();
     outputDirectory = resolve(outputRoot, runId);
 
@@ -1636,6 +1647,7 @@ async function main(): Promise<void> {
           [preparedWorkerPreload],
           workerPreloadSource,
         );
+
         bootstrapDirectory = workerBootstrap.directory;
         workerPreloadBootstrapPath = workerBootstrap.preloadPath;
       }
@@ -1677,6 +1689,7 @@ async function main(): Promise<void> {
         bootstrapSources.map((source) => prepareCoverageSource(source, repoPath)),
       );
       const bootstrap = createBootstrapPreload(runId, prepared);
+
       bootstrapDirectory = bootstrap.directory;
       testPreloadPath = bootstrap.preloadPath;
     }
@@ -1700,6 +1713,7 @@ async function main(): Promise<void> {
           [installedCliHelperSource],
           installedCliChildSource,
         );
+
         installedCliChildPreloadPath = childBootstrap.preloadPath;
       }
 
@@ -1726,6 +1740,7 @@ async function main(): Promise<void> {
           installedCliChildSource,
           "configured-plugin-build",
         );
+
         configuredPluginChildPreloadPath = childBootstrap.preloadPath;
         configuredPluginPreparedSources = [preparedCliSource, installedCliHelperSource];
       }
@@ -1746,11 +1761,13 @@ async function main(): Promise<void> {
         creatorHelperSource ??= await prepareCoverageSource(installedCliChildSource, repoPath);
       } else {
         const seeded = await seedCoverageSources(expectedSources, repoPath);
+
         creatorPopulation = seeded.population;
         creatorCanonicalSeedCoverage = seeded.coverage;
         const preparedBySource = new Map(
           seeded.prepared.map((prepared) => [prepared.relativePath, prepared] as const),
         );
+
         creatorPreparedSources = creatorCliSources.map((source) => {
           const prepared = preparedBySource.get(source);
 
@@ -1792,6 +1809,7 @@ async function main(): Promise<void> {
         installedCliChildSource,
         "creator-cli",
       );
+
       creatorCliChildPreloadPath = creatorBootstrap.preloadPath;
       creatorCliProfilePath = join(creatorBootstrap.directory, "creator-cli-profile.json");
 
@@ -1827,6 +1845,7 @@ async function main(): Promise<void> {
       HESPERIA_COVERAGE_CONTEXT: "coverage-runner",
       HESPERIA_COVERAGE_OWNER_ID: ownerId,
     };
+
     delete childEnvironment.BUN_OPTIONS;
     delete childEnvironment.NODE_OPTIONS;
     delete childEnvironment.HESPERIA_COVERAGE_OWNER_LAUNCHED;
@@ -1951,6 +1970,7 @@ async function main(): Promise<void> {
     } finally {
       if (bootstrapDirectory) {
         const directory = bootstrapDirectory;
+
         bootstrapDirectory = undefined;
 
         rmSync(directory, { recursive: true, force: true });

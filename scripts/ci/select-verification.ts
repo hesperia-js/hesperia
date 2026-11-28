@@ -12,6 +12,7 @@ const ordinaryRoots = [
   "hosting",
   "ci",
 ] as const;
+
 type OrdinaryRoot = (typeof ordinaryRoots)[number];
 const workspacePackages = new Set([
   "compiler",
@@ -25,6 +26,7 @@ const workspacePackages = new Set([
   "tailwind",
   "stylex",
 ]);
+
 type Owners = {
   roots: readonly OrdinaryRoot[];
   browser?: boolean;
@@ -81,17 +83,21 @@ function productionOwner(path: string): Owners | undefined {
         : path.startsWith("packages/hesperia/src/routing/")
           ? "routing"
           : "runtime";
+
     return { roots: [root] };
   }
+
   if (packageName === "compiler") return { roots: ["compiler"] };
   if (packageName === "hosting") return { roots: ["hosting"] };
   if (packageName === "language-server") return { roots: ["editor"] };
+
   if (
     ["tooling", "create-hesperia", "elysia", "postcss", "tailwind", "stylex"].includes(
       packageName ?? "",
     )
   )
     return { roots: ["tooling"] };
+
   if (path.startsWith("editors/vscode/src/")) return { roots: ["editor"], vscode: true };
   return undefined;
 }
@@ -100,15 +106,19 @@ function documentationOwner(path: string): Owners | undefined {
   if (!/\.(?:md|txt)$/iu.test(path) && !["LICENSE", "COPYING"].includes(path)) return undefined;
   if (path.startsWith("docs/")) return { roots: [] };
   const packageName = /^packages\/([^/]+)\/(?:docs\/.*|README\.md)$/u.exec(path)?.[1];
+
   if (packageName && workspacePackages.has(packageName)) return { roots: [], package: true };
   if (path === "editors/vscode/README.md") return { roots: [], package: true, vscode: true };
   if (path === "golden/README.md") return { roots: [] };
+
   if (
     ["README.md", "CONTRIBUTING.md", "LICENSE", "COPYING", "LICENSE-COMMERCIAL.md"].includes(path)
   )
     return { roots: [], package: true };
+
   if (["AGENTS.md", "CLAUDE.md", "AI_POLICY.md", "CODE-OF-CONDUCT.md"].includes(path))
     return { roots: [] };
+
   return undefined;
 }
 
@@ -127,23 +137,29 @@ function requiresFull(path: string): string | undefined {
     /(?:^|\/)(?:bun\.lock|[^/]*lock\.json)$/u.test(path)
   )
     return `package manifest or lockfile changed: ${path}`;
+
   if (["tests/README.md", "docs/ci.md", "docs/ci-selection.md"].includes(path))
     return `verification policy changed: ${path}`;
+
   if (path.startsWith(".github/") || path.startsWith("scripts/"))
     return `verification or build support changed: ${path}`;
+
   if (fixtureOwner(path)) return undefined;
   if (productionOwner(path) || documentationOwner(path)) return undefined;
+
   if (
     /^tests\/(?:compiler|runtime|data|tooling|routing|editor|hosting|ci|package)\/.*\.test\.ts$/u.test(
       path,
     )
   )
     return undefined;
+
   if (
     /^tests\/browser\/.*\.spec\.ts$/u.test(path) ||
     /^editors\/vscode\/tests\/.*\.test\.ts$/u.test(path)
   )
     return undefined;
+
   if (path.startsWith("golden/")) return undefined;
   return `shared support, configuration, or unknown impact changed: ${path}`;
 }
@@ -160,13 +176,16 @@ export function selectVerification(options: VerificationOptions): VerificationSe
 
   const addOwners = (owner: Owners, reason: string): void => {
     for (const root of owner.roots) roots.add(root);
+
     for (const flag of ["browser", "package", "vscode", "golden"] as const)
       flags[flag] ||= owner[flag] === true;
+
     reasons.add(reason);
   };
 
   try {
     const impact = readSourceImpact(options);
+
     base = impact.base;
     head = impact.head;
     changedPaths = impact.changedPaths;
@@ -175,13 +194,16 @@ export function selectVerification(options: VerificationOptions): VerificationSe
 
     for (const changed of changedPaths) {
       const full = requiresFull(changed.path);
+
       if (full) fallback.add(full);
       const owner =
         productionOwner(changed.path) ??
         fixtureOwner(changed.path) ??
         documentationOwner(changed.path) ??
         testOwner(changed.path);
+
       if (owner) addOwners(owner, `owner of ${changed.path}`);
+
       if (productionOwner(changed.path)) {
         // Emitted imports and built package/editor consumers are not limited to AST import edges.
         flags.browser = flags.package = flags.vscode = flags.golden = true;
@@ -190,10 +212,12 @@ export function selectVerification(options: VerificationOptions): VerificationSe
 
     for (const affected of impact.affectedPaths) {
       const owner = testOwner(affected.path);
+
       if (owner) addOwners(owner, `dependent ${affected.dependencyChain.join(" -> ")}`);
     }
 
     const fixtureInputs = new Set<string>();
+
     for (const item of impact.graph.incompleteDependencies) {
       if (fixtureOwner(item.path)) fixtureInputs.add(item.path);
       else if (item.kind !== "opaque")
@@ -213,21 +237,26 @@ export function selectVerification(options: VerificationOptions): VerificationSe
     // leads back from the changed file; relying on that missing edge would discard the uncertainty.
     for (const path of opaque) {
       let owned = false;
+
       for (const affected of traceImpacts(path, impact.graph.reverseDependencies)) {
         const owner = testOwner(affected.path) ?? productionOwner(affected.path);
+
         if (owner) {
           addOwners(owner, `opaque consumer ${path} can read changed tracked inputs`);
           owned = true;
         }
       }
+
       if (!owned && path.startsWith("scripts/")) {
         addOwners({ roots: ["ci"] }, `verification/build script consumer ${path}`);
         owned = true;
       }
+
       if (!owned && path === "playwright.config.ts") {
         addOwners({ roots: [], browser: true }, `browser configuration consumer ${path}`);
         owned = true;
       }
+
       if (!owned) fallback.add(`opaque consumer has no verified test owner: ${path}`);
     }
   } catch (error) {
@@ -238,6 +267,7 @@ export function selectVerification(options: VerificationOptions): VerificationSe
 
   if (options.full) fallback.add("explicit full verification requested");
   const full = fallback.size > 0;
+
   return {
     schemaVersion: 1,
     base,
@@ -284,7 +314,9 @@ if (import.meta.main) {
     head: value("--head") ?? "",
     full: args.includes("--full"),
   });
+
   console.log(JSON.stringify(selection));
+
   if (process.env.GITHUB_OUTPUT)
     appendFileSync(process.env.GITHUB_OUTPUT, verificationOutputs(selection));
 }

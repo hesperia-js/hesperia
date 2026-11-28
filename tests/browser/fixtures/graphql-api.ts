@@ -33,8 +33,10 @@ const nativeEventsDocument = parse(`
 `) as TypedDocumentNode<NativeEventsData, NativeEventsVariables>;
 
 const subscriptionWsUrl = new URLSearchParams(globalThis.location.search).get("subscription-ws");
+
 if (!subscriptionWsUrl)
   throw new Error("The GraphQL subscription fixture requires a WebSocket URL");
+
 const subscriptionSocket = createClient({
   url: subscriptionWsUrl,
   connectionParams: { session },
@@ -67,6 +69,7 @@ const contract = defineContract({
   operations: { browserEventsNone, browserEventsAll, browserEventsIgnore },
 });
 const graph = createGraph({ contract });
+
 export const api = withAeolia(graph, contract);
 
 export function disposeGraphQL(): void {
@@ -83,6 +86,7 @@ export function disposeGraphQLGraph(): void {
 }
 
 let subscriptionSocketDisposal: Promise<void> | undefined;
+
 export function disposeGraphQLSocket(): Promise<void> {
   subscriptionSocketDisposal ??= Promise.resolve().then(() => subscriptionSocket.dispose());
   return subscriptionSocketDisposal;

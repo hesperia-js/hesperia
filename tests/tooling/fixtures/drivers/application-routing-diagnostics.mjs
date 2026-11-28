@@ -158,6 +158,7 @@ export async function installApplicationRoutingDiagnostics(page, diagnostics) {
           if (!(node instanceof Element)) return null;
 
           const rect = node.getBoundingClientRect();
+
           return {
             tag: node.tagName,
             id: text(node.id),
@@ -169,6 +170,7 @@ export async function installApplicationRoutingDiagnostics(page, diagnostics) {
         /** @param {MouseEvent} event @param {string} phase */
         const pointer = (event, phase) => {
           const anchor = event.composedPath().find((node) => node instanceof HTMLAnchorElement);
+
           return {
             phase,
             target: element(event.target),
@@ -305,6 +307,7 @@ export async function installApplicationRoutingDiagnostics(page, diagnostics) {
             if (!node) return { id, present: false };
 
             const style = getComputedStyle(node);
+
             return {
               id,
               present: true,

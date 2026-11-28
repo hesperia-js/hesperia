@@ -150,6 +150,7 @@ export class NativeModuleResolver {
     string,
     { readonly filename: string; readonly generated: boolean }
   >();
+
   #resolver: ModuleResolver;
   #conflict: Error | undefined;
 
@@ -354,6 +355,7 @@ export class NativeModuleResolver {
     }
 
     const fork = new NativeModuleResolver(this.#root, new Map(), this.mode, this.#policy, imports);
+
     fork.#resolver = this.#resolver.forkWithGeneratedSources(generated, additions);
 
     for (const [key, filename] of paths) fork.#paths.set(key, filename);

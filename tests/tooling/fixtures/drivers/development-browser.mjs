@@ -88,6 +88,7 @@ async function observePublicationEvents(page, eventsUrl) {
       text !== "observer-hard-reload-default false"
     )
       return;
+
     if (hardReloadDefaultPrevented.length === 8) {
       hardReloadEventsDropped++;
       return;
@@ -122,6 +123,7 @@ async function observePublicationEvents(page, eventsUrl) {
     .then(async (session) => {
       session.on("Network.requestWillBeSent", (event) => {
         if (event.request.url !== eventsUrl) return;
+
         if (requests.size === 8 && !requests.has(event.requestId)) {
           dropped++;
           return;
@@ -131,6 +133,7 @@ async function observePublicationEvents(page, eventsUrl) {
       });
       session.on("Network.eventSourceMessageReceived", (event) => {
         if (!requests.has(event.requestId)) return;
+
         if (events.length === 12) {
           dropped++;
           return;
@@ -229,6 +232,7 @@ try {
     opened.push(entry);
 
     const page = await browser.newPage();
+
     entry.page = page;
 
     let releaseEventStream = () => {};
@@ -237,6 +241,7 @@ try {
         releaseEventStream = resolve;
       },
     );
+
     releaseEventStreams.push(releaseEventStream);
 
     let observeEventStreamHold = () => {};
@@ -406,6 +411,7 @@ try {
       })
       .then(() => "published"),
   ]);
+
   void invalidRouteOutcome.catch(() => {});
 
   await writeFile(routePath, "");
@@ -416,6 +422,7 @@ try {
     version: document.querySelector("#version")?.textContent ?? null,
   }));
   const servedDocument = await fetch(applicationUrl, { headers: { accept: "text/html" } });
+
   assert.equal(servedDocument.status, 200);
   const servedPublication = (await servedDocument.text()).match(publicationTag)?.[1];
 
@@ -468,11 +475,13 @@ try {
   function readFinishedResponse() {
     if (!selectedNavigation || bodyState !== "waiting-for-finish") return;
     if (!reloadRequests.get(selectedNavigation)?.finished) return;
+
     try {
       const response = reloadResponses.get(selectedNavigation);
       const headers = response?.headers();
       const length = Number(headers?.["content-length"] ?? NaN);
       const encoding = headers?.["content-encoding"]?.toLowerCase();
+
       if (
         !response ||
         !Number.isSafeInteger(length) ||
@@ -483,6 +492,7 @@ try {
         bodyState = "size-or-encoding-unavailable";
         return;
       }
+
       bodyState = "reading";
       void response
         .body()
@@ -491,7 +501,9 @@ try {
             bodyState = "body-over-limit";
             return;
           }
+
           const tag = body.toString("utf8").match(publicationTag);
+
           injectedPublication = tag?.[1];
           bodyState = injectedPublication ? "publication-observed" : "publication-tag-absent";
         })
@@ -508,10 +520,12 @@ try {
       pageErrorsDropped++;
       return;
     }
+
     pageErrors.push(error.message.slice(0, 160));
   });
   publicationPage.on("request", (request) => {
     const url = new URL(request.url());
+
     if (url.origin !== applicationOrigin) return;
     const kind =
       request.isNavigationRequest() && request.resourceType() === "document"
@@ -519,7 +533,9 @@ try {
         : url.pathname === clientPath
           ? "client"
           : undefined;
+
     if (!kind) return;
+
     if (kind === "client") {
       try {
         if (request.frame() !== publicationPage.mainFrame()) return;
@@ -527,15 +543,19 @@ try {
         return;
       }
     }
+
     const reservesSlot =
       kind === "document" && url.pathname === "/nested" && !reservedNavigationSeen;
     const limit = reservedNavigationSeen || reservesSlot ? 16 : 15;
+
     if (reloadRequests.size === limit) {
       reloadRequestsDropped++;
       return;
     }
+
     if (reservesSlot) reservedNavigationSeen = true;
     const previous = request.redirectedFrom();
+
     reloadRequests.set(request, {
       id: reloadRequests.size + 1,
       kind,
@@ -548,6 +568,7 @@ try {
   publicationPage.on("response", (response) => {
     const request = response.request();
     const row = reloadRequests.get(request);
+
     if (!row) return;
     row.status = response.status();
     row.contentType = response.headers()["content-type"]?.slice(0, 80);
@@ -555,11 +576,13 @@ try {
   });
   publicationPage.on("requestfinished", (request) => {
     const row = reloadRequests.get(request);
+
     if (row) row.finished = true;
     if (request === selectedNavigation) readFinishedResponse();
   });
   publicationPage.on("requestfailed", (request) => {
     const row = reloadRequests.get(request);
+
     if (row) row.failure = request.failure()?.errorText.slice(0, 120);
   });
 
@@ -617,6 +640,7 @@ try {
 
   selectedNavigation = publishedDocumentRequest;
   readFinishedResponse();
+
   try {
     await publicationPage.waitForFunction(
       () => document.querySelector("#version")?.textContent === "second",
@@ -624,6 +648,7 @@ try {
   } catch (error) {
     try {
       const selected = reloadRequests.get(publishedDocumentRequest);
+
       markMilestone(
         "observer-reload-response " +
           JSON.stringify({
@@ -648,6 +673,7 @@ try {
         })
         .catch(() => {});
     } catch {}
+
     throw error;
   }
 

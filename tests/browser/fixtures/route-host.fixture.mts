@@ -12,6 +12,7 @@ function deferred<T>() {
   const promise = new Promise<T>((accept) => {
     resolve = accept;
   });
+
   return { promise, resolve };
 }
 
@@ -42,6 +43,7 @@ const router = new Router({
 
   resolve(url) {
     const layouts = url.pathname.startsWith("/nested/") ? [frame, nested] : [frame];
+
     return {
       params: { label: url.pathname },
       departingOwners: host.departingOwners(layouts),

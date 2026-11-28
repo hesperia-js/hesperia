@@ -45,6 +45,7 @@ const created: string[] = [];
 const revoked: string[] = [];
 const createObjectURL = window.URL.createObjectURL.bind(window.URL);
 const revokeObjectURL = window.URL.revokeObjectURL.bind(window.URL);
+
 window.URL.createObjectURL = (blob) => {
   const url = createObjectURL(blob);
 
@@ -77,6 +78,7 @@ const router = new Router({
 
   resolve(url) {
     const page = url.pathname === "/away" ? awayModule : blobModule;
+
     return {
       params: {},
       departingOwners: host.departingOwners([]),

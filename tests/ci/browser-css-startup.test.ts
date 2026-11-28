@@ -88,6 +88,7 @@ process.exitCode = 17;`,
 
       expect(child.error).toBeUndefined();
       expect(child.status).toBe(17);
+
       if (stderrUnavailable) {
         const [probe, outcome] = stdout.trimEnd().split(/\r?\n/u);
 
@@ -147,9 +148,11 @@ process.exitCode = 17;`,
         expect(records.length).toBeLessThanOrEqual(32);
         expect(Buffer.byteLength(journal)).toBeLessThanOrEqual(32 * 1024);
         expect(Buffer.byteLength(stderr)).toBeLessThanOrEqual(32 * 1024);
+
         for (const line of [...journal.split(/(?<=\n)/u), ...stderr.split(/(?<=\n)/u)]) {
           expect(Buffer.byteLength(line)).toBeLessThanOrEqual(1024);
         }
+
         expect(records.some((record) => record.detail?.reason === "record-byte-limit")).toBe(true);
         expect(records.some((record) => record.phase === "fixture-body-enter")).toBe(true);
       }

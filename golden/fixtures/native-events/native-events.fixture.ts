@@ -53,6 +53,7 @@ window.hesperiaNativeEvents = {
     if (!button) throw new Error(`Cancellation probe is missing: ${id}`);
 
     const event = new Event("hesperia-golden-probe", { bubbles: true, cancelable: true });
+
     return {
       dispatchResult: button.dispatchEvent(event),
       defaultPrevented: event.defaultPrevented,

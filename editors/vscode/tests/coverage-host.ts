@@ -64,6 +64,7 @@ function linuxStarttimeTicks(pid: number): number | undefined {
       .trim()
       .split(/\s+/u);
     const ticks = Number(fields[19]);
+
     return Number.isSafeInteger(ticks) && ticks > 0 ? ticks : undefined;
   } catch {
     return undefined;
@@ -82,6 +83,7 @@ function linuxParentPid(pid: number): number | undefined {
       .trim()
       .split(/\s+/u);
     const parentPid = Number(fields[1]);
+
     return Number.isSafeInteger(parentPid) && parentPid > 0 ? parentPid : undefined;
   } catch {
     return undefined;
@@ -515,6 +517,7 @@ async function runLinuxRawCreatorFixture(): Promise<void> {
 
   const deadline = Date.now() + 30_000;
   const helper = spawn(python, [script, scope], { stdio: "ignore" });
+
   await new Promise<void>((accept, reject) => {
     const timeout = setTimeout(
       () => reject(new Error("Linux raw-creator helper did not exit before its fixture deadline")),

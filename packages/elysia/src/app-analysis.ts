@@ -464,6 +464,7 @@ async function bindsPublicFactoryProperty(
     const symbol = type
       ? await input.types.checker.getPropertyOfType(type, propertyName)
       : undefined;
+
     return symbol ? symbolIsPublicFactory(input, symbol) : false;
   }
 
@@ -472,6 +473,7 @@ async function bindsPublicFactoryProperty(
     const symbol = type
       ? await input.types.checker.getPropertyOfType(type, propertyName)
       : undefined;
+
     return symbol ? symbolIsPublicFactory(input, symbol) : false;
   }
 
@@ -585,6 +587,7 @@ async function packageFunctionOrigin(
     if (declaration.kind === SyntaxKind.VariableDeclaration) {
       initializer = (declaration as VariableDeclarationNode).initializer;
       const declarationList = declaration.parent;
+
       immutable =
         declarationList.kind === SyntaxKind.VariableDeclarationList &&
         (declarationList.flags & NodeFlags.Const) !== 0;
@@ -634,6 +637,7 @@ function comparableSourcePath(filename: string): string {
 
 function isPropertyName(node: Node): boolean {
   const parent = node.parent;
+
   return (
     parent.kind === SyntaxKind.PropertyAccessExpression &&
     (parent as NamedDeclarationNode).name === node
@@ -642,6 +646,7 @@ function isPropertyName(node: Node): boolean {
 
 function isDeclarationName(node: Node): boolean {
   const parent = node.parent;
+
   return (
     (parent.kind === SyntaxKind.VariableDeclaration ||
       parent.kind === SyntaxKind.FunctionDeclaration ||
@@ -697,6 +702,7 @@ function isSupportedFactoryReference(node: Node): boolean {
 
   if (parent.kind === SyntaxKind.VariableDeclaration) {
     const declarationList = parent.parent;
+
     return (
       (parent as VariableDeclarationNode).initializer === expression &&
       declarationList.kind === SyntaxKind.VariableDeclarationList &&
@@ -863,6 +869,7 @@ export async function typeNodeReferencesValue(
     const checker = input.types.checker;
     const referenced = await checker.getSymbolAtLocation((type as TypeQueryNode).exprName);
     const value = referenced ? await resolveAliases(checker, referenced) : undefined;
+
     return value?.id === valueSymbolId;
   }
 
@@ -870,6 +877,7 @@ export async function typeNodeReferencesValue(
     const referenced = await input.types.checker.getSymbolAtLocation(
       (type as TypeReferenceNode).typeName,
     );
+
     return referenced ? typeAliasReferencesValue(input, referenced, valueSymbolId, seen) : false;
   }
 
@@ -1087,6 +1095,7 @@ async function responseContainsNativeStream(
       await input.types.checker.getVoidType(),
       arguments_[1]!,
     );
+
     return yields || acceptsVoidCompletion;
   }
 
@@ -1335,6 +1344,7 @@ async function nativeStreamTypeIdentities(
   const resolveNativeType = async (name: string): Promise<number | undefined> => {
     const symbol = await checker.resolveName(name, SymbolFlags.Type, declaration);
     const resolved = symbol ? await resolveAliases(checker, symbol) : undefined;
+
     return resolved?.id;
   };
 
@@ -1380,6 +1390,7 @@ async function routeResponseObjectBranchKeys(
 function sourceNodeKey(node: Node): string {
   const source = node.getSourceFile();
   const filename = source.fileName.replaceAll("\\", "/");
+
   return `${process.platform === "win32" ? filename.toLowerCase() : filename}:${node.kind}:${node.getStart(source)}:${node.getEnd()}`;
 }
 
@@ -1408,6 +1419,7 @@ function sourceOrigin(
   const captured =
     input.capturedSources.get(path) ??
     [...input.capturedSources.values()].find((item) => samePath(item.filename, path));
+
   return {
     filename: path,
     start: 0,
@@ -1420,6 +1432,7 @@ function samePath(left: string, right: string): boolean {
 
   const normalizedLeft = normalize(left);
   const normalizedRight = normalize(right);
+
   return process.platform === "win32"
     ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
     : normalizedLeft === normalizedRight;
@@ -1431,6 +1444,7 @@ function routeModule(
   routes: readonly AppRouteFact[],
 ) {
   const data = JSON.stringify(routes);
+
   return {
     id,
     origin,

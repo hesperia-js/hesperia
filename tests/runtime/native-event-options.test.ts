@@ -56,6 +56,7 @@ test("native pairs keep per-element once, capture order, and passive cancellatio
     const sharedOnce = events.once(function (this: Element, event: Event) {
       calls.push(`${this.id}:${event.currentTarget === this}`);
     });
+
     onceA = element(owner, "button", { id: "once-a", "on:click": sharedOnce });
     onceB = element(owner, "button", { id: "once-b", "on:click": sharedOnce });
 
@@ -72,6 +73,7 @@ test("native pairs keep per-element once, capture order, and passive cancellatio
       },
       [capturedChild],
     );
+
     passiveButton = element(owner, "button", {
       id: "passive",
       "on:click": events.passive((event) => {
@@ -144,6 +146,7 @@ test("suspension suppresses dispatch and preserves native once consumption on re
     const sharedOnce = events.once(function (this: Element) {
       calls.push(`once:${this.id}`);
     });
+
     onceA = element(current, "button", { id: "once-a", "on:click": sharedOnce });
     onceB = element(current, "button", { id: "once-b", "on:click": sharedOnce });
     regular = element(current, "button", {
@@ -153,11 +156,13 @@ test("suspension suppresses dispatch and preserves native once consumption on re
 
     const authoredOptions = { capture: true };
     const authoredPair = [() => calls.push("released"), authoredOptions] as const;
+
     cleanupButton = element(current, "button", {
       id: "cleanup",
       "on:click": authoredPair,
     });
     const remove = cleanupButton.removeEventListener.bind(cleanupButton);
+
     cleanupButton.removeEventListener = ((
       type: string,
       listener: EventListener | null,

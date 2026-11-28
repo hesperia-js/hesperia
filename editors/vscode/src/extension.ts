@@ -20,6 +20,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     try {
       const require = createRequire(join(folder.uri.fsPath, "package.json"));
+
       server = require.resolve("@hesperia/language-server/bin");
     } catch {
       return;
@@ -95,6 +96,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               : diagnostics.filter((diagnostic) => {
                   const code =
                     typeof diagnostic.code === "object" ? diagnostic.code.value : diagnostic.code;
+
                   return typeof code === "string" && code.startsWith("HES-");
                 }),
           );

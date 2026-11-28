@@ -106,6 +106,7 @@ class SubscriptionOperation<T> implements AsyncIterableIterator<GraphQLResult<T>
     // Apollo filters some Next values and converts Link errors to next + complete.
     // Native outputs correlate only while this exact Link notification is forwarded.
     const previous = this.#frame;
+
     this.#frame = frame;
 
     try {
@@ -197,11 +198,13 @@ class SubscriptionOperation<T> implements AsyncIterableIterator<GraphQLResult<T>
 
     if (this.#policy === "ignore") {
       const { errors: _ignored, ...available } = result;
+
       result = available;
 
       if (executionErrors && !isGraphQLExecutionResult(result)) return;
     } else if (this.#policy === "none" && executionErrors) {
       const { data: _omitted, ...available } = result;
+
       result = available;
     }
 
@@ -235,6 +238,7 @@ class SubscriptionOperation<T> implements AsyncIterableIterator<GraphQLResult<T>
       this.#terminations.delete(this.stop);
 
       const subscription = this.#subscription;
+
       this.#subscription = undefined;
 
       try {

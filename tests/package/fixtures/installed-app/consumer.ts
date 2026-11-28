@@ -59,6 +59,7 @@ const validation: Form<ValidationInput, ValidationOutput> = client.form(schema, 
 const directRun = validation.run({ source: " Ada " });
 const directRunId: number = directRun.id;
 const directRunSignal: AbortSignal = directRun.signal;
+
 directRun.cancel();
 const directResult: StandardSchemaV1.Result<ValidationOutput> = await directRun;
 const runOptions: FormRunOptions = { submitter: document.createElement("button") };
@@ -72,6 +73,7 @@ const wrongFormOptions = { map: () => ({ source: 42 }) };
 
 // @ts-expect-error the map must return the schema input shape
 const rejectedFormOptions: FormOptions<ValidationInput> = wrongFormOptions;
+
 void rejectedFormOptions;
 
 const ordinaryTask = client.task(() => (input: string) => input);
@@ -110,6 +112,7 @@ const plugin: Plugin<{ value: string }> = { name: "typed" };
 const configured = defineConfig({ plugins: [plugin] });
 const palette: "packed plugin data" = SETTINGS.palette;
 const flag: true = SETTINGS.flags[0];
+
 void [configured, palette, flag];
 const count = client.state(0);
 const inputlessTask = client.task(() => async () => 42);
@@ -146,6 +149,7 @@ defaultedTask.run(42);
 
 // @ts-expect-error optional parameters do not erase the output type
 const wrongOptionalResult: number = await optionalTask.run();
+
 void wrongOptionalResult;
 const requiredUndefinedTask = client.task(() => (input: string | undefined) => input ?? "default");
 
@@ -226,18 +230,22 @@ void Router;
 // @ts-expect-error beforeLeave is not a Client capability.
 clientCapability.navigation; // oxlint-disable-line no-unused-expressions
 const result: Promise<ProjectCheckingResult> = checkProjectModules([]);
+
 void result;
 const required: string = env("TOKEN", "fallback");
 const optional: string | undefined = env("TOKEN", undefined, true);
 const numeric: number = env.num("PORT", 3000);
 const optionalNumeric: number | undefined = env.num("PORT", undefined, true);
 const boolean: boolean = env.bool("FEATURE_ENABLED");
+
 void [required, optional, numeric, optionalNumeric, boolean];
 // @ts-expect-error optional environment values can be undefined
 const wrongOptional: string = env("TOKEN", undefined, true);
+
 void wrongOptional;
 // @ts-expect-error numeric state is not a string
 const wrong: string = count();
+
 void wrong;
 
 function checkLiteralRouteTagTypes(): void {
@@ -252,6 +260,7 @@ function checkLiteralRouteTagTypes(): void {
   const optionalTags: readonly string[] | undefined = optional.tags;
   const pattern = route<"products/[id]">({ guard: ({ params }) => params.id.length > 0 });
   const typedGuard: Route.Guard<"products/[id]"> | undefined = pattern.guard;
+
   // @ts-expect-error misspelled untagged declaration fields remain errors
   route({ load: () => "", gaurd: () => false });
   // @ts-expect-error misspelled tagged declaration fields remain errors

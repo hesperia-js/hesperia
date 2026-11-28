@@ -32,6 +32,7 @@ async function captureImportedMarkupCoverage(page: Page): Promise<void> {
           coverage: Reflect.get(globalThis, "__hesperiaCoverage__"),
         }),
       });
+
       return { status: result.status, body: await result.text() };
     },
     {
@@ -66,6 +67,7 @@ test("compiled imported markup keeps native root behavior, ownership, and cleanu
     const target = window as Window & {
       __managedStyleErrors?: { href: string; integrity: string; title: string }[];
     };
+
     target.__managedStyleErrors = [];
 
     window.addEventListener(
@@ -130,6 +132,7 @@ test("compiled imported markup keeps native root behavior, ownership, and cleanu
       styleLinks.evaluateAll((links) =>
         links.map((link) => {
           const stylesheet = link as HTMLLinkElement;
+
           return {
             media: stylesheet.sheet?.media.mediaText ?? stylesheet.media,
             ready: stylesheet.sheet !== null || stylesheet.disabled,
@@ -185,6 +188,7 @@ test("compiled imported markup keeps native root behavior, ownership, and cleanu
   );
   const protectedResponse = await page.evaluate(async (href) => {
     const response = await fetch(href, { cache: "no-store" });
+
     return {
       bytes: [...new Uint8Array(await response.arrayBuffer())],
       contentType: response.headers.get("content-type"),
@@ -203,6 +207,7 @@ test("compiled imported markup keeps native root behavior, ownership, and cleanu
   const inheritedStylesheetAssetPath = inheritedStylesheetPath.slice("/_hesperia".length);
   const inheritedStylesheetHeaders = await page.evaluate(async (href) => {
     const response = await fetch(href, { cache: "no-store" });
+
     return {
       bytes: [...new Uint8Array(await response.arrayBuffer())],
       contentType: response.headers.get("content-type"),
@@ -216,6 +221,7 @@ test("compiled imported markup keeps native root behavior, ownership, and cleanu
 
   const inheritedStylesheetRecordType = await page.evaluate(async (path) => {
     const record = await (await fetch("/hesperia-build.json")).json();
+
     return record.hosting.assets.find((asset: { path: string }) => asset.path === path)
       ?.contentType;
   }, inheritedStylesheetAssetPath);
@@ -287,6 +293,7 @@ test("compiled imported markup keeps native root behavior, ownership, and cleanu
     await page.locator("#fragment-svg-use").evaluate((element) => {
       const attribute = element.getAttributeNode("xlink:href");
       const svg = element.closest("svg");
+
       return {
         name: attribute?.name,
         prefix: attribute?.prefix,
@@ -335,6 +342,7 @@ test("compiled imported markup keeps native root behavior, ownership, and cleanu
   const activeMedia = await styleLinks.evaluateAll((links) =>
     links.map((link) => {
       const stylesheet = link as HTMLLinkElement;
+
       return stylesheet.sheet?.media.mediaText ?? stylesheet.media;
     }),
   );
@@ -410,6 +418,7 @@ test("compiled imported markup keeps native root behavior, ownership, and cleanu
   );
   const inheritedAssetResponse = await page.evaluate(async (href) => {
     const response = await fetch(href, { cache: "no-store" });
+
     return {
       status: response.status,
       bytes: [...new Uint8Array(await response.arrayBuffer())],
@@ -429,6 +438,7 @@ test("compiled imported markup keeps native root behavior, ownership, and cleanu
     throw new Error("The mirrored stylesheet did not emit its relative image URL");
 
   const nativeAssetRequestURL = new URL(nativeAssetMatch[1]!);
+
   nativeAssetRequestURL.hash = "";
 
   expect(nativeAssetRequestURL.search).toBe("?native=asset");
@@ -584,6 +594,7 @@ test("compiled imported markup keeps native root behavior, ownership, and cleanu
       styleLinks.evaluateAll((links) =>
         links.map((link) => {
           const stylesheet = link as HTMLLinkElement;
+
           return stylesheet.sheet?.media.mediaText ?? stylesheet.media;
         }),
       ),
@@ -607,6 +618,7 @@ test("compiled imported markup keeps native root behavior, ownership, and cleanu
       styleLinks.evaluateAll((links) =>
         links.map((link) => {
           const stylesheet = link as HTMLLinkElement;
+
           return stylesheet.sheet?.media.mediaText ?? stylesheet.media;
         }),
       ),

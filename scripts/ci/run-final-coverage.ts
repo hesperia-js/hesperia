@@ -122,6 +122,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
+
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
@@ -236,6 +237,7 @@ function nativeEditorArguments(args: readonly string[]): readonly string[] {
       process.env.VSCODE_CODE_PATH ??
       join(process.env.LOCALAPPDATA ?? "", "Programs", "Microsoft VS Code", "Code.exe"),
   );
+
   return [codePath, ...(args[1] === undefined ? [] : [args[1]]), "--verify=artifacts-and-native"];
 }
 
@@ -441,6 +443,7 @@ function workerReceiptProvenance(run: FamilyRun): {
   readonly sha256: string;
 } {
   const path = join(run.outputDirectory, "worker-invocations.json");
+
   return { path, sha256: sha256File(path) };
 }
 
@@ -852,6 +855,7 @@ async function main(): Promise<void> {
     const ordinaryTests = ordinaryTestPaths();
     const expectedSources = inventoryCoverageSources(repoPath);
     const execution = group || aggregateRoot ? coverageExecution() : undefined;
+
     if (!group) {
       runId = randomUUID();
       outputDirectory = resolve(outputRoot, runId);
@@ -957,6 +961,7 @@ async function main(): Promise<void> {
         const support = originalSupport.map((artifact) =>
           relocateCoverageArtifact(artifact, imported.producerRepoPath, repoPath),
         );
+
         run = {
           ...run,
           artifacts: {
@@ -1108,6 +1113,7 @@ async function main(): Promise<void> {
         snapshotCoverageOwnerHits("driver");
 
         const artifacts = readAggregateArtifacts(runId!, outputDirectory!);
+
         return {
           family: "final-aggregate",
           runId: runId!,

@@ -467,6 +467,7 @@ function resolveNativeHandlerRanges(
         opening.attributes
           .filter((attribute) => {
             const name = node(attribute.name);
+
             return (
               name !== null && source.slice(name.start, name.end) === `on:${context.eventName}`
             );

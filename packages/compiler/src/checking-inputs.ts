@@ -114,6 +114,7 @@ export class CheckingInputSnapshot {
     const expected = [...this.#captured.values()].filter((input) =>
       isCheckingInput(input.filename),
     );
+
     return (
       value.length === expected.length && expected.every((input, index) => value[index] === input)
     );
@@ -183,6 +184,7 @@ function existingPathIdentity(filename: string): string {
 
 function isCheckingInput(filename: string): boolean {
   const normalized = filename.replaceAll("\\", "/").toLowerCase();
+
   return (
     !normalized.includes("/node_modules/typescript/") &&
     !/\/node_modules\/@typescript\/typescript-[^/]+\//u.test(normalized)

@@ -88,6 +88,7 @@ test("public package mount loads Blob sources and releases replaced and destroye
 
   const posterDecoded = await page.locator("#blob-video").evaluate(async (node) => {
     const image = new Image();
+
     image.src = (node as HTMLVideoElement).poster;
 
     await image.decode();
@@ -239,6 +240,7 @@ test("native srcset loads one of its emitted Blob and author candidates", async 
 
       const selection = await page.locator("#responsive-image").evaluate((node) => {
         const image = node as HTMLImageElement;
+
         return {
           srcset: image.getAttribute("srcset"),
           currentSrc: image.currentSrc,

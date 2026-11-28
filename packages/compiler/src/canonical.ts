@@ -90,6 +90,7 @@ export function canonicalize(
   const validated = markers.documentShell ? validateDocumentShell(resolved) : resolved;
   const assigned = assignOccurrences(validated);
   const nativeEvents = analyzeNativeEventOptions(assigned);
+
   return {
     ...assigned,
     diagnostics: [...assigned.diagnostics, ...nativeEvents.diagnostics],
@@ -188,6 +189,7 @@ function markConventionalDefaultComponent(
         initializer: marked,
       };
     });
+
     return declarations.some((item, index) => item !== statement.declarations[index])
       ? { ...statement, declarations }
       : statement;
@@ -221,6 +223,7 @@ function markFinalSequenceValue(
   const expressions = expression.expressions.map((value, index) =>
     index === finalIndex ? markFinalSequenceValue(value, mark) : value,
   );
+
   return expressions.some((value, index) => value !== expression.expressions[index])
     ? { ...expression, expressions }
     : expression;
@@ -930,6 +933,7 @@ function statement(
     }
     case "ReturnStatement": {
       const argument = node(input.argument);
+
       return {
         kind: "return",
         argument: argument ? expressionOrChild(argument, diagnostics, markers) : null,
@@ -938,6 +942,7 @@ function statement(
     }
     case "ExpressionStatement": {
       const expr = expressionOf(node(input.expression), diagnostics, markers);
+
       return expr ? { kind: "expression", expression: expr, span: span(input) } : null;
     }
     case "IfStatement": {
@@ -1136,6 +1141,7 @@ function statement(
           return statement(parsed, diagnostics, markers);
         })
         .filter((item): item is CanonicalStatement => item !== null);
+
       return { kind: "block", body: items, span: span(input) };
     }
     case "ExportNamedDeclaration": {
@@ -1551,11 +1557,13 @@ function patternOf(
   if (input.type === "AssignmentPattern") {
     const left = patternOf(node(input.left), diagnostics, markers);
     const right = expressionOf(node(input.right), diagnostics, markers);
+
     return left && right ? { kind: "default", left, right, span: span(input) } : null;
   }
 
   if (input.type === "RestElement") {
     const argument = patternOf(node(input.argument), diagnostics, markers);
+
     return argument ? { kind: "rest", argument, span: span(input) } : null;
   }
 
@@ -1819,6 +1827,7 @@ function keyedList(
     (bodyNode?.type === "BlockStatement" &&
       list(bodyNode.body).some((raw) => {
         const item = node(raw);
+
         return (
           item?.type === "ReturnStatement" &&
           (node(item.argument)?.type === "JSXElement" ||
@@ -2367,6 +2376,7 @@ function expressionOf(
 
       if (arg?.type === "SpreadElement") {
         const spread = expressionOf(node(arg.argument), diagnostics, markers);
+
         return spread ? ({ kind: "spread", argument: spread, span: span(arg) } as const) : null;
       }
 
@@ -2487,6 +2497,7 @@ function expressionOf(
     if (!validParameters || !body) return null;
 
     const id = node(input.id);
+
     return {
       kind: "function-expression",
       name: id && typeof id.name === "string" ? id.name : null,
@@ -2845,6 +2856,7 @@ function jsxElement(
           child: rendered,
           span: span(attr),
         };
+
         props.push(prop);
         diagnostics.push(renderedPropDiagnostic(prop));
       } else if (expression)
@@ -2977,6 +2989,7 @@ function annotationChildHasUnknownNamespace(raw: unknown): boolean {
   if (child.type !== "JSXExpressionContainer") return false;
 
   const expression = node(child.expression);
+
   return expression !== null && expression.type !== "Literal";
 }
 
@@ -2997,6 +3010,7 @@ function jsxChildren(
 
     if (child.type === "JSXText") {
       const value = typeof child.value === "string" ? cleanJsxText(child.value) : "";
+
       return value ? [{ kind: "text", occurrence: "", value, span: span(child) }] : [];
     }
 
@@ -3018,6 +3032,7 @@ function jsxChildren(
     }
 
     const nested = expressionOrChild(child, diagnostics, markers, parentNamespace);
+
     return nested && isCanonicalChild(nested) ? [nested] : [];
   });
 }
@@ -3074,6 +3089,7 @@ function parserShapeMatches(name: string, input: AstNode): boolean {
   };
   const parsed = parseFragment(markup) as unknown as { readonly childNodes?: readonly unknown[] };
   const actual = parserShapes(parsed.childNodes ?? []);
+
   return actual.length === 1 && sameParserShape(actual[0]!, expected);
 }
 
@@ -3147,6 +3163,7 @@ function parserChild(child: AstNode | null): ParserFragment | null {
   const markup = parserVoidElements.has(lowerName)
     ? `<${name}>`
     : `<${name}>${nested.markup}</${name}>`;
+
   return { markup, shapes: [{ name: lowerName, children: nested.shapes }] };
 }
 
@@ -3318,6 +3335,7 @@ function defaultRenderRoots(module: CanonicalModule): CanonicalElement[] {
     return [];
 
   const children = returnedChildren(exported.declaration.body);
+
   return children.filter(isElement);
 }
 
@@ -3429,6 +3447,7 @@ function jsxName(input: AstNode | null): string | null {
   if (input.type === "JSXMemberExpression") {
     const object = jsxName(node(input.object));
     const property = jsxName(node(input.property));
+
     return object && property ? `${object}.${property}` : null;
   }
 
@@ -3443,6 +3462,7 @@ function jsxAttributeName(input: AstNode | null): string | null {
   if (input.type === "JSXNamespacedName") {
     const namespace = node(input.namespace);
     const name = node(input.name);
+
     return namespace && name && typeof namespace.name === "string" && typeof name.name === "string"
       ? `${namespace.name}:${name.name}`
       : null;

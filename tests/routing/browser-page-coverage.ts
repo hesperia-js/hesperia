@@ -123,6 +123,7 @@ function expectedCases(ownerTestPath: string): BrowserPageCoverageExpectation[] 
 function hasPositiveAuthoredHits(coverage: Record<string, CoverageFile>): boolean {
   return Object.entries(coverage).some(([source, file]) => {
     const key = `${source}/${file.path}`.replaceAll("\\", "/").toLowerCase();
+
     return (
       key.includes("/packages/hesperia/src/") &&
       (Object.values(file.s ?? {}).some((count) => count > 0) ||
@@ -330,6 +331,7 @@ export class BrowserPageCoverageSuite {
           captureProcessId,
         };
         const pageGlobal = globalThis as Record<string, unknown>;
+
         pageGlobal[coverageVariable] = {};
         pageGlobal[contextGlobal] = context;
 

@@ -35,6 +35,7 @@ export function assertGeneratedAssetPublication(
 
   for (const pathname of generatedPaths) {
     const destination = new URL(origin);
+
     destination.pathname = pathname;
     const route = routing && classifyBrowserStaticPath(routing, destination, mountPathname);
     const publicCollision = publicPaths.has(pathname);

@@ -28,6 +28,7 @@ function Child(
 
 export default function Props() {
   const callback = client.state<(() => string) | undefined>(() => "first");
+
   return (
     <main>
       <button id="clear-callback" on:click={() => callback.set(undefined)}>

@@ -34,6 +34,7 @@ test("compiled structures preserve keyed DOM, scope updates, cleanup, and raw re
     page.evaluate(() => {
       const fixture = (globalThis as unknown as { structureFixture: StructureFixture })
         .structureFixture;
+
       return {
         errors: [...fixture.errors],
         warnings: [...fixture.warnings],
@@ -64,6 +65,7 @@ test("compiled structures preserve keyed DOM, scope updates, cleanup, and raw re
   const moved = await page.evaluate(
     ({ firstButtons }) => {
       const buttons = [...document.querySelectorAll<HTMLButtonElement>("#keyed-rows button")];
+
       return {
         order: buttons.map((button) => button.dataset.row ?? button.closest("li")?.dataset.row),
         preserved:
@@ -88,6 +90,7 @@ test("compiled structures preserve keyed DOM, scope updates, cleanup, and raw re
     await page.evaluate(
       ({ previous }) => {
         const spans = [...document.querySelectorAll("#native-rows span")];
+
         return spans[0] === previous[2] && spans[1] === previous[0] && spans[2] === previous[1];
       },
       { previous: initialSpans },

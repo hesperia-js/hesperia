@@ -575,6 +575,7 @@ async function recordGeneratedAssetBrowserEvents(
       response.url() === new URL("/", scenario.appOrigin).href &&
       response.request().isNavigationRequest() &&
       response.request().frame() === page.mainFrame();
+
     responseTasks.push(
       (async () => {
         try {
@@ -602,8 +603,10 @@ async function recordGeneratedAssetBrowserEvents(
 
               bodyLength = body.byteLength;
               bodySha256 = body.byteLength <= responseBodyLimit ? sha256(body) : null;
+
               if (isOriginalDocument && body.byteLength <= responseBodyLimit)
                 originalDocument = { url: url.href, status: response.status(), body };
+
               if (body.byteLength > responseBodyLimit)
                 bodyReadError = `Response exceeds ${responseBodyLimit} byte diagnostic body limit`;
             } catch (error) {
@@ -1090,6 +1093,7 @@ async function readNativeCredentialReference(
     }
 
     if (failures.length === 1) throw failures[0];
+
     if (failures.length > 1)
       throw new AggregateError(failures, "Native reference and cleanup failed");
   }
@@ -1362,6 +1366,7 @@ test("one captured browser graph serves native generated resources at same-origi
               asset.path.startsWith("/assets/native-css/") &&
               asset.path.endsWith("/native-media.css"),
           );
+
           expect(nativeMediaStyles).toHaveLength(1);
           const nativeMediaUrl = new URL(nativeMediaStyles[0]!.path.slice(1), scenario.assetRoot)
             .href;
@@ -1660,6 +1665,7 @@ test("one captured browser graph serves native generated resources at same-origi
             await page.locator('link[rel="modulepreload"]').evaluateAll((links) =>
               links.map((link) => {
                 const preload = link as HTMLLinkElement;
+
                 return { href: preload.href, credentials: preload.crossOrigin };
               }),
             )
@@ -1674,6 +1680,7 @@ test("one captured browser graph serves native generated resources at same-origi
               ),
           );
           const nextRouteModule = nextRouteModules.find((path) => path !== undefined);
+
           expect(nextRouteModules.filter((path) => path !== undefined)).toHaveLength(1);
           if (!nextRouteModule) throw new Error("The next route module was not emitted");
 
@@ -1913,6 +1920,7 @@ test("one captured browser graph serves native generated resources at same-origi
               moduleEvents.every((event) => event.syntheticCookiePresent === expectedCookie),
             ).toBe(true);
           }
+
           expect(
             nativeResources.some((event) => (event.contentType ?? "").startsWith("text/css")),
           ).toBe(true);
@@ -1952,11 +1960,13 @@ test("one captured browser graph serves native generated resources at same-origi
             ),
           ).toBe(true);
           expect(fontResponses.every((event) => event.bodySha256 === fontSourceSha256)).toBe(true);
+
           for (const stylesheetURL of generatedStylesheetURLs) {
             expect(new URL(stylesheetURL).origin).toBe(scenario.assetOrigin);
             expect(selectedRootRequests.some((event) => event.url === stylesheetURL)).toBe(true);
             expect(stylesheetResponses.some((event) => event.url === stylesheetURL)).toBe(true);
           }
+
           expect(
             pinnedManagedResponses.every(
               (event) => event.bodySha256 !== null && event.bodySha256 === event.expectedSha256,

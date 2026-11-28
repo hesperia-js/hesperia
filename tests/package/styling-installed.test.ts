@@ -220,6 +220,7 @@ function isInside(parent: string, child: string): boolean {
 
 test("packed PostCSS, Tailwind, and StyleX work in an installed development and production app", async () => {
   const stage = (name: string) => console.error(`[Q10-STYLING] ${name}`);
+
   stage("create temporary workspace");
   const tempRoot = resolve(tmpdir());
 

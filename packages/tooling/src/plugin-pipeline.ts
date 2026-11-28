@@ -348,6 +348,7 @@ export class PluginPipeline {
     options: { readonly allowUnsafeHTML?: boolean } = {},
   ) {
     const dependencyValidation = validatePluginDependencies(plugins);
+
     this.#plugins = [...dependencyValidation.active];
 
     this.#hookFailures.push(...dependencyValidation.failures.map((message) => ({ message })));
@@ -392,6 +393,7 @@ export class PluginPipeline {
   /** Pin exact authored project bytes that were read before this pipeline started. */
   async pinSource(filename: string, source: string): Promise<CapturedProjectSource> {
     const file = await this.#captureText(filename, source);
+
     return Object.freeze({ filename: file.filename, source, digest: file.digest });
   }
 
@@ -570,6 +572,7 @@ export class PluginPipeline {
     if (existing) return existing;
 
     const bytes = await readFile(filename);
+
     return this.#captureBytes(filename, bytes);
   }
 
@@ -792,6 +795,7 @@ export class PluginPipeline {
             } else result = interpreted;
           } catch (error) {
             const diagnosticOrigin = type === "svg" ? { filename: assetFilename } : origin;
+
             result = {
               declaration: {
                 code: "declare const value: unknown; export default value;",
@@ -1245,6 +1249,7 @@ function validateProjectModuleText(
 
 function pluginPathKey(filename: string): string {
   const normalized = resolve(filename).replaceAll("\\", "/");
+
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
@@ -1258,6 +1263,7 @@ function pluginProjectOrigin(
   if (declaration) return declaration.origin;
 
   const source = plugin.projectSources?.[0];
+
   return {
     filename: source ? resolve(root, source) : join(root, "hesperia.config.ts"),
     start: 0,
@@ -1274,6 +1280,7 @@ function pluginHookFallbackOrigin(
   if (declaration) return declaration.origin;
 
   const source = plugin.projectSources?.[0];
+
   return source ? { filename: resolve(root, source) } : undefined;
 }
 
@@ -1289,6 +1296,7 @@ export function generatedStyleFilename(
   }
 
   const token = new Bun.CryptoHasher("sha256").update(style.id).digest("hex").slice(0, 20);
+
   return join(dirname(style.origin.filename), `.hesperia-style-${token}.css`);
 }
 
@@ -1313,6 +1321,7 @@ function composeSourceMaps(
     context.source = currentInput;
     return protectedPrevious as SourceMapInput;
   }) as PluginSourceMap;
+
   return {
     ...composed,
     sources: composed.sources.map((source) => protectedNames.get(source) ?? source),
@@ -1351,6 +1360,7 @@ export function normalizeSourceMap(map: PluginSourceMap, filename: string): Plug
   const { sourceRoot, ...withoutSourceRoot } = map as PluginSourceMap & {
     readonly sourceRoot?: string;
   };
+
   return {
     ...withoutSourceRoot,
     sources: map.sources.map((source) => normalizeSourceName(source, sourceRoot, filename)),
@@ -1388,21 +1398,25 @@ function normalizeSourceName(
 
   if (rootProtocol === "file") {
     const rootPath = fileUrlPath(sourceRoot!);
+
     return rootPath ? normalizeFilePath(resolve(rootPath, source)) : source;
   }
 
   if (rootProtocol) return resolveUrlSource(sourceRoot!, source);
 
   const root = sourceRoot ? normalizePathSeparators(sourceRoot) : "";
+
   return normalizeFilePath(resolve(dirname(filename), root, normalizePathSeparators(source)));
 }
 
 function resolveUrlSource(sourceRoot: string, source: string): string {
   const root = new URL(sourceRoot);
+
   root.pathname = root.pathname.endsWith("/") ? root.pathname : `${root.pathname}/`;
   root.search = "";
   root.hash = "";
   const relativeSource = process.platform === "win32" ? source.replaceAll("\\", "/") : source;
+
   return new URL(relativeSource, root).href;
 }
 
@@ -1416,6 +1430,7 @@ function fileUrlPath(value: string): string | undefined {
 
 function normalizeFilePath(filename: string): string {
   const normalized = resolve(normalizePathSeparators(filename));
+
   return process.platform === "win32"
     ? normalized.replace(/^([a-z]):/iu, (_match, drive: string) => `${drive.toUpperCase()}:`)
     : normalized;
@@ -1594,6 +1609,7 @@ function rewriteWithMap(
       );
 
       const char = text[i]!;
+
       code += char;
 
       if (char === "\n") {
@@ -1681,6 +1697,7 @@ function componentOrigin(source: TransformedPluginSource, name: string): PluginO
     if (position.line === null || position.column === null) return offset;
 
     const lines = source.authored.split("\n");
+
     return (
       lines.slice(0, position.line - 1).reduce((sum, part) => sum + part.length + 1, 0) +
       position.column

@@ -80,6 +80,7 @@ async function captures() {
       coverage: seeded.coverage,
     });
     const hitCoverage = structuredClone(seeded.coverage);
+
     delete hitCoverage[resolve(producer, supportSource)];
 
     for (const record of Object.values(hitCoverage)) {
@@ -329,6 +330,7 @@ test("group admission rejects missing, foreign, stale, duplicate, failed, and ch
 
   const artifact = structuredClone(fixture.originals[0]!);
   const record = Object.values(artifact.coverage)[0]!;
+
   record.inputSourceMap = {
     ...record.inputSourceMap!,
     sources: [resolve(fixture.producer, "../foreign.ts")],

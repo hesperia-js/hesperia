@@ -25,6 +25,7 @@ export function errorBoundary(
   parent.assertActive();
 
   const owner = new Owner(parent.context, parent, `${parent.identity}/${slot}`);
+
   owner.executingBody = false;
   const document = owner.context.document;
   const fragment = document.createDocumentFragment();
@@ -54,6 +55,7 @@ export function errorBoundary(
 
   const rangeParent = (): Node | null => {
     const parentNode = end.parentNode;
+
     return parentNode && start.parentNode === parentNode ? parentNode : null;
   };
 

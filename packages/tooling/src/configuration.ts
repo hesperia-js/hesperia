@@ -153,6 +153,7 @@ export async function readConfiguration(root: string): Promise<ProjectConfigurat
     if (!previous) loadedTypeScript.set(tsFile, Uint8Array.from(bytes));
 
     const module = await import(pathToFileURL(tsFile).href);
+
     value = module.default;
   }
 
@@ -210,6 +211,7 @@ export async function readConfiguration(root: string): Promise<ProjectConfigurat
       if (descriptor?.enumerable) entries.push([name, Reflect.get(value, name)]);
     }
   }
+
   let mountURL = "/";
 
   for (const [name, setting] of entries) {

@@ -81,6 +81,7 @@ export class Scheduler {
 
     owner.onCleanup(() => {
       const cleanup = task.cleanup;
+
       task.cleanup = undefined;
 
       cleanup?.();

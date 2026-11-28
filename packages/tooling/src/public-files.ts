@@ -362,6 +362,7 @@ export async function capturePublicFiles(
       reportWatch?.(Object.freeze({ kind: "directory", dir: target }));
 
       const children = await readdir(target);
+
       children.sort(compareText);
 
       for (const name of children) {
@@ -452,6 +453,7 @@ function staticPageSources(routes: RouteManifest): ReadonlyMap<string, readonly 
     }
 
     const prior = sources.get(urlPath) ?? [];
+
     prior.push(route.files.page);
     sources.set(urlPath, prior);
   }
