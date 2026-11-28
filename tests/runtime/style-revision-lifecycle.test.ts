@@ -18,6 +18,7 @@ function revisionWithTrackedAbortListeners() {
   const active = new Set<unknown>();
   const add = controller.signal.addEventListener.bind(controller.signal);
   const remove = controller.signal.removeEventListener.bind(controller.signal);
+
   controller.signal.addEventListener = ((
     type: string,
     listener: EventListenerOrEventListenerObject | null,
@@ -42,6 +43,7 @@ function revisionWithTrackedAbortListeners() {
   }) as typeof remove;
 
   const runtime = createInternalStyleRuntime(emptyPlan);
+
   return {
     active,
     controller,

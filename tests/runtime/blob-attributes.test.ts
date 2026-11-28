@@ -80,6 +80,7 @@ test("Blob src, video poster, and structured srcset URLs follow attribute and ow
   const App = defineComponent((owner) => {
     pageOwner = owner;
     const client = createClient(owner);
+
     generic = client.state<Blob | string>(first);
     peer = client.state<Blob | string>(first);
     imageSource = client.state<Blob | string>(first);
@@ -238,6 +239,7 @@ test("a failed Blob attribute write revokes only its new URL and keeps the prior
   const firstURL = image.getAttribute("src")!;
   const originalSetAttribute = image.setAttribute.bind(image);
   const failure = new Error("attribute write failed");
+
   image.setAttribute = (name, value) => {
     if (name === "src" && value !== firstURL) throw failure;
 
@@ -275,6 +277,7 @@ test("direct embedded-document elements fault before document creation", () => {
   const application = mount(target, App, {}, { onError: (error) => errors.push(error) });
   const createdTags: string[] = [];
   const createElement = window.document.createElement.bind(window.document);
+
   window.document.createElement = ((tag: string) => {
     if (["iframe", "embed", "object"].includes(tag)) createdTags.push(tag);
 

@@ -88,6 +88,7 @@ let rememberedFrame: Element | null | undefined;
 const Root = defineComponent((owner) => {
   const client = createClient(owner);
   const sandbox = client.state("allow-scripts");
+
   setSandbox = (tokens) => sandbox.set(tokens);
   wrapperBinding = client.bind<HTMLElement>();
   return [
@@ -125,6 +126,7 @@ const Root = defineComponent((owner) => {
 });
 
 const definition = registerProjectPolicy(Root, { allowUnsafeEmbed: true });
+
 application = mount(
   document.querySelector("#app")!,
   definition,
@@ -150,6 +152,7 @@ window.embedProbe = {
 
   identity() {
     const frame = document.querySelector('iframe[name="dynamic"]');
+
     return {
       bindingStable: wrapperBinding() === rememberedBinding,
       wrapperNodeStable: frame?.parentElement === rememberedWrapper,

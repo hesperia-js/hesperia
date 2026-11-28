@@ -63,6 +63,7 @@ const router = new Router({
     prepare() {
       const node = document.createElement("main");
       const control = document.createElement("button");
+
       fixture.lastNode = node;
       node.textContent = url.pathname;
       control.id = "route-focus";
@@ -88,6 +89,7 @@ const router = new Router({
     },
   }),
 });
+
 fixture.router = router;
 
 await router.navigate(location.href, { history: "replace", state: { entry: "root" } });

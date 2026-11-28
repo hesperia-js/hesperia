@@ -15,6 +15,12 @@
   "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "imports": {
+    "#hesperia-elysia-resources": {
+      "types": "./dist/package-resources.d.ts",
+      "default": "./dist/package-resources.js"
+    }
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -33,7 +39,7 @@
     }
   },
   "scripts": {
-    "build": "bunx tsc -p tsconfig.build.json"
+    "build": "bunx --bun --no-install tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@jridgewell/remapping": "2.3.5",

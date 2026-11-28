@@ -66,6 +66,7 @@ test("replacing a rendered fragment removes descendants added after its initial 
   const App = defineComponent((owner) => {
     nested = createClient(owner).state<Rendered>("first");
     const fragment = child(owner, nested);
+
     content = createClient(owner).state<Rendered>([fragment]);
     return child(owner, content);
   });

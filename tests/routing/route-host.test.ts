@@ -111,6 +111,7 @@ function definitions(events: string[]) {
       },
     },
   );
+
   return { Frame, Nested, Page };
 }
 
@@ -132,6 +133,7 @@ function routeInputs(
 } {
   const controller = new AbortController();
   const query = createQueryParams(search, controller.signal);
+
   return {
     query,
     controller,

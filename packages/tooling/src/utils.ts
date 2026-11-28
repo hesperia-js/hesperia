@@ -10,6 +10,7 @@ export function isMissingFile(error: unknown): error is { readonly code: "ENOENT
 
 export function sourceKey(filename: string): string {
   const normalized = resolve(filename).replaceAll("\\", "/");
+
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 

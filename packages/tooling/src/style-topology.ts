@@ -93,6 +93,7 @@ export function buildStyleTopology(
       const separator = style.owner.id.lastIndexOf("#");
       const filename = style.owner.id.slice(0, separator);
       const name = style.owner.id.slice(separator + 1);
+
       ownerFilename = filename;
 
       ownerIds =
@@ -105,6 +106,7 @@ export function buildStyleTopology(
       const shell = [...compilation.modules].find(([filename]) => filename.endsWith("app.tsx"));
 
       const filename = shell?.[0];
+
       ownerFilename = filename;
       const rootName = shell && defaultExportName(shell[1]);
 
@@ -284,5 +286,6 @@ function defaultExportName(module: CompileResult): string | undefined {
 
 function key(filename: string): string {
   const normalized = resolve(filename).replaceAll("\\", "/");
+
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }

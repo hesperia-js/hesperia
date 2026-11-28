@@ -175,6 +175,7 @@ test("a newer main push cancels older ordinary main CI after fresh run and branc
 
 test("ordinary feature merges and queued candidates remain eligible for cancellation", async () => {
   const fixture = scenario();
+
   fixture.pull.head.ref = "feature/example";
   fixture.currentPull.head.ref = "feature/newer";
   fixture.candidate.status = "queued";
@@ -431,6 +432,7 @@ for (const endpoint of [
 ]) {
   test(`retains CI when ${endpoint} cannot establish cancellation safety`, async () => {
     const fixture = scenario();
+
     fixture.fail = endpoint;
 
     expect((await execute(fixture)).canceled).toEqual([]);

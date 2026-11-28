@@ -114,6 +114,7 @@ async function captureBrowserPageCoverage(
           coverage: Reflect.get(globalThis, "__hesperiaCoverage__"),
         }),
       });
+
       return { status: result.status, body: await result.text() };
     },
     {
@@ -179,6 +180,7 @@ test("unready direct mounts reveal the same text and elements in their final hos
     const target = document.querySelector("#first-target")!;
     const button = target.querySelector(".css-red-node") as HTMLButtonElement;
     const wrapper = button.parentElement!;
+
     return {
       existingElement: target.firstChild === document.querySelector("#existing-element"),
       existingText: target.childNodes[1]?.textContent,
@@ -222,6 +224,7 @@ test("unready direct mounts reveal the same text and elements in their final hos
     const links = [...document.head.querySelectorAll<HTMLLinkElement>("link[href]")].filter(
       (link) => link.href === expectedHref,
     );
+
     return links.length === 1;
   }, redStylesheetHref);
 
@@ -242,6 +245,7 @@ test("unready direct mounts reveal the same text and elements in their final hos
   const replacementPending = await page.evaluate((expectedHref) => {
     const first = document.querySelector("#first-target .css-red-node") as HTMLButtonElement;
     const second = document.querySelector("#second-target .css-red-node") as HTMLButtonElement;
+
     return {
       firstConnected: first.isConnected,
       secondConnected: second.isConnected,
@@ -302,6 +306,7 @@ test("unready direct mounts reveal the same text and elements in their final hos
     }));
     const styles = [firstButton, secondButton].map((node) => getComputedStyle(node).color);
     const snapshot = harness.snapshot();
+
     return {
       nodes,
       styles,
@@ -471,6 +476,7 @@ for (const failureCase of cssFailureCases) {
 
       if (kind === "element") {
         const target = document.querySelector("#first-target")!;
+
         return {
           kind,
           pendingWrapper: Boolean(target.querySelector("[data-hesperia-pending]")),
@@ -484,6 +490,7 @@ for (const failureCase of cssFailureCases) {
       }
 
       const button = document.querySelector(".css-document-node") as HTMLElement;
+
       return {
         kind,
         bodyId: document.body.id,
@@ -568,6 +575,7 @@ test("conditional owner styles stay inactive until the conditional Owner is moun
       const node = document.querySelector(
         "#without-conditional-child-conditional-shell.css-red-node",
       );
+
       return node ? getComputedStyle(node).color : null;
     })(),
   }));
@@ -783,6 +791,7 @@ test("Document mount waits on its installed head and releases preloaded old-head
 
   const ready = await page.evaluate(() => {
     const snapshot = window.__cssRuntimeHarness.snapshot();
+
     return {
       bodyDisplay: getComputedStyle(document.body).display,
       documentSnapshot: snapshot.documentSnapshot,
@@ -888,6 +897,7 @@ test("a superseded revision rejects while its shared replacement response is sti
 
   await page.evaluate(() => {
     const node = document.querySelector("#first-target .css-red-node") as HTMLButtonElement;
+
     node.textContent = "retained local state";
     window.__cssRuntimeRevisionNode = node;
     window.__cssRuntimeRevisionEffects = window.__cssRuntimeHarness.snapshot().effects.length;
@@ -897,6 +907,7 @@ test("a superseded revision rejects while its shared replacement response is sti
     (request) => new URL(request.url()).pathname === "/css/red-next.css",
   );
   const outcome = await page.evaluate(() => window.__cssRuntimeHarness.startRevisionSupersession());
+
   await nextRequest;
 
   expect(outcome).toStrictEqual({ status: "rejected", kind: "style-revision-superseded" });
@@ -922,6 +933,7 @@ test("a superseded revision rejects while its shared replacement response is sti
   expect(
     await page.evaluate(() => {
       const node = document.querySelector("#first-target .css-red-node") as HTMLButtonElement;
+
       return {
         sameNode: node === window.__cssRuntimeRevisionNode,
         text: node.textContent,
@@ -1007,6 +1019,7 @@ test("a failed CSS-only revision leaves old styles, native nodes, and local stat
 
   await page.evaluate(() => {
     const node = document.querySelector("#first-target .css-red-node") as HTMLButtonElement;
+
     node.textContent = "unchanged after failed revision";
     window.__cssRuntimeRevisionNode = node;
     window.__cssRuntimeRevisionEffects = window.__cssRuntimeHarness.snapshot().effects.length;
@@ -1016,6 +1029,7 @@ test("a failed CSS-only revision leaves old styles, native nodes, and local stat
     (item) => new URL(item.url()).pathname === "/css/red-next.css",
   );
   const outcome = await page.evaluate(() => window.__cssRuntimeHarness.failRevision());
+
   await request;
 
   expect(outcome).toStrictEqual({ status: "rejected", kind: "stylesheet-load" });
@@ -1023,6 +1037,7 @@ test("a failed CSS-only revision leaves old styles, native nodes, and local stat
   expect(
     await page.evaluate(() => {
       const node = document.querySelector("#first-target .css-red-node") as HTMLButtonElement;
+
       return {
         color: getComputedStyle(node).color,
         sameNode: node === window.__cssRuntimeRevisionNode,

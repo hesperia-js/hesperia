@@ -165,6 +165,7 @@ export function Probe() {
       }}>M-SEARCH</button>
       <button id="query-array-revalidate" on:click={() => {
         const run = arrayQuery.revalidate();
+
         runtime.__hesperiaR16ArrayRevalidateRun = run;
 
         void run.catch(() => undefined);
@@ -175,9 +176,11 @@ export function Probe() {
       <button id="preview-refresh" on:click={() => {
         const run = (async () => {
           const result = await previewRefresh.run({ body: { fileId: "notes", title: "after" } });
+
           await optionalOmitted.ready;
           return result;
         })();
+
         runtime.__hesperiaR16PreviewRefreshRun = run;
 
         void run.catch(() => undefined);

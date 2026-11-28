@@ -54,6 +54,7 @@ export function classifyProjectWorkerOwnerSelection(
       projectWorkerOwnerTestPaths.some((ownerPath) => {
         const owner = resolve(repoPath, ownerPath);
         const child = relative(resolve(repoPath, path), owner);
+
         return child === "" || (child !== ".." && !child.startsWith(`..${sep}`));
       })
     );
@@ -112,17 +113,20 @@ const sourcePreload = "scripts/ci/coverage-editor-preload.ts";
 const sourceCollector = "scripts/ci/coverage-collector.ts";
 const sourceInventory = "scripts/ci/coverage-inventory.ts";
 const sourceChecker = "scripts/ci/check-coverage.ts";
+const sourceSaxeChecker = "scripts/ci/check-saxe-integration-coverage.ts";
 const sourceCoverageClassifier = "scripts/ci/coverage-source-classifier.ts";
 const sourceWorkerBuild = "scripts/ci/coverage-worker-build.ts";
 const sourceLauncher = "scripts/ci/coverage-owner-launcher.ts";
 
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
+
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
 function exactPathFilter(paths: readonly string[]): RegExp {
   const escaped = paths.map((path) => path.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
+
   return new RegExp(`^(?:${escaped.join("|")})$`, process.platform === "win32" ? "iu" : "u");
 }
 
@@ -141,6 +145,7 @@ function profileSources(profiles: readonly CoverageOwnerProfile[]): string[] {
 
 function sourceKey(path: string): string {
   const relativePath = relative(repoPath, resolve(path)).split(sep).join("/");
+
   return process.platform === "win32" ? relativePath.toLowerCase() : relativePath;
 }
 
@@ -160,6 +165,7 @@ function ownerProfiles(
           driver,
           "scripts/ci/coverage-group-artifacts.ts",
           sourceChecker,
+          sourceSaxeChecker,
           sourceCoverageClassifier,
           sourceLauncher,
           sourceCollector,
@@ -181,6 +187,7 @@ function ownerProfiles(
   if (driver === "scripts/ci/run-coverage.ts") {
     const targets = driverArguments[0] === "--" ? driverArguments.slice(1) : driverArguments;
     const workerMode = classifyProjectWorkerOwnerSelection(targets) !== undefined;
+
     return [
       {
         key: "driver",
@@ -307,6 +314,7 @@ function validatePopulationSourceSet(
 
     if (!populationFile) {
       const relativePath = relative(repoPath, source.path).split(sep).join("/");
+
       throw new Error(`Coverage owner population omitted prepared support source: ${relativePath}`);
     }
 
@@ -344,6 +352,7 @@ function assertPreparedOwnerFiles(
     ownerFiles.some((ownerFile) => {
       const source = ownerFile.sources[0];
       const expectedOwnerFile = source ? expected.get(source) : undefined;
+
       return !expectedOwnerFile || JSON.stringify(ownerFile) !== JSON.stringify(expectedOwnerFile);
     })
   ) {
@@ -386,6 +395,7 @@ function validateLaunchState(state: CaptureState): void {
     manifest.profiles.length === expectedProfiles.length &&
     manifest.profiles.every((profile, index) => {
       const expected = expectedProfiles[index];
+
       return (
         expected !== undefined &&
         profile.key === expected.key &&
@@ -632,6 +642,7 @@ export function snapshotCoverageOwnerHits(key: CoverageOwnerProfile["key"] = "dr
 
 export function coverageOwnerSources(key: CoverageOwnerProfile["key"]): readonly string[] {
   const state = currentState();
+
   return state ? profileByKey(state, key).sources : [];
 }
 
@@ -639,6 +650,7 @@ export function coverageOwnerProfile(
   key: CoverageOwnerProfile["key"],
 ): CoverageOwnerProfile | undefined {
   const state = currentState();
+
   return state?.manifest.profiles.find((profile) => profile.key === key);
 }
 
@@ -972,6 +984,7 @@ Reflect.set(globalThis, Symbol.for("hesperia.coverage.owner-capture.v1"), {
         ? process.env.HESPERIA_BROWSER_COVERAGE_OMIT_FRAGMENT
         : undefined;
     const environment = { ...process.env };
+
     delete environment.BUN_OPTIONS;
     delete environment.NODE_OPTIONS;
 
@@ -999,6 +1012,7 @@ Reflect.set(globalThis, Symbol.for("hesperia.coverage.owner-capture.v1"), {
       stdout: "inherit",
       stderr: "inherit",
     });
+
     return await child.exited;
   } finally {
     rmSync(launchDirectory, { recursive: true, force: true });
@@ -1018,6 +1032,7 @@ async function main(): Promise<void> {
   const separator = args.indexOf("--", 1);
   const driverArguments = separator < 0 ? args.slice(1) : args.slice(separator + 1);
   const exitCode = await launch(driverArgument, driverArguments);
+
   process.exitCode = exitCode;
 }
 

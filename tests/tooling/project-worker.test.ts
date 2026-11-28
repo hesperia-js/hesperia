@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -18,6 +18,66 @@ afterEach(async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a configured development build refuses a changed plugin import and can rebuild", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-worker-plugin-input-"));
+
+  roots.push(root);
+
+  await linkFrameworkPackages(root);
+  await mkdir(join(root, "src"));
+  await writeFile(
+    join(root, "app.tsx"),
+    'import palette from "./palette.dat" with { type: "palette" }; export default function App() { return <html><head></head><body>{palette}</body></html>; }',
+  );
+
+  const asset = join(root, "palette.dat");
+
+  await writeFile(asset, "captured-before-change");
+  await writeFile(
+    join(root, "hesperia.config.ts"),
+    `
+import { writeFile } from "node:fs/promises";
+import { defineConfig } from "@hesperia/tooling";
+
+export default defineConfig({
+  plugins: [{
+    name: "palette",
+    importTypes: {
+      async palette(input) {
+        const value = await input.file.blob.text();
+        if (value === "captured-before-change")
+          await writeFile(input.file.filename, "captured-after-change");
+
+        return {
+          declaration: { code: "declare const value: string; export default value;", origin: input.importSpan },
+          browser: { code: "export default " + JSON.stringify(value) + ";", origin: input.importSpan },
+        };
+      },
+    },
+  }],
+});
+`,
+  );
+
+  await expect(prepareBuild(root, true)).rejects.toMatchObject({
+    message: "A captured plugin input changed during browser development preparation: " + asset,
+    watch: expect.arrayContaining([{ kind: "file", file: asset }]),
+  });
+  expect(await readFile(asset, "utf8")).toBe("captured-after-change");
+
+  const current = await prepareBuild(root, true);
+  const scripts = (
+    await Promise.all(
+      [...current.files]
+        .filter(([path]) => path.endsWith(".js"))
+        .map(([, script]) => script.text()),
+    )
+  ).join("\n");
+
+  expect(scripts).toContain("captured-after-change");
+  expect(scripts).not.toContain("captured-before-change");
+}, 60_000);
 
 test("project-root worker reloads changed config and ignores plugin logging", async () => {
   const root = await mkdtemp(join(tmpdir(), "hesperia-worker-"));
@@ -77,6 +137,10 @@ export default defineConfig({
 
   const build = await buildInProjectProcess(root, false);
 
+  expect(build.hosting.version).toBe(1);
+
+  expect("publicFiles" in build).toBe(false);
+
   expect(build.hosting.standaloneMountURL).toBe("/worker");
 
   expect(build.hosting.assets.map((asset) => asset.path)).toStrictEqual(
@@ -93,7 +157,39 @@ export default defineConfig({
 
   expect(scripts.includes("second")).toBe(true);
 
-  expect((await prepareBuild(root)).files.size).toBeGreaterThan(0);
+  const binary = new Uint8Array([0x00, 0x80, 0xff, 0xc3, 0x28]);
+
+  await mkdir(join(root, "public"));
+
+  await writeFile(join(root, "public", "worker.bin"), binary);
+
+  const captured = await prepareBuild(root);
+
+  expect(captured.files.size).toBeGreaterThan(0);
+
+  expect(captured.hosting.version).toBe(2);
+
+  expect("publicFiles" in captured).toBe(true);
+
+  if (!("publicFiles" in captured)) throw new Error("Expected a version 2 public capture");
+
+  expect(captured.hosting.publicFiles).toHaveLength(1);
+
+  expect(captured.hosting.publicFiles[0]).toMatchObject({
+    relativePath: "worker.bin",
+    urlPath: "/worker.bin",
+    contentType: "application/octet-stream",
+  });
+
+  expect(captured.files.has("/worker.bin")).toBe(false);
+
+  const publicBlob = captured.publicFiles.get("/worker.bin");
+
+  expect(publicBlob).toBeInstanceOf(Blob);
+
+  expect(publicBlob!.type).toBe("application/octet-stream");
+
+  expect([...new Uint8Array(await publicBlob!.arrayBuffer())]).toStrictEqual([...binary]);
 
   await writeFile(
     join(root, "hesperia.config.ts"),
@@ -129,4 +225,46 @@ export default defineConfig({
   setTimeout(() => controller.abort(), 100);
 
   await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+}, 60_000);
+
+test("the configured worker refuses a development build after its configuration changes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hesperia-worker-config-"));
+
+  roots.push(root);
+
+  await linkFrameworkPackages(root);
+  await mkdir(join(root, "src"));
+  await writeFile(
+    join(root, "app.tsx"),
+    "export default function App() { return <html><head></head><body>Hello</body></html>; }",
+  );
+
+  const filename = join(root, "hesperia.config.ts");
+  const config = (change: boolean) => `
+import { appendFile } from "node:fs/promises";
+import { defineConfig } from "@hesperia/tooling";
+export default defineConfig({
+  plugins: [{
+    name: "edit-config",
+    async transformSource(input) {
+      if (${change} && input.filename.endsWith("app.tsx")) {
+        await appendFile(new URL(import.meta.url), "\\n// edited during compilation\\n");
+      }
+      return { code: input.current };
+    },
+  }],
+});
+`;
+
+  await writeFile(filename, config(false));
+
+  expect((await prepareBuild(root, true)).files.size).toBeGreaterThan(0);
+
+  await writeFile(filename, config(true));
+
+  await expect(prepareBuild(root, true)).rejects.toThrow(
+    "The original project configuration changed during browser development preparation",
+  );
+
+  expect((await readFile(filename, "utf8")).endsWith("// edited during compilation\n")).toBe(true);
 }, 60_000);

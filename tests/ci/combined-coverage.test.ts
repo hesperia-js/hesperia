@@ -38,6 +38,7 @@ function stableJson(value: unknown): string {
     const entries = Object.entries(value as Record<string, unknown>)
       .filter(([, entry]) => entry !== undefined)
       .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+
     return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`).join(",")}}`;
   }
 
@@ -260,6 +261,7 @@ async function makeFixture(options: {
 
 function receiptPath(finalRunsRoot: string): string {
   const runDirectory = join(finalRunsRoot, readdirSync(finalRunsRoot)[0]!);
+
   return join(runDirectory, "platform-coverage-capture.json");
 }
 
@@ -391,6 +393,7 @@ test("combined coverage rejects failed captures and source, population, or unit-
   const alteredMap = structuredClone(original) as unknown as {
     coverage: Record<string, { statementMap: Record<string, { start: { line: number } }> }>;
   };
+
   alteredMap.coverage[fixture.source]!.statementMap["0"]!.start.line = 2;
 
   writeReceipt(linuxReceipt, alteredMap);
@@ -457,6 +460,7 @@ test("combined coverage rejects failed captures and source, population, or unit-
     }>;
   };
   const linuxRecord = alteredPopulation.coverage[fixture.source]!;
+
   linuxRecord.statementMap["0"]!.start.line = 2;
   alteredPopulation.population.files[0]!.canonicalUnitsSha256 = portableUnitLayoutHash(
     linuxRecord as unknown as CoverageFile,
@@ -470,6 +474,7 @@ test("combined coverage rejects failed captures and source, population, or unit-
     ...nativeRun.nativeEvidence!.observationPath.slice(".hesperia/".length).split("/"),
   );
   const observation = JSON.parse(readFileSync(observationPath, "utf8")) as Record<string, unknown>;
+
   observation.populationFingerprint = alteredPopulation.population.fingerprint;
   const observationBytes = JSON.stringify(observation);
 

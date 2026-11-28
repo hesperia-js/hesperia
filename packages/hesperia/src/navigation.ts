@@ -51,17 +51,20 @@ export type HesperiaNavigation = Omit<
 export const navigation: HesperiaNavigation = new Proxy(new EventTarget(), {
   get(_target, property) {
     const active = navigationForCurrentWindow() as unknown as Record<PropertyKey, unknown>;
+
     return active[property];
   },
 
   set(_target, property, value) {
     const active = navigationForCurrentWindow() as unknown as Record<PropertyKey, unknown>;
+
     active[property] = value;
     return true;
   },
 
   has(_target, property) {
     const active = navigationForCurrentWindow() as unknown as Record<PropertyKey, unknown>;
+
     return property in active;
   },
 }) as unknown as HesperiaNavigation;

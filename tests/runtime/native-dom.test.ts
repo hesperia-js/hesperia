@@ -73,6 +73,7 @@ test("dynamic native properties reset and ordinary attributes are removed", () =
   let input!: HTMLInputElement;
   const App = defineComponent((owner) => {
     const client = createClient(owner);
+
     value = client.state<string | undefined>("initial");
     checked = client.state<boolean | undefined>(true);
     title = client.state<string | undefined>("label");
@@ -117,6 +118,7 @@ test("unsafe bindings publish absence after external removal", async () => {
   const App = defineComponent((owner) => {
     const client = createClient(owner);
     const binding = client.unsafeBind<HTMLDivElement>();
+
     read = binding;
 
     client.effect(() => {
@@ -167,6 +169,7 @@ test("component bindings reject a duplicate live attachment", () => {
   );
   const App = defineComponent((owner) => {
     const binding = createClient(owner).bind<{ read(): string }>();
+
     return [
       component(owner, Child, { bind: binding }, "first"),
       component(owner, Child, { bind: binding }, "second"),
@@ -191,6 +194,7 @@ test("a component publication endpoint rejects writes after its owner is destroy
   );
   const App = defineComponent((owner) => {
     const binding = createClient(owner).bind<{ read(): string }>();
+
     return component(owner, Child, { bind: binding }, "child");
   });
 

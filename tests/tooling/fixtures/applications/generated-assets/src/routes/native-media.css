@@ -1,0 +1,19 @@
+@font-face {
+  font-family: HesperiaProof;
+  src: url("../../assets/proof.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+#font-proof {
+  font-family: HesperiaProof, sans-serif;
+  font-size: 100px;
+}
+
+#asset-image {
+  width: 8px;
+  height: 8px;
+  background-image: url("../../assets/proof.svg");
+  background-repeat: no-repeat;
+}

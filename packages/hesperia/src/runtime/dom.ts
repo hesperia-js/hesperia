@@ -1,5 +1,11 @@
 import { attachElementBinding, type Binding } from "./binding.ts";
-import { Owner, RenderFault, reportFault, type RuntimeContext } from "./owner.ts";
+import {
+  disposeOwnerSyncPreservingFailure,
+  Owner,
+  RenderFault,
+  reportFault,
+  type RuntimeContext,
+} from "./owner.ts";
 import { Scheduler } from "./scheduler.ts";
 import { installRootProjectPolicy } from "./project-policy.ts";
 import {
@@ -273,6 +279,7 @@ export function child(owner: Owner, read: () => unknown): DocumentFragment {
             previous && typeof previous.value !== "object"
               ? (previous.nodes[0] as Text)
               : document.createTextNode("");
+
           scalar.data = String(value);
           return { value, nodes: [scalar] };
         }
@@ -411,6 +418,7 @@ export function attribute(owner: Owner, node: Element, name: string, read: () =>
     }
 
     const previousURLs = ownedURLs;
+
     ownedURLs = nextURLs;
 
     for (const [blob, entry] of previousURLs) {
@@ -472,6 +480,7 @@ function createOwnedObjectURL(document: Document, blob: Blob): OwnedObjectURL {
     throw new RenderFault("blob-url", "This document cannot create and release Blob object URLs");
 
   const value = url.createObjectURL(blob);
+
   return { url: value, release: () => url.revokeObjectURL(value) };
 }
 
@@ -510,7 +519,10 @@ export function element<K extends keyof HTMLElementTagNameMap>(
   children?: readonly Rendered[],
 ): HTMLElementTagNameMap[K];
 
-/** Create a namespace-qualified native element for compiler-validated foreign content. */
+/**
+ * Create a namespace-qualified native element for compiler-validated foreign content.
+ * An omitted namespace uses ordinary element creation; an empty string preserves no namespace.
+ */
 export function element(
   owner: Owner,
   tag: string,
@@ -534,9 +546,10 @@ export function element(
       "Use Hesperia's official Embed component from hesperia/embed instead of creating embedded-document elements directly",
     );
 
-  const node = namespace
-    ? owner.context.document.createElementNS(namespace, tag)
-    : owner.context.document.createElement(tag);
+  const node =
+    namespace !== undefined
+      ? owner.context.document.createElementNS(namespace, tag)
+      : owner.context.document.createElement(tag);
 
   owner.nodes.add(node);
 
@@ -596,8 +609,19 @@ export interface MountOptions {
 
 /** Mounted application lifetime and deterministic effect completion barrier. */
 export interface MountedApplication {
-  /** Remove the application and revoke its owned work. Idempotent. */
-  dispose(reason?: unknown): void;
+  /**
+   * Revoke immediately and join the same owned cleanup operation on every call.
+   * If this method starts disposal, its Promise rejects with the original cleanup failures
+   * in invocation order and does not also report them through `onError`.
+   */
+  dispose(reason?: unknown): Promise<void>;
+
+  /**
+   * Revoke immediately and report synchronous failures through `onError`.
+   * If this method starts disposal, later asynchronous failures are reported once through
+   * the same route. A later `dispose()` joins the retained outcome without rerunning cleanup.
+   */
+  disposeSync(reason?: unknown): void;
 
   /** Resolve when pending DOM and effect passes have settled. */
   settled(): Promise<void>;
@@ -654,6 +678,7 @@ export function createRuntimeRoot(
     nextGeneration: 0,
   } as RuntimeContext;
   const owner = new Owner(context, null, "root");
+
   context.scheduler = new Scheduler(owner);
   return { context, owner };
 }
@@ -675,7 +700,7 @@ export function prepareTree(owner: Owner, render: () => Rendered): PreparedTree 
   try {
     append(fragment, render(), owner.context.document, owner);
   } catch (error) {
-    owner.dispose(error);
+    disposeOwnerSyncPreservingFailure(owner, error);
 
     throw error;
   }
@@ -715,14 +740,14 @@ export function prepareTree(owner: Owner, render: () => Rendered): PreparedTree 
 
         owner.context.scheduler.requestEffects();
       } catch (error) {
-        owner.dispose(error);
+        disposeOwnerSyncPreservingFailure(owner, error);
 
         throw error;
       }
     },
 
     dispose(reason) {
-      owner.dispose(reason);
+      owner.disposeSync(reason);
     },
   };
 }
@@ -736,6 +761,7 @@ function mountedHandle(
 
   return {
     dispose: (reason) => owner.dispose(reason),
+    disposeSync: (reason) => owner.disposeSync(reason),
     settled: () => startup.then(() => context.scheduler.settled()),
   };
 }
@@ -803,6 +829,7 @@ function documentShell(fragment: DocumentFragment): DocumentShell {
     throw new RenderFault("document-shell", "A Document mount requires one native head and body");
 
   const body = bodies[0] as HTMLBodyElement;
+
   return { html: root, head: heads[0] as HTMLHeadElement, body, bodyBefore: body.nextSibling };
 }
 
@@ -960,6 +987,7 @@ function startDirectStyles(
       previous?.release();
 
       const next = runtime.prepareDirectTarget(entryId, nextHead);
+
       current = next;
       const id = ++attemptId;
 
@@ -1029,6 +1057,7 @@ function startDocumentStyles(
   const begin = (head: HTMLHeadElement): void => {
     const id = ++attemptId;
     const nextController = new AbortController();
+
     controller = nextController;
     currentHead = head;
 
@@ -1091,6 +1120,7 @@ function startDocumentStyles(
 
     const previousController = controller;
     const previousLease = currentLease;
+
     controller = undefined;
     currentLease = undefined;
 
@@ -1149,6 +1179,7 @@ export function installStyledDocument(
     return startDocumentStyles(prepared.owner, runtime, selection.compositionId, restoreBody);
 
   const preparation = runtime.prepareDirectTarget(selection.entryId, shell.head);
+
   return startDirectStyles(
     prepared.owner,
     runtime,
@@ -1232,6 +1263,7 @@ export function mount<P>(
     }
 
     const reveal = installHiddenRange(container as Element, prepared.fragment, owner);
+
     return mountedHandle(
       owner,
       context,
@@ -1245,7 +1277,7 @@ export function mount<P>(
       ),
     );
   } catch (error) {
-    owner.dispose(error);
+    disposeOwnerSyncPreservingFailure(owner, error);
 
     reportFault(owner, error);
   }

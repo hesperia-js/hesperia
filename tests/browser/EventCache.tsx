@@ -10,6 +10,7 @@ export function CachedEventPage() {
   const sharedOnce = client.events.once(function (this: HTMLButtonElement, event: MouseEvent) {
     calls.push(`once:${this.id}:${event.currentTarget === this}`);
   });
+
   return (
     <main id="event-cache-one">
       <button id="event-cache-once-a" on:click={sharedOnce}>

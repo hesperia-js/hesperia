@@ -1,3 +1,4 @@
+import { readResolvedGeneratedAssets, type ResolvedGeneratedAssets } from "./generated-assets.ts";
 import { resolveAppConfiguration } from "../application.ts";
 import { installHistoryTracking } from "../routing/history.ts";
 import { createRouteHost } from "../routing/route-host.ts";
@@ -11,7 +12,11 @@ import {
   type MountedApplication,
   type Rendered,
 } from "./dom.ts";
-import { RenderFault } from "./owner.ts";
+import {
+  disposeOwnerWithAdmissionClose,
+  registerOwnerDisposalPromiseAlias,
+  RenderFault,
+} from "./owner.ts";
 import { installRootProjectPolicy } from "./project-policy.ts";
 import { internalStyleBindingFor } from "./style.ts";
 import { reserveNavigation } from "../routing/navigation-api.ts";
@@ -30,6 +35,10 @@ export interface ApplicationModules {
 
 /** Private generated-startup options bound before authored modules are loaded. */
 export interface BootstrapApplicationOptions {
+  /** @internal The immutable binding carried by the hosting startup wrapper. */
+  readonly generatedAssets?: ResolvedGeneratedAssets;
+  /** @internal Verified paths for required imports in the captured browser build. */
+  readonly modulePreloads?: Readonly<Record<string, readonly string[]>>;
   /** Mounted route prefix used by the Navigation facade. Defaults to `/`. */
   readonly mountPath?: string;
 }
@@ -45,6 +54,18 @@ export async function bootstrapApplication(
   modules: ApplicationModules,
   options: BootstrapApplicationOptions = {},
 ): Promise<MountedApplication> {
+  const generatedAssets = readResolvedGeneratedAssets(options.generatedAssets);
+
+  if (options.generatedAssets !== undefined && !generatedAssets)
+    throw new RenderFault(
+      "generated-assets",
+      "The browser startup received an invalid asset binding",
+    );
+
+  const prepareModule =
+    generatedAssets && options.modulePreloads
+      ? browserModulePreparer(window, generatedAssets, options.modulePreloads)
+      : undefined;
   const navigationReservation = reserveNavigation(window, options.mountPath);
   let history: ReturnType<typeof installHistoryTracking> | undefined;
   let runtime: ReturnType<typeof createRuntimeRoot> | undefined;
@@ -55,8 +76,15 @@ export async function bootstrapApplication(
 
     navigationReservation.setHistoryTracker(history);
 
+    prepareModule?.("configuration");
+
     const configuration = resolveAppConfiguration(await modules.configuration());
+
+    prepareModule?.("shell");
+    prepareModule?.("routes");
+
     const [shell, table] = await Promise.all([modules.shell(), modules.routes()]);
+
     runtime = createRuntimeRoot(window.document);
 
     installRootProjectPolicy(runtime.owner, shell as Component<unknown>);
@@ -94,6 +122,7 @@ export async function bootstrapApplication(
       configuration,
       styleBinding?.runtime,
       navigationReservation.mountPath,
+      prepareModule,
     );
 
     navigationReservation.attachRouter(
@@ -116,41 +145,154 @@ export async function bootstrapApplication(
 
     const mountedRuntime = runtime;
     const mountedRouter = router;
-    let disposed = false;
+    let disposal: Promise<void> | undefined;
+    let synchronousFailures: unknown[] = [];
+    let reporterFailure: { readonly cause: unknown } | undefined;
+
+    const beginDisposal = (reason: unknown, mode: "join" | "sync"): Promise<void> => {
+      if (disposal) return disposal;
+
+      let resolve!: () => void;
+      let reject!: (cause: unknown) => void;
+
+      disposal = new Promise<void>((accept, fail) => {
+        resolve = accept;
+        reject = fail;
+      });
+      registerOwnerDisposalPromiseAlias(mountedRuntime.owner, disposal);
+
+      if (mode === "sync") void disposal.catch(() => undefined);
+
+      let ownerRetirement: Promise<void> | undefined;
+
+      try {
+        ownerRetirement = disposeOwnerWithAdmissionClose(mountedRuntime.owner, mode, reason, () => {
+          for (const release of [
+            () => navigationReservation.release(reason),
+            () => mountedRouter.dispose(reason),
+          ]) {
+            try {
+              release();
+            } catch (cause) {
+              synchronousFailures.push(cause);
+            }
+          }
+        });
+      } catch (cause) {
+        if (mode === "sync") {
+          reporterFailure = { cause };
+
+          try {
+            ownerRetirement = mountedRuntime.owner.dispose(reason);
+          } catch (failure) {
+            synchronousFailures.push(failure);
+          }
+        } else {
+          synchronousFailures.push(cause);
+        }
+      }
+
+      for (const release of [() => history?.release()]) {
+        try {
+          release();
+        } catch (cause) {
+          synchronousFailures.push(cause);
+        }
+      }
+
+      void Promise.allSettled(ownerRetirement ? [ownerRetirement] : []).then((outcomes) => {
+        const failures = outcomes.flatMap((outcome) => {
+          if (outcome.status === "fulfilled") return [];
+
+          const cause: unknown = outcome.reason;
+
+          return cause instanceof AggregateError && cause.message === "Component cleanup failed"
+            ? [...cause.errors]
+            : [cause];
+        });
+
+        failures.push(...synchronousFailures);
+
+        if (failures.length) reject(new AggregateError(failures, "Application disposal failed"));
+        else resolve();
+      }, reject);
+
+      return disposal;
+    };
+
     return {
       dispose(reason) {
-        if (disposed) return;
+        return beginDisposal(reason, "join");
+      },
 
-        disposed = true;
+      disposeSync(reason) {
+        if (disposal) return;
 
-        try {
-          navigationReservation.release(reason);
+        beginDisposal(reason, "sync");
+        const failures = reporterFailure
+          ? [reporterFailure.cause, ...synchronousFailures]
+          : synchronousFailures;
 
-          mountedRouter.dispose(reason);
-        } finally {
-          try {
-            mountedRuntime.owner.dispose(reason);
-          } finally {
-            history?.release();
-          }
-        }
+        if (failures.length === 1) throw failures[0];
+
+        if (failures.length > 1)
+          throw new AggregateError(failures, "Application synchronous disposal failed");
       },
 
       settled: () => mountedRuntime.context.scheduler.settled(),
     };
   } catch (error) {
-    try {
-      navigationReservation.release(error);
+    const failures: unknown[] = [];
 
-      router?.dispose(error);
-    } finally {
+    for (const release of [
+      () => navigationReservation.release(error),
+      () => router?.dispose(error),
+      () => runtime?.owner.disposeSync(error),
+      () => history?.release(),
+    ]) {
       try {
-        runtime?.owner.dispose(error);
-      } finally {
-        history?.release();
+        release();
+      } catch (cause) {
+        failures.push(cause);
       }
     }
 
+    if (failures.length)
+      throw new AggregateError([error, ...failures], "Application startup and cleanup failed", {
+        cause: error,
+      });
+
     throw error;
   }
+}
+
+function browserModulePreparer(
+  window: Window,
+  deployment: ResolvedGeneratedAssets,
+  imports: Readonly<Record<string, readonly string[]>>,
+): (key: string) => void {
+  const root =
+    deployment.root.kind === "url"
+      ? deployment.root.href
+      : new URL(deployment.root.pathname, window.location.origin).href;
+  const prepared = new Set<string>();
+
+  return (key) => {
+    if (!Object.hasOwn(imports, key)) return;
+    const head = window.document.head;
+
+    if (!head) return;
+
+    for (const path of imports[key]!) {
+      if (prepared.has(path)) continue;
+      prepared.add(path);
+
+      const link = window.document.createElement("link");
+
+      link.rel = "modulepreload";
+      link.crossOrigin = deployment.moduleCredentials;
+      link.href = root + path.slice(1);
+      head.append(link);
+    }
+  };
 }

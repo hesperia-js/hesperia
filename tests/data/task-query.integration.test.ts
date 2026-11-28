@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, jest, test } from "bun:test";
 import {
   affects,
+  computed,
   createGraph,
   createMutation,
   createQuery,
   defineContract,
+  subscribe,
   type QueryStore,
 } from "aeolia";
 import { Window } from "happy-dom";
@@ -135,6 +137,7 @@ describe("owner-bound data primitives", () => {
     const deferred: Array<(value: string) => void> = [];
     let task!: ReturnType<typeof createTask<string, string>>;
     let factoryRuns = 0;
+
     task = createTask(current, ({ signal }) => {
       factoryRuns += 1;
 
@@ -168,8 +171,99 @@ describe("owner-bound data primitives", () => {
     expect(task.value()).toBe("reentrant");
   });
 
+  test.each(["pending", "success", "failure", "synchronous-failure"] as const)(
+    "a task observer cannot retire a newer run after a %s publication fault",
+    async (publication) => {
+      const current = owner();
+      const publicationFailure = new Error("task publication observer failed");
+      const backendFailure = new Error("first task source failed");
+      const reported: unknown[] = [];
+
+      current.errorHandler = (error) => {
+        reported.push(error);
+      };
+
+      const calls: Array<{
+        readonly input: string;
+        readonly resolve: (value: string) => void;
+        readonly reject: (reason: unknown) => void;
+      }> = [];
+      const replacementStarted = Promise.withResolvers<void>();
+      const task = createTask(current, () => (input: string) => {
+        if (input === "first" && publication === "synchronous-failure") throw backendFailure;
+
+        const result = Promise.withResolvers<string>();
+
+        calls.push({ input, resolve: result.resolve, reject: result.reject });
+
+        if (input === "replacement") replacementStarted.resolve();
+
+        return result.promise;
+      });
+      let replacement: ReturnType<typeof task.run> | undefined;
+      let reentered = false;
+      const stop = subscribe(
+        computed(() => task.status()),
+        (status) => {
+          const observedStatus = publication === "synchronous-failure" ? "failure" : publication;
+
+          if (status !== observedStatus || reentered) return;
+
+          reentered = true;
+          replacement = task.run("replacement");
+
+          throw publicationFailure;
+        },
+      );
+
+      try {
+        const first = task.run("first");
+        const firstOutcome = first.then(
+          (value) => ({ kind: "fulfilled" as const, value }),
+          (reason: unknown) => ({ kind: "rejected" as const, reason }),
+        );
+        const firstCall = calls.find((call) => call.input === "first");
+
+        if (publication === "success") firstCall?.resolve("first");
+        else if (publication === "failure") firstCall?.reject(backendFailure);
+
+        await replacementStarted.promise;
+
+        const replacementCall = calls.find((call) => call.input === "replacement");
+
+        if (replacement === undefined || replacementCall === undefined)
+          throw new Error("Expected a real replacement task and source");
+
+        replacementCall.resolve("replacement");
+
+        const replacementOutcome = await replacement.then(
+          (value) => ({ kind: "fulfilled" as const, value }),
+          (reason: unknown) => ({ kind: "rejected" as const, reason }),
+        );
+        const superseded = await firstOutcome;
+
+        expect(replacementOutcome).toEqual({ kind: "fulfilled", value: "replacement" });
+        expect(superseded).toEqual({
+          kind: "rejected",
+          reason: publication === "pending" ? first.signal.reason : publicationFailure,
+        });
+        expect(replacement.signal.aborted).toBe(false);
+        expect(task.status()).toBe("success");
+        expect(task.value()).toBe("replacement");
+        expect(task.pending()).toBe(false);
+        expect(task.error()).toBeUndefined();
+        expect(reported).toEqual([publicationFailure]);
+      } finally {
+        stop();
+
+        for (const call of calls) call.resolve("cleanup");
+      }
+    },
+  );
+
   test("task dispatch is rejected during a component body and owner disposal cancels a run", async () => {
     const current = owner();
+
     current.executingBody = true;
     const task = createTask(
       current,
@@ -350,6 +444,7 @@ describe("owner-bound data primitives", () => {
 
   test("resuming an owner restarts every pending query wait", async () => {
     const current = owner();
+
     current.context.scheduler = new Scheduler(current);
     let resolveFirst!: (value: string) => void;
     let resolveSecond!: (value: string) => void;
@@ -385,6 +480,7 @@ describe("owner-bound data primitives", () => {
       const resumed: string[] = [];
       const firstWait = Promise.resolve(firstView).then((accessor) => resumed.push(accessor()));
       const secondWait = Promise.resolve(secondView).then((accessor) => resumed.push(accessor()));
+
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       current.suspend();
@@ -810,6 +906,7 @@ describe("owner-bound data primitives", () => {
       const valueMode = client.state(false);
       const api = createContractApi(current, graph, contract);
       const view = api.query(undefined);
+
       setValueMode = (enabled) => valueMode.set(enabled);
       return asyncBoundary(
         current,
@@ -818,6 +915,7 @@ describe("owner-bound data primitives", () => {
         (content) =>
           text(content, () => {
             const status = view.status();
+
             return valueMode() ? `${status}:${view.value()}` : status;
           }),
       );

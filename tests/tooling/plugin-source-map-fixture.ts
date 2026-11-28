@@ -61,6 +61,7 @@ function encodeVlq(value: number): string {
 
   do {
     let digit = encoded & 31;
+
     encoded = Math.floor(encoded / 32);
 
     if (encoded > 0) digit |= 32;

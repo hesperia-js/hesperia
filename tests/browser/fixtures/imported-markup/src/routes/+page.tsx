@@ -1,5 +1,6 @@
 import * as client from "hesperia/client";
 import { mount } from "hesperia";
+import Checked from "../assets/checked.svg" with { type: "svg" };
 import Fragment from "../fragment.html" with { type: "html" };
 import Panel from "../panel.html" with { type: "html" };
 
@@ -22,6 +23,7 @@ export default function Page() {
         id="mount-direct"
         on:click={() => {
           const frame = document.createElement("iframe");
+
           frame.id = "direct-frame";
           frame.srcdoc = "<!doctype html><html><head></head><body></body></html>";
 
@@ -96,6 +98,7 @@ export default function Page() {
         />
       ))}
       <Fragment />
+      <Checked />
       <output id="direct-error"></output>
       <output id="managed-bad-sri-state">{badSriState()}</output>
       <output id="bound-id">{boundId()}</output>

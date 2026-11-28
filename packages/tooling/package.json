@@ -17,6 +17,16 @@
   "type": "module",
   "main": "./dist/project-service.js",
   "types": "./dist/project-service.d.ts",
+  "imports": {
+    "#hesperia-cli-main": {
+      "types": "./dist/cli-main.d.ts",
+      "default": "./dist/cli-main.js"
+    },
+    "#hesperia-project-worker": {
+      "types": "./dist/project-worker.d.ts",
+      "default": "./dist/project-worker.js"
+    }
+  },
   "exports": {
     ".": {
       "types": "./dist/project-service.d.ts",
@@ -31,10 +41,9 @@
     "./bin": "./dist/cli.js"
   },
   "scripts": {
-    "build": "bunx tsc -p tsconfig.build.json"
+    "build": "bunx --bun --no-install tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@federicocarboni/saxe": "0.8.0",
     "@hesperia/compiler": "workspace:*",
     "@hesperia/hosting": "workspace:*",
     "@jridgewell/gen-mapping": "0.3.13",

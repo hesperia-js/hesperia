@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import {
   createConnection,
   createProtocolConnection,
+  CancellationToken,
   DefinitionRequest,
   DiagnosticSeverity,
   CompletionRequest,
@@ -618,6 +619,7 @@ test("language server discards superseded builds and delayed results from older 
       textDocument: { uri },
       position: { line: 0, character: 20 },
     });
+
     await oldHoverStarted.promise;
 
     await streams.clientConnection.sendNotification("textDocument/didChange", {
@@ -644,6 +646,105 @@ test("language server discards superseded builds and delayed results from older 
     await stopProtocolHarness(streams);
 
     await rm(root, { recursive: true, force: true });
+  }
+}, 45000);
+
+test("language server does not publish an initial configuration error after shutdown", async () => {
+  for (const stopDuringRead of [false, true]) {
+    const root = await mkdtemp(join(tmpdir(), "hesperia-language-server-config-shutdown-"));
+    const filename = join(root, "app.tsx");
+    const configurationFilename = join(root, "hesperia.config.ts");
+    const configurationUri = pathToFileURL(configurationFilename).href;
+    const streams = createProtocolHarness();
+    const workerStarted = deferred<void>();
+
+    type WorkerResult = Awaited<ReturnType<NonNullable<Parameters<typeof startLanguageServer>[3]>>>;
+    let rejectWorker!: (reason: Error) => void;
+    let workerAttached = false;
+    let rejected = false;
+    const workerResult = new Promise<WorkerResult>((_resolve, reject) => {
+      rejectWorker = reject;
+    });
+    let shutdownHandler: Parameters<typeof streams.serverConnection.onShutdown>[0] | undefined;
+    const onShutdown = streams.serverConnection.onShutdown.bind(streams.serverConnection);
+
+    streams.serverConnection.onShutdown = (handler) => {
+      shutdownHandler = handler;
+
+      return onShutdown(handler);
+    };
+
+    try {
+      await mkdir(join(root, "src"));
+
+      await writeFile(filename, "export const value = 1;");
+
+      await writeFile(configurationFilename, "export default {};");
+
+      startLanguageServer(
+        streams.serverConnection,
+        async () => fakeProject(resultFor(filename, "HES-TEST", "test")),
+        async () => new Map([[filename, "export const value = 1;"]]),
+        () => {
+          workerAttached = true;
+          workerStarted.resolve(undefined);
+
+          return workerResult;
+        },
+      );
+      streams.serverStarted = true;
+
+      await streams.clientConnection.sendRequest(InitializeRequest.type, {
+        processId: process.pid,
+        rootUri: pathToFileURL(root).href,
+        capabilities: {},
+      });
+
+      await streams.clientConnection.sendNotification("initialized", {});
+
+      await workerStarted.promise;
+
+      if (!shutdownHandler) throw new Error("Server shutdown handler was not registered");
+
+      // The server is awaiting this exact promise before shutdown is queued.
+      rejectWorker(new Error("configured worker failed"));
+      rejected = true;
+
+      if (stopDuringRead) {
+        const shutdown = new Promise<void>((accept, reject) => {
+          queueMicrotask(() => {
+            try {
+              Promise.resolve(shutdownHandler!(CancellationToken.None)).then(
+                () => accept(),
+                reject,
+              );
+            } catch (error) {
+              reject(error);
+            }
+          });
+        });
+
+        await shutdown;
+
+        await streams.clientConnection.sendRequest(DocumentSymbolRequest.type, {
+          textDocument: { uri: pathToFileURL(filename).href },
+        });
+
+        expect(streams.events.filter((event) => event.uri === configurationUri)).toStrictEqual([]);
+      } else {
+        const diagnostics = await streams.diagnostics(configurationUri, undefined);
+
+        expect(diagnostics.diagnostics[0]?.code).toBe("HES-CONFIG");
+        expect(diagnostics.diagnostics[0]?.message).toContain("configured worker failed");
+        expect(diagnostics.diagnostics[0]?.message).toContain("default configuration");
+      }
+    } finally {
+      if (workerAttached && !rejected) rejectWorker(new Error("test cleanup"));
+
+      await stopProtocolHarness(streams);
+
+      await rm(root, { recursive: true, force: true });
+    }
   }
 }, 45000);
 
@@ -897,12 +998,14 @@ test("language server shutdown waits for an in-flight semantic request before di
       textDocument: { uri },
       position: { line: 0, character: 20 },
     });
+
     await hoverStarted.promise;
     let shutdownSettled = false;
     const shutdown = streams.clientConnection.sendRequest("shutdown").then((result) => {
       shutdownSettled = true;
       return result;
     });
+
     await disposalStarted.promise;
     await new Promise<void>((accept) => setImmediate(accept));
 
@@ -946,6 +1049,7 @@ function resultFor(filename: string, code: string, message: string): ProjectChec
 
 function protocolPosition(source: string, offset: number): { line: number; character: number } {
   const before = source.slice(0, offset);
+
   return {
     line: before.split("\n").length - 1,
     character: offset - before.lastIndexOf("\n") - 1,
@@ -987,6 +1091,7 @@ function fakeProject(
   let finishDisposal: (() => void) | undefined;
   let disposePromise: Promise<void> | undefined;
   let isDisposed = false;
+
   return {
     diagnostics,
 
@@ -1043,6 +1148,7 @@ function deferred<T>() {
   const promise = new Promise<T>((accept) => {
     resolve = accept;
   });
+
   return { promise, resolve };
 }
 

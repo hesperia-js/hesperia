@@ -17,10 +17,15 @@ import {
   type SourceSpan,
 } from "./ir.ts";
 import { generateModule, type ClientBinding } from "./generate.ts";
-import type { ComponentPropsAnalysis } from "./props-analysis.ts";
+import {
+  isPendingRenderedPropDiagnostic,
+  unprovedRenderedPropDiagnostics,
+  type ComponentPropsAnalysis,
+} from "./props-analysis.ts";
 import type { OperationCallAnalysis } from "./operation-call-analysis.ts";
 import { resolveModuleSemantics, type ModuleSemantics } from "./semantics.ts";
 import { lfLineStarts as lineStarts } from "./utils.ts";
+import { checkedAnalysisOrigin } from "./checking-origin.ts";
 
 interface SourceMap {
   readonly version: 3;
@@ -85,6 +90,8 @@ export interface ModuleAnalysis {
   readonly result: CompileResult;
   /** TypeScript-erased source and its map to authored source, when normalization succeeded. */
   readonly normalized?: { readonly code: string; readonly map?: unknown };
+  /** @internal Digest of the exact authored bytes supplied to this compiler analysis. */
+  readonly authoredSourceDigest?: string;
   /** Translate a normalized string offset to its authored offset for subsequent compiler stages. */
   readonly mapOffset?: (offset: number) => number;
   /** Native-checker prop contracts keyed by authored parameter offset. */
@@ -147,8 +154,10 @@ export function analyzeModule(source: string, options: CompileOptions = {}): Mod
 
   const semanticHash = sha256(encodeCanonicalModule(ir));
   const semantics = resolveModuleSemantics(ir);
+
   return {
     normalized,
+    authoredSourceDigest: sha256(source),
     mapOffset: authoredOffset,
     result: {
       code: "",
@@ -168,8 +177,21 @@ export function emitAnalysis(
   options: CompileOptions = {},
 ): CompileResult {
   const { result, normalized } = analysis;
+  const pendingRendered = unprovedRenderedPropDiagnostics(undefined, result.ir, analysis.mapOffset);
+  const renderedProof =
+    pendingRendered.length > 0 && checkedAnalysisOrigin(analysis)
+      ? analysis.componentProps
+      : undefined;
 
-  if (!normalized || result.diagnostics.some((item) => item.severity === "error")) return result;
+  const inputDiagnostics = [
+    ...result.diagnostics.filter((item) => !isPendingRenderedPropDiagnostic(item)),
+    ...(renderedProof
+      ? unprovedRenderedPropDiagnostics(renderedProof, result.ir, analysis.mapOffset)
+      : pendingRendered),
+  ];
+
+  if (!normalized || inputDiagnostics.some((item) => item.severity === "error"))
+    return { ...result, code: "", diagnostics: inputDiagnostics };
 
   const filename = options.filename ?? "module.tsx";
   const runtimeModule = options.runtimeModule ?? "hesperia/runtime";
@@ -178,8 +200,9 @@ export function emitAnalysis(
     analysis.componentProps,
     analysis.operationCalls,
     analysis.mapOffset,
+    renderedProof,
   );
-  const diagnostics = [...result.diagnostics, ...obsoleteNavigationDiagnostics(ir)];
+  const diagnostics = [...inputDiagnostics, ...obsoleteNavigationDiagnostics(ir)];
   const clientBindings = resolveClientBindings(ir);
   const generated = generateModule(ir, {
     filename,
@@ -203,6 +226,7 @@ export function emitAnalysis(
 
   const stages = [lowered.map, generated.map, normalized.map].filter(Boolean) as SourceMap[];
   const map = stages.length ? remapping(stages, () => null) : undefined;
+
   return {
     ...result,
     code: diagnostics.some((item) => item.severity === "error") ? "" : lowered.code,
@@ -222,6 +246,7 @@ const CLIENT_OPERATIONS = new Set([
   "bind",
   "unsafeBind",
   "task",
+  "form",
   "unsafeHTML",
 ]);
 
@@ -405,6 +430,7 @@ function navigationAliasKind(
 
   if (expression.kind === "identifier" && typeof expression.referenceId === "string") {
     const binding = bindings.get(expression.referenceId);
+
     return binding?.kind === "navigation-marker" || binding?.kind === "navigation-namespace"
       ? binding.kind
       : undefined;
@@ -535,6 +561,7 @@ function isLegacyClientNavigationCall(
 
   const navigationProperty = navigationMember.property;
   const client = navigationMember.object;
+
   return (
     typeof navigationProperty === "object" &&
     navigationProperty !== null &&
@@ -553,6 +580,7 @@ function authoredDebug(
   mapOffset: (offset: number) => number,
 ): CanonicalDebugSidecar {
   const debug = canonicalDebugSidecar(ir);
+
   return {
     ...debug,
     spans: Object.fromEntries(
@@ -580,6 +608,7 @@ function mapAuthoredSpan(span: SourceSpan, mapOffset: (offset: number) => number
   if (span.end <= span.start) return { start, end };
 
   const previous = mapOffset(span.end - 1);
+
   return { start, end: end > previous ? end : previous + 1 };
 }
 
@@ -589,6 +618,7 @@ function offsetMapper(generated: string, source: string, map: unknown): (offset:
   const trace = new TraceMap(map as SourceMapInput);
   const generatedLines = lineStarts(generated);
   const sourceLines = lineStarts(source);
+
   return (offset) => {
     let low = 0;
     let high = generatedLines.length;
@@ -604,6 +634,7 @@ function offsetMapper(generated: string, source: string, map: unknown): (offset:
       line: low + 1,
       column: offset - generatedLines[low]!,
     });
+
     return original.line === null || original.column === null
       ? 0
       : (sourceLines[original.line - 1] ?? source.length) + original.column;
@@ -612,6 +643,7 @@ function offsetMapper(generated: string, source: string, map: unknown): (offset:
 
 function failedResult(filename: string, diagnostics: readonly CompilerDiagnostic[]): CompileResult {
   const ir: CanonicalModule = { version: 1, filename, body: [], diagnostics };
+
   return {
     code: "",
     map: undefined,
@@ -653,6 +685,7 @@ function attachCheckedMetadata(
   analysis: ComponentPropsAnalysis | undefined,
   operationCalls: OperationCallAnalysis | undefined,
   normalizedToAuthored: ((offset: number) => number) | undefined,
+  renderedProof: ComponentPropsAnalysis | undefined,
 ): CanonicalModule {
   if (!analysis && !operationCalls) return module;
 
@@ -698,6 +731,7 @@ function attachCheckedMetadata(
       if (metadata) {
         const empty = { kind: "undefined", span: { start: span.start, end: span.start } };
         const args = copy.arguments as readonly unknown[];
+
         copy.arguments = metadata.argument === "options" ? [empty, ...args] : [...args, empty];
       }
     }
@@ -705,7 +739,15 @@ function attachCheckedMetadata(
     return copy;
   };
 
-  return map(module) as CanonicalModule;
+  const mapped = map(module) as CanonicalModule;
+
+  return {
+    ...mapped,
+    diagnostics: [
+      ...mapped.diagnostics.filter((item) => !isPendingRenderedPropDiagnostic(item)),
+      ...unprovedRenderedPropDiagnostics(renderedProof, module),
+    ],
+  };
 }
 
 function hasUnsafeHTML(value: unknown): boolean {

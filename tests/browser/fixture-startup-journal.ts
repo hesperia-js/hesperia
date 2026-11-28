@@ -14,6 +14,8 @@ type StartupPhase =
   | "host-create-begin"
   | "host-create-end"
   | "serve-begin"
+  | "native-graphql-ready-begin"
+  | "native-graphql-ready-end"
   | "serve-return"
   | "first-health-request";
 type Detail = Readonly<Record<string, string | number | boolean | undefined>>;
@@ -58,6 +60,7 @@ export function createBrowserCssStartupJournal(role: StartupRole): {
 
   function closeFile(): void {
     const current = descriptor;
+
     descriptor = undefined;
 
     if (current !== undefined) {
@@ -119,6 +122,7 @@ export function createBrowserCssStartupJournal(role: StartupRole): {
       } catch (error) {
         failures.push({ channel: "file", message: message(error) });
         const current = descriptor;
+
         descriptor = undefined;
 
         if (current !== undefined) {

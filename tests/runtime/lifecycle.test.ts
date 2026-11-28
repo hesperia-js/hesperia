@@ -31,6 +31,30 @@ function container(): Element {
 }
 
 describe("browser component lifetimes", () => {
+  test("stops remaining commit callbacks after a component is disposed", () => {
+    const target = container();
+    const calls: string[] = [];
+    const Child = defineComponent((owner) => {
+      owner.onCommit(() => {
+        calls.push("dispose");
+        owner.dispose();
+      });
+
+      owner.onCommit(() => calls.push("late"));
+
+      return element(owner, "span");
+    });
+    const App = defineComponent((owner) => component(owner, Child, {}));
+    const app = mount(target, App, {});
+
+    try {
+      expect(calls).toStrictEqual(["dispose"]);
+      expect(target.querySelector("span")).toBeNull();
+    } finally {
+      app.dispose();
+    }
+  });
+
   test("removing one resource lifecycle during resume does not skip the next", () => {
     const target = container();
     const resumed: string[] = [];
@@ -38,6 +62,7 @@ describe("browser component lifetimes", () => {
     const App = defineComponent((owner) => {
       root = owner;
       let unregisterFirst!: () => void;
+
       unregisterFirst = registerOwnerResourceLifecycle(owner, {
         suspended() {},
 
@@ -153,6 +178,7 @@ describe("browser component lifetimes", () => {
     const App = defineComponent((owner) => {
       const client = createClient(owner);
       const bind = client.bind<HTMLInputElement>();
+
       read = bind;
       input = element(owner, "input", { bind });
       return element(owner, "section", {}, [input, element(owner, "aside")]);
@@ -189,6 +215,7 @@ describe("browser component lifetimes", () => {
   test("a duplicate target faults before the second attachment can replace the first", () => {
     const App = defineComponent((owner) => {
       const bind = createClient(owner).bind<HTMLInputElement>();
+
       return [element(owner, "input", { bind }), element(owner, "input", { bind })];
     });
 
@@ -201,6 +228,7 @@ describe("browser component lifetimes", () => {
     const App = defineComponent((owner) => {
       const client = createClient(owner);
       const count = client.state(0);
+
       input = element(owner, "input");
       return element(owner, "section", {}, [
         child(owner, () => input),
@@ -254,6 +282,7 @@ describe("browser component lifetimes", () => {
     const seen: number[] = [];
     const App = defineComponent((owner) => {
       const client = createClient(owner);
+
       choose = client.state(true);
       left = client.state(1);
       right = client.state(10);
@@ -302,6 +331,7 @@ describe("browser component lifetimes", () => {
     const seen: string[] = [];
     const App = defineComponent((owner) => {
       const client = createClient(owner);
+
       count = client.state(0);
       const output = element(owner, "output", { title: dynamic(() => `Count ${count()}`) }, [
         text(owner, count),
@@ -478,9 +508,9 @@ describe("browser component lifetimes", () => {
 
     await app.settled();
 
-    app.dispose();
+    app.disposeSync();
 
-    app.dispose();
+    app.disposeSync();
 
     expect(order).toStrictEqual(["parent last", "parent first", "child"]);
 
@@ -503,11 +533,161 @@ describe("browser component lifetimes", () => {
 
     await app.settled();
 
-    app.dispose();
+    app.disposeSync();
 
     expect(raw.get()).toBe(0);
 
     expect(errors).toHaveLength(1);
+  });
+
+  test("disposal revokes immediately and joins cleanup before reporting its original failure", async () => {
+    const target = container();
+    const errors: unknown[] = [];
+    const failure = new Error("cleanup failed");
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let state!: State<number>;
+    const App = defineComponent((owner) => {
+      const client = createClient(owner);
+
+      state = client.state(0);
+      client.cleanup(() => pending);
+      client.cleanup(() => {
+        throw failure;
+      });
+      return element(owner, "span");
+    });
+    const app = mount(target, App, {}, { onError: (error) => errors.push(error) });
+
+    await app.settled();
+
+    const disposal = app.dispose();
+    const result = disposal.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    try {
+      expect(app.dispose()).toBe(disposal);
+      expect(target.childNodes.length).toBe(0);
+      expect(() => state.set(1)).toThrow();
+      expect(await Promise.race([result, Promise.resolve("pending")])).toBe("pending");
+      expect(errors).toStrictEqual([]);
+    } finally {
+      release();
+    }
+
+    const error = await result;
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toStrictEqual([failure]);
+    expect(errors).toStrictEqual([]);
+  });
+
+  test("cleanup observation does not assimilate an arbitrary thenable", async () => {
+    let reads = 0;
+    // The rejected cleanup object deliberately exposes a thenable getter.
+    // oxlint-disable-next-line unicorn/no-thenable
+    const thenable = Object.defineProperty({}, "then", {
+      get() {
+        reads++;
+        throw new Error("then must not be read");
+      },
+    });
+    const App = defineComponent((owner) => {
+      createClient(owner).cleanup(() => thenable);
+      return null;
+    });
+    const app = mount(container(), App, {});
+    const result = await app.dispose().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(reads).toBe(0);
+    expect(result).toBeInstanceOf(AggregateError);
+    const failure = (result as AggregateError).errors[0];
+
+    expect(failure).toMatchObject({ kind: "cleanup-observation", incomplete: true });
+    expect(failure.cause).toBeInstanceOf(TypeError);
+  });
+
+  test("cleanup cannot wait for its own mounted application disposal", async () => {
+    let app!: ReturnType<typeof mount>;
+    const App = defineComponent((owner) => {
+      createClient(owner).cleanup(() => app.dispose());
+      return null;
+    });
+
+    app = mount(container(), App, {});
+
+    const result = await app.dispose().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(result).toBeInstanceOf(AggregateError);
+    expect((result as AggregateError).errors[0]).toMatchObject({
+      kind: "cleanup-retirement-cycle",
+      incomplete: true,
+    });
+  });
+
+  test("sync-first disposal reports failures once and a later dispose joins cleanup", async () => {
+    const target = container();
+    const errors: unknown[] = [];
+    const syncFailure = new Error("synchronous cleanup");
+    const asyncFailure = new Error("asynchronous cleanup");
+    const calls: string[] = [];
+    let rejectCleanup!: (reason: unknown) => void;
+    const pending = new Promise<void>((_resolve, reject) => {
+      rejectCleanup = reject;
+    });
+    let state!: State<number>;
+    const App = defineComponent((owner) => {
+      const client = createClient(owner);
+
+      state = client.state(0);
+      client.cleanup(() => {
+        calls.push("async");
+        return pending;
+      });
+      client.cleanup(() => {
+        calls.push("sync");
+        throw syncFailure;
+      });
+      return element(owner, "span");
+    });
+    const app = mount(target, App, {}, { onError: (error) => errors.push(error) });
+
+    await app.settled();
+
+    app.disposeSync();
+
+    expect(target.childNodes.length).toBe(0);
+    expect(() => state.set(1)).toThrow();
+    expect(calls).toStrictEqual(["sync", "async"]);
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as AggregateError).errors).toStrictEqual([syncFailure]);
+
+    const joined = app.dispose();
+    const outcome = joined.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(app.dispose()).toBe(joined);
+    rejectCleanup(asyncFailure);
+
+    const failure = await outcome;
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toStrictEqual([syncFailure, asyncFailure]);
+    expect(calls).toStrictEqual(["sync", "async"]);
+    expect(errors).toHaveLength(2);
+    expect((errors[1] as AggregateError).errors).toStrictEqual([asyncFailure]);
   });
 
   test("invalidating an effect after its turn defers its second run until the next DOM/effect pass", async () => {

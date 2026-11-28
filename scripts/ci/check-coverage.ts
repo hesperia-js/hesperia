@@ -91,11 +91,13 @@ function sourceKey(path: string, repoPath: string): string | undefined {
   }
 
   const normalized = relativePath.split(sep).join("/");
+
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 function hasExecutableStatements(filename: string, repoPath: string): boolean {
   const source = readFileSync(join(repoPath, filename), "utf8");
+
   return coverageSourceHasExecutableStatements(filename, source);
 }
 
@@ -115,6 +117,7 @@ function coveredSources(
 
   const finishRecord = () => {
     const record = current;
+
     current = undefined;
 
     if (!record) return;
@@ -222,6 +225,7 @@ export function checkCoverage(options: {
   const inventory = new Map(
     inventoryPaths.flatMap((path) => {
       const key = sourceKey(path, repoPath);
+
       return key === undefined ? [] : [[key, path] as const];
     }),
   );
@@ -237,10 +241,12 @@ export function checkCoverage(options: {
 
   const unmeasuredSources = executableSources.filter((path) => {
     const key = sourceKey(path, repoPath);
+
     return key !== undefined && !measurement.measuredSources.has(key);
   });
   const linePercent = percentage(measurement.lineHit, measurement.lineFound);
   const functionPercent = percentage(measurement.functionHit, measurement.functionFound);
+
   return {
     lineFound: measurement.lineFound,
     lineHit: measurement.lineHit,

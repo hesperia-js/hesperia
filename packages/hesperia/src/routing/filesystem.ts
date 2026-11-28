@@ -51,7 +51,11 @@ function assertComponent(value: unknown, filename: string): Component<unknown> {
 async function loadComponent(
   module: RouteTableModule,
   signal: AbortSignal,
+  prepareModule?: (filename: string) => void,
 ): Promise<Component<unknown>> {
+  if (signal.aborted) throw signal.reason;
+  prepareModule?.(module.filename);
+
   const value = await module.load();
 
   if (signal.aborted) throw signal.reason;
@@ -101,7 +105,14 @@ function nearestModule(match: TableMatch, role: "loading" | "error"): RouteTable
   return undefined;
 }
 
-async function loadGuard(module: RouteTableGuardModule, signal: AbortSignal): Promise<RouteGuard> {
+async function loadGuard(
+  module: RouteTableGuardModule,
+  signal: AbortSignal,
+  prepareModule?: (filename: string) => void,
+): Promise<RouteGuard> {
+  if (signal.aborted) throw signal.reason;
+  prepareModule?.(module.filename);
+
   const value = await module.load();
 
   if (signal.aborted) throw signal.reason;
@@ -145,6 +156,7 @@ function routeMatch(
   if (ordinary) return { match: ordinary as unknown as TableMatch, notFound: false };
 
   const fallback = matchNotFound(manifest, routeUrl);
+
   return fallback ? { match: fallback as unknown as TableMatch, notFound: true } : null;
 }
 
@@ -157,6 +169,7 @@ export function createFilesystemRouter(
   configuration: FilesystemRouterConfiguration = resolveAppConfiguration({}),
   styleRuntime?: InternalStyleRuntime,
   mountPath = "/",
+  prepareModule?: (filename: string) => void,
 ): Router {
   const normalizedMount = normalizeMountPath(mountPath);
 
@@ -178,7 +191,7 @@ export function createFilesystemRouter(
       match.chain.map(async (node) => {
         if (!node.files.layout) return;
 
-        layoutDefinitions.set(node, await loadComponent(node.files.layout, signal));
+        layoutDefinitions.set(node, await loadComponent(node.files.layout, signal, prepareModule));
       }),
     );
 
@@ -188,7 +201,7 @@ export function createFilesystemRouter(
       match.chain.map(async (node) => {
         const module = node.files.error;
 
-        if (module) errorDefinitions.set(node, await loadComponent(module, signal));
+        if (module) errorDefinitions.set(node, await loadComponent(module, signal, prepareModule));
       }),
     );
 
@@ -200,11 +213,13 @@ export function createFilesystemRouter(
     const guards: RouteGuard[] = [];
 
     for (const node of match.chain) {
-      if (node.files.guard) guards.push(await loadGuard(node.files.guard, signal));
+      if (node.files.guard) guards.push(await loadGuard(node.files.guard, signal, prepareModule));
     }
 
     const loading = nearestModule(match, "loading");
-    const loadingDefinition = loading ? await loadComponent(loading, signal) : undefined;
+    const loadingDefinition = loading
+      ? await loadComponent(loading, signal, prepareModule)
+      : undefined;
     const loadingComposition = viewStyles?.loading;
     const styleRecords = new Map<
       StyleCompositionId,
@@ -359,7 +374,7 @@ export function createFilesystemRouter(
       if (!module)
         throw new RenderFault("route-page", `Route ${match.leaf.pattern} has no page module`);
 
-      return loadComponent(module, signal);
+      return loadComponent(module, signal, prepareModule);
     };
 
     const makeRoute = async (
@@ -457,7 +472,7 @@ export function createFilesystemRouter(
             // Filesystem pages always receive an async boundary.  A missing
             // loading module means that the route area stays empty while the
             // page is pending; it does not remove the boundary itself.
-            loading: loading ? await loadComponent(loading, signal) : emptyRoute,
+            loading: loading ? await loadComponent(loading, signal, prepareModule) : emptyRoute,
           },
           viewStyles?.destination,
         ),

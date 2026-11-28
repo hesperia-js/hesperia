@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <span xmlns="" id="checked-svg-no-namespace">No namespace descendant</span>
+  <path id="checked-svg-restored" d="M0 0" />
+</svg>

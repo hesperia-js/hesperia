@@ -904,6 +904,37 @@ function Assert-IsolatedFixtureProcessScopeClear {
   }
 
   if ($processScopeMatches.Count -gt 0) {
+    if ($verificationControl) {
+      try {
+        $diagnostic = [pscustomobject]@{
+          format = 'hesperia-editor-fixture-scope-failure'
+          version = 1
+          runId = $ownerReceiptConfig.runId
+          checkedAt = $fixtureProcessScopeEvidence.checkedAt
+          processes = @($processScopeMatches | ForEach-Object {
+            $commandLine = [string]$_.CommandLine
+            $matchedPathRoles = @(
+              if ($commandLine.IndexOf($userDataPath, [StringComparison]::OrdinalIgnoreCase) -ge 0) { 'user-data' }
+              if ($commandLine.IndexOf($extensionsPath, [StringComparison]::OrdinalIgnoreCase) -ge 0) { 'extensions' }
+            )
+
+            [pscustomobject]@{
+              pid = [int]$_.ProcessId
+              parentPid = [int]$_.ParentProcessId
+              creationTime = $(if ($null -ne $_.CreationDate) { ([datetime]$_.CreationDate).ToUniversalTime().ToString('o') })
+              processName = [string]$_.Name
+              executablePath = $_.ExecutablePath
+              matchedPathRoles = $matchedPathRoles
+            }
+          })
+        }
+
+        [System.IO.File]::WriteAllText((Join-Path $coverageOutput 'fixture-process-scope-failure.json'), ($diagnostic | ConvertTo-Json -Depth 4 -Compress), [System.Text.UTF8Encoding]::new($false))
+      } catch {
+        Write-Output 'Could not write isolated fixture process scope diagnostics.'
+      }
+    }
+
     throw ('Isolated VS Code fixture processes remain active after required-owner shutdown: ' + (@($processScopeMatches | ForEach-Object { [int]$_.ProcessId }) -join ', '))
   }
 }

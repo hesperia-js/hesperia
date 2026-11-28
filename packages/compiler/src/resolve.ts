@@ -318,6 +318,7 @@ function resolveClassElements(
   return elements.map((element) => {
     if (element.kind === "static-block") {
       const blockScope = childScope(scope, `s${scope.next++}`);
+
       return { ...element, body: resolveBlock(element.body, blockScope) };
     }
 
@@ -335,6 +336,7 @@ function resolveClassElements(
     const bodyScope = element.parameters.some(hasPatternDefaults)
       ? childScope(methodScope, "body", true)
       : methodScope;
+
     return {
       ...element,
       key,
@@ -368,6 +370,7 @@ function resolveStatement(statement: CanonicalStatement, scope: Scope): Canonica
       const bodyScope = statement.parameters.some(hasPatternDefaults)
         ? childScope(inner, "body", true)
         : inner;
+
       return {
         ...statement,
         bindingId: lookup(scope, statement.name),
@@ -377,6 +380,7 @@ function resolveStatement(statement: CanonicalStatement, scope: Scope): Canonica
     }
     case "class": {
       const classScope = classChildScope(scope, `c${scope.next++}`, statement.name);
+
       return {
         ...statement,
         bindingId: lookup(scope, statement.name),
@@ -399,6 +403,7 @@ function resolveStatement(statement: CanonicalStatement, scope: Scope): Canonica
           const hasShadowedBinding =
             hoistedBindingIds.length === resolvedBindingIds.length &&
             hoistedBindingIds.some((bindingId, index) => bindingId !== resolvedBindingIds[index]);
+
           return {
             ...declaration,
             pattern,
@@ -419,6 +424,7 @@ function resolveStatement(statement: CanonicalStatement, scope: Scope): Canonica
     case "if": {
       const consequent = resolveStatement(statement.consequent, scope);
       const alternate = statement.alternate ? resolveStatement(statement.alternate, scope) : null;
+
       return {
         ...statement,
         test: resolveExpression(statement.test, scope),
@@ -505,6 +511,7 @@ function resolveStatement(statement: CanonicalStatement, scope: Scope): Canonica
         labels: new Map(scope.labels),
       };
       const bindingId = bindLabel(labeledScope, statement.label);
+
       return {
         ...statement,
         bindingId,
@@ -528,6 +535,7 @@ function resolveStatement(statement: CanonicalStatement, scope: Scope): Canonica
         if (handler.param) predeclarePattern(handler.param, catchScope);
 
         const param = handler.param ? resolvePattern(handler.param, catchScope, false) : null;
+
         handler = {
           ...handler,
           param,
@@ -538,6 +546,7 @@ function resolveStatement(statement: CanonicalStatement, scope: Scope): Canonica
       const finalizer = statement.finalizer
         ? resolveBlock(statement.finalizer, childScope(scope, `f${scope.next++}`))
         : null;
+
       return { ...statement, body, handler, finalizer };
     }
     case "block": {
@@ -559,6 +568,7 @@ function resolveStatement(statement: CanonicalStatement, scope: Scope): Canonica
             : declaration.kind === "variable"
               ? declaration.declarations.flatMap((item) => patternNames(item.pattern))
               : [];
+
       return {
         ...statement,
         declaration,
@@ -593,6 +603,7 @@ function resolveForLeft(left: CanonicalForLeft, scope: Scope, declare: boolean):
   const hasShadowedBinding =
     hoistedBindingIds.length === resolvedBindingIds.length &&
     hoistedBindingIds.some((bindingId, index) => bindingId !== resolvedBindingIds[index]);
+
   return {
     ...left,
     pattern,
@@ -645,6 +656,7 @@ function resolveChild(child: CanonicalChild, scope: Scope): CanonicalChild {
         consequent,
         alternate,
       };
+
       return {
         ...resolved,
         captures: collectCaptures(resolved, scope.listParameterBindings),
@@ -662,6 +674,7 @@ function resolveChild(child: CanonicalChild, scope: Scope): CanonicalChild {
       ]);
       const listScope: Scope = { ...inner, listParameterBindings };
       const body = resolveChild(child.body, listScope);
+
       return {
         ...child,
         collection: resolveExpression(child.collection, scope),
@@ -678,7 +691,8 @@ function resolveProp(prop: CanonicalComponentProp, scope: Scope): CanonicalCompo
   if (prop.kind === "children")
     return { ...prop, children: prop.children.map((item) => resolveChild(item, scope)) };
 
-  if (prop.kind === "fallback") return { ...prop, child: resolveChild(prop.child, scope) };
+  if (prop.kind === "fallback" || prop.kind === "rendered")
+    return { ...prop, child: resolveChild(prop.child, scope) };
 
   return { ...prop, expression: resolveExpression(prop.expression, scope) };
 }
@@ -776,6 +790,7 @@ function resolveExpression(expression: CanonicalExpression, scope: Scope): Canon
       const bodyScope = expression.parameters.some(hasPatternDefaults)
         ? childScope(inner, "body", true)
         : inner;
+
       return {
         ...expression,
         parameters,
@@ -795,6 +810,7 @@ function resolveExpression(expression: CanonicalExpression, scope: Scope): Canon
       const bodyScope = expression.parameters.some(hasPatternDefaults)
         ? childScope(inner, "body", true)
         : inner;
+
       return {
         ...expression,
         nameBindingId: expression.name === null ? undefined : lookup(inner, expression.name),
@@ -808,6 +824,7 @@ function resolveExpression(expression: CanonicalExpression, scope: Scope): Canon
         `c${scope.next++}`,
         expression.name === null ? null : expression.name,
       );
+
       return {
         ...expression,
         nameBindingId: expression.name === null ? undefined : lookup(classScope, expression.name),

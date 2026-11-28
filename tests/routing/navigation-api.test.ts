@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { bootstrapApplication } from "../../packages/hesperia/src/runtime/application.ts";
+import { createClient } from "../../packages/hesperia/src/client.ts";
 import { defineComponent } from "../../packages/hesperia/src/runtime/components.ts";
 import { element, text, type Rendered } from "../../packages/hesperia/src/runtime/dom.ts";
 import { Router } from "../../packages/hesperia/src/routing/navigation.ts";
@@ -222,6 +223,7 @@ function createHistoryDriver(window: globalThis.Window) {
 
     releaseMove() {
       const release = heldMove;
+
       heldMove = undefined;
 
       release?.();
@@ -281,6 +283,7 @@ function createHarness(window = createWindow(), mountPath = "/") {
             throw onePreparationFailure;
 
           const main = window.document.createElement("main");
+
           main.textContent = url.pathname;
           return {
             owners: [],
@@ -333,6 +336,7 @@ function createHarness(window = createWindow(), mountPath = "/") {
 
     releaseSettlement() {
       const release = releaseSettlement;
+
       releaseSettlement = undefined;
 
       release?.();
@@ -511,6 +515,7 @@ test("History fallback exposes stable entries, follows traversals, and waits for
     history: "replace",
     state: { page: "one-replaced" },
   });
+
   await replacement.finished;
   const oneReplaced = harness.reservation.facade.currentEntry!;
 
@@ -535,6 +540,7 @@ test("History fallback exposes stable entries, follows traversals, and waits for
   const twoNavigation = harness.reservation.facade.navigate("/two", {
     state: { page: "two" },
   });
+
   await twoNavigation.finished;
   const two = harness.reservation.facade.currentEntry!;
   let prunedTwoPropertyDisposals = 0;
@@ -612,6 +618,7 @@ test("History fallback exposes stable entries, follows traversals, and waits for
   const replacementAfterBack = harness.reservation.facade.navigate("/three", {
     state: { page: "three" },
   });
+
   await replacementAfterBack.finished;
 
   expect(two.index).toBe(-1);
@@ -746,6 +753,7 @@ test("fallback exact unchanged-fragment navigation keeps the page and skips rout
 
   harness.reservation.facade.addEventListener("navigate", (event) => {
     const navigate = event as NavigateEvent;
+
     observed = {
       sameDocument: navigate.destination.sameDocument,
       hashChange: navigate.hashChange,
@@ -964,6 +972,7 @@ test("development hard reload acknowledges only a synchronous identity-matched n
   let nativeEvent: NavigateEvent | undefined;
   let intercepted = false;
   let navigation!: EventTarget & Navigation;
+
   navigation = installNativeNavigation(window, (options) => {
     reloadCalls++;
     reloadInfo = options?.info;
@@ -974,6 +983,7 @@ test("development hard reload acknowledges only a synchronous identity-matched n
     navigation.dispatchEvent(nativeEvent);
 
     const entry = navigation.currentEntry!;
+
     return { committed: Promise.resolve(entry), finished: Promise.resolve(entry) };
   });
   const reservation = reserveNavigation(window);
@@ -1012,10 +1022,12 @@ test("development hard reload does not acknowledge a missing synchronous native 
   let delayedInfo: unknown;
   let intercepted = false;
   let navigation!: EventTarget & Navigation;
+
   navigation = installNativeNavigation(window, (options) => {
     reloadCalls++;
     delayedInfo = options?.info;
     const entry = navigation.currentEntry!;
+
     return { committed: Promise.resolve(entry), finished: Promise.resolve(entry) };
   });
   const reservation = reserveNavigation(window);
@@ -1148,6 +1160,7 @@ test("fallback preserves nested structured-clone boundaries for History and Navi
   expect(harness.window.history.state).toStrictEqual({ nested: { owner: "classic" } });
 
   const navigationInput = { nested: { owner: "navigation" } };
+
   await harness.reservation.facade.navigate("/two", { state: navigationInput }).finished;
   navigationInput.nested.owner = "mutated input";
   const entry = harness.reservation.facade.currentEntry!;
@@ -1338,6 +1351,7 @@ test("fallback scroll is available only after interception commits and only once
   );
 
   const result = navigation.navigate("/two");
+
   await result.committed;
 
   expect(() => issued.scroll()).not.toThrow();
@@ -1359,6 +1373,7 @@ test("fallback traversal rejects a precommit redirect with InvalidStateError", a
   await harness.start();
 
   const navigation = harness.reservation.facade;
+
   await navigation.navigate("/two").finished;
 
   navigation.addEventListener(
@@ -1619,5 +1634,160 @@ test("one compiled filesystem table starts and navigates correctly under two hos
     } finally {
       app.dispose();
     }
+  }
+});
+
+test("routed disposal closes navigation before cleanup and joins its rejection", async () => {
+  const window = createWindow();
+
+  window.document.documentElement.remove();
+  const cleanupFailure = new Error("route cleanup failed");
+  let rejectCleanup!: (reason: unknown) => void;
+  const pending = new Promise<void>((_resolve, reject) => {
+    rejectCleanup = reject;
+  });
+  let facade!: NonNullable<ReturnType<typeof navigationReservationFor>>["facade"];
+  let navigationError: unknown;
+  let link!: HTMLAnchorElement;
+  let click!: MouseEvent;
+  let cleanupCalls = 0;
+  const page = defineComponent((owner) => {
+    createClient(owner).cleanup(() => {
+      cleanupCalls++;
+
+      try {
+        facade.navigate("/again");
+      } catch (error) {
+        navigationError = error;
+      }
+
+      link.dispatchEvent(click);
+      return pending;
+    });
+    return element(owner, "main", {}, ["ready"]);
+  });
+  const root: RouteTableNode = {
+    id: "root",
+    pattern: "/",
+    segments: [],
+    files: { page: { filename: "/routes/+page.tsx", load: async () => page } },
+    children: [],
+  };
+  const shell = defineComponent<{ children: Rendered }>((owner, props) =>
+    element(owner, "html", {}, [
+      element(owner, "head", {}, []),
+      element(owner, "body", {}, [props.children()]),
+    ]),
+  );
+  const app = await bootstrapApplication(window, {
+    configuration: () => ({}),
+    shell: () => shell,
+    routes: () => ({ version: 1, root, routes: [root] }),
+  });
+
+  facade = navigationReservationFor(window)!.facade;
+  link = window.document.createElement("a");
+  link.href = "/again";
+  window.document.body.appendChild(link);
+  const MouseEventConstructor = (window as unknown as { MouseEvent: typeof MouseEvent }).MouseEvent;
+
+  click = new MouseEventConstructor("click", { bubbles: true, cancelable: true, button: 0 });
+
+  const disposal = app.dispose();
+  const outcome = disposal.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+
+  expect(app.dispose()).toBe(disposal);
+  expect(cleanupCalls).toBe(1);
+  expect(navigationError).toMatchObject({ kind: "navigation-inactive" });
+  expect(click.defaultPrevented).toBe(false);
+
+  rejectCleanup(cleanupFailure);
+  const failure = await outcome;
+
+  expect(failure).toBeInstanceOf(AggregateError);
+  expect((failure as AggregateError).errors).toStrictEqual([cleanupFailure]);
+  expect(cleanupCalls).toBe(1);
+});
+
+test("routed disposal joins cleanup of a pending route canceled during admission close", async () => {
+  const window = createWindow();
+
+  window.document.documentElement.remove();
+  const failure = new Error("pending route cleanup failed");
+  let notifyStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    notifyStarted = resolve;
+  });
+  let releasePage!: () => void;
+  const pendingPage = new Promise<void>((resolve) => {
+    releasePage = resolve;
+  });
+  let cleanupCalls = 0;
+  const home = defineComponent((owner) => element(owner, "main", {}, ["home"]));
+  const next = defineComponent(
+    async (owner) => {
+      createClient(owner).cleanup(() => {
+        cleanupCalls++;
+        throw failure;
+      });
+      notifyStarted();
+      await pendingPage;
+      return element(owner, "main", {}, ["next"]);
+    },
+    { async: true },
+  );
+  const loading = defineComponent((owner) => element(owner, "span", {}, ["loading"]));
+  const child: RouteTableNode = {
+    id: "next",
+    pattern: "/next",
+    segments: [{ kind: "static", value: "next" }],
+    files: {
+      page: { filename: "/routes/next/+page.tsx", load: async () => next },
+      loading: { filename: "/routes/next/+loading.tsx", load: async () => loading },
+    },
+    children: [],
+  };
+  const root: RouteTableNode = {
+    id: "root",
+    pattern: "/",
+    segments: [],
+    files: { page: { filename: "/routes/+page.tsx", load: async () => home } },
+    children: [child],
+  };
+  const shell = defineComponent<{ children: Rendered }>((owner, props) =>
+    element(owner, "html", {}, [
+      element(owner, "head", {}, []),
+      element(owner, "body", {}, [props.children()]),
+    ]),
+  );
+  const app = await bootstrapApplication(window, {
+    configuration: () => ({}),
+    shell: () => shell,
+    routes: () => ({ version: 1, root, routes: [root, child] }),
+  });
+  const navigation = navigationReservationFor(window)!.facade.navigate("/next");
+
+  void navigation.committed.catch(() => undefined);
+  void navigation.finished.catch(() => undefined);
+
+  try {
+    await started;
+    const disposal = app.dispose();
+    const outcome = disposal.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const result = await outcome;
+
+    expect(result).toBeInstanceOf(AggregateError);
+    expect((result as AggregateError).errors).toStrictEqual([failure]);
+    expect(cleanupCalls).toBe(1);
+    expect(app.dispose()).toBe(disposal);
+  } finally {
+    releasePage();
+    await navigation.finished.catch(() => undefined);
   }
 });

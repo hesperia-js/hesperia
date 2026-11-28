@@ -4,6 +4,7 @@ import { validateComponentBindingReads } from "../../packages/compiler/src/body-
 
 function validate(source: string) {
   const analyzed = analyzeModule(source, { filename: "body-bindings.tsx" }).result;
+
   return validateComponentBindingReads(analyzed.ir);
 }
 

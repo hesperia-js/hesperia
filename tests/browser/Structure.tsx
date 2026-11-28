@@ -36,6 +36,7 @@ export function getPanelCleanupCount() {
 
 function Row(props: Component.Props<RowValue>) {
   const local = client.state(0);
+
   return (
     <li data-row={props.id()}>
       <button on:click={() => local.update((value) => value + 1)}>

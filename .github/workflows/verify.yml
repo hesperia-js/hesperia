@@ -60,8 +60,8 @@ jobs:
             import assert from "node:assert/strict";
             import { releaseVersion } from "./scripts/ci/check-release.ts";
             const branch = process.env.HESPERIA_HEAD_BRANCH;
-            assert.ok(/^(feature|fix)\/.+$/.test(branch) || branch.startsWith("release/"),
-              "Use feature/<name>, fix/<name>, or release/<VERSION> for repository branches");
+            assert.ok(/^(feature|fix|work)\/.+$/.test(branch) || branch.startsWith("release/"),
+              "Use feature/<name>, fix/<name>, work/<name>, or release/<VERSION> for repository branches");
             if (branch.startsWith("release/")) {
               const { version } = releaseVersion(branch.slice("release/".length));
               assert.equal(version, (await Bun.file("package.json").json()).version,
@@ -147,6 +147,8 @@ jobs:
     if: "needs.checks.outputs.behavior == 'true' && needs.checks.outputs.full == 'false'"
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 60
+    env:
+      HESPERIA_REQUIRE_CHROME_EXECUTABLE_PATH: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -164,10 +166,12 @@ jobs:
         run: "bun run build"
       - name: "Install browser engines and system dependencies"
         if: "runner.os == 'Linux'"
-        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
+        timeout-minutes: 25
+        run: "bash scripts/ci/install-playwright-linux.sh chromium firefox webkit"
       - name: "Install browser engines"
         if: "runner.os == 'Windows'"
         run: "node node_modules/playwright/cli.js install chromium firefox webkit"
+      - uses: ./.github/actions/setup-chrome
       - name: "Test compiler"
         if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.compiler == 'true'"
         run: "bun test --timeout=45000 tests/compiler"
@@ -180,6 +184,23 @@ jobs:
       - name: "Test tooling"
         if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'"
         run: "bun test --timeout=45000 tests/tooling"
+      - name: "Test public source swaps"
+        if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'"
+        run: "bun test --isolate --timeout=45000 ./tests/tooling/fixtures/q10-public-source-swap.fixture.ts"
+      - name: "Check Saxe supported-mode coverage"
+        if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'"
+        run: "bun run scripts/ci/check-saxe-integration-coverage.ts --capture"
+      - name: "Retain Saxe coverage evidence"
+        if: "always() && needs.checks.outputs.full == 'false' && needs.checks.outputs.tooling == 'true'"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "hesperia-saxe-coverage-${{ matrix.platform }}-${{ github.run_attempt }}"
+          if-no-files-found: ignore
+          include-hidden-files: true
+          path: |
+            .hesperia/saxe-integration-coverage/
+            .hesperia/coverage/runs/
+          retention-days: 14
       - name: "Test routing"
         if: "needs.checks.outputs.full == 'false' && needs.checks.outputs.routing == 'true'"
         run: "bun test --timeout=45000 tests/routing"
@@ -220,6 +241,7 @@ jobs:
           - native-editor
     env:
       HESPERIA_CI_COVERAGE_REVISION: ${{ needs.checks.outputs.revision }}
+      HESPERIA_REQUIRE_CHROME_EXECUTABLE_PATH: ${{ (matrix.group == 'bun-tests-ordinary' || matrix.group == 'browser-css') && '1' || '0' }}
       DONT_PROMPT_WSL_INSTALL: 1
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -232,16 +254,20 @@ jobs:
         run: "bun run build"
       - name: "Install ordinary test browser engines and system dependencies"
         if: "matrix.group == 'bun-tests-ordinary' && runner.os == 'Linux'"
-        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
+        timeout-minutes: 35
+        run: "bash scripts/ci/install-playwright-linux.sh chromium firefox webkit"
       - name: "Install ordinary test browser engines"
         if: "matrix.group == 'bun-tests-ordinary' && runner.os == 'Windows'"
         run: "node node_modules/playwright/cli.js install chromium firefox webkit"
       - name: "Install CSS capture Chromium and system dependencies"
         if: "matrix.group == 'browser-css' && runner.os == 'Linux'"
-        run: "node node_modules/playwright/cli.js install --with-deps chromium"
+        timeout-minutes: 25
+        run: "bash scripts/ci/install-playwright-linux.sh chromium"
       - name: "Install CSS capture Chromium"
         if: "matrix.group == 'browser-css' && runner.os == 'Windows'"
         run: "node node_modules/playwright/cli.js install chromium"
+      - uses: ./.github/actions/setup-chrome
+        if: "matrix.group == 'bun-tests-ordinary' || matrix.group == 'browser-css'"
       - name: "Set up the real editor"
         id: editor
         if: "matrix.group == 'native-editor'"
@@ -250,6 +276,9 @@ jobs:
         if: "matrix.group == 'native-editor' && runner.os == 'Linux'"
         shell: bash
         run: "python3 -B editors/vscode/tests/test_linux_observer.py -v"
+      - name: "Test public source swaps"
+        if: "matrix.group == 'bun-tests-ordinary'"
+        run: "bun test --isolate --timeout=45000 ./tests/tooling/fixtures/q10-public-source-swap.fixture.ts"
       - name: "Run the original coverage group"
         env:
           COVERAGE_GROUP: ${{ matrix.group }}
@@ -262,6 +291,17 @@ jobs:
             args+=("$CODE_PATH" "$CODE_VERSION")
           fi
           bun run scripts/ci/coverage-owner-launcher.ts scripts/ci/run-final-coverage.ts -- "${args[@]}"
+      - name: "Retain Saxe coverage evidence"
+        if: "always() && matrix.group == 'bun-tests-ordinary'"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "hesperia-saxe-coverage-${{ matrix.platform }}-${{ github.run_attempt }}"
+          if-no-files-found: ignore
+          include-hidden-files: true
+          path: |
+            .hesperia/saxe-integration-coverage/
+            .hesperia/coverage/runs/
+          retention-days: 14
       - name: "Retain the original group evidence"
         if: "always()"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -318,12 +358,23 @@ jobs:
           ref: ${{ needs.checks.outputs.revision }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/setup
       - name: "Download this platform's original groups"
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
           pattern: "hesperia-coverage-group-${{ matrix.platform }}-*-${{ github.run_attempt }}"
           path: .coverage-groups
+      - name: "Check coverage groups before setup"
+        shell: bash
+        run: |
+          shopt -s nullglob
+          manifests=(.coverage-groups/*/coverage-group.json)
+          if (( ${#manifests[@]} != 4 )); then
+            printf 'Expected four coverage group manifests from attempt %s, found %s.\n' \
+              "$GITHUB_RUN_ATTEMPT" "${#manifests[@]}" >&2
+            printf 'After fixing any failed groups, use Re-run all jobs to collect coverage from one attempt.\n' >&2
+            exit 1
+          fi
+      - uses: ./.github/actions/setup
       - name: "Admit all four groups and capture aggregate support"
         run: "bun run scripts/ci/coverage-owner-launcher.ts scripts/ci/run-final-coverage.ts -- --aggregate .coverage-groups"
       - name: "Retain final and original coverage evidence"
@@ -351,7 +402,6 @@ jobs:
           ref: ${{ needs.checks.outputs.revision }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/setup
       - name: "Download Windows coverage evidence"
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
@@ -362,6 +412,7 @@ jobs:
         with:
           name: "hesperia-coverage-ubuntu-24.04-${{ github.run_attempt }}"
           path: .coverage-artifacts/linux
+      - uses: ./.github/actions/setup
       - name: "Check combined Windows and Linux coverage"
         run: "bun run scripts/ci/run-combined-coverage.ts --windows-root .coverage-artifacts/windows --linux-root .coverage-artifacts/linux --output .hesperia/coverage/combined"
       - name: "Retain combined coverage report"
@@ -376,6 +427,8 @@ jobs:
   browser:
     name: "Browser suite (${{ matrix.platform }})"
     runs-on: ${{ matrix.platform }}
+    env:
+      HESPERIA_REQUIRE_CHROME_EXECUTABLE_PATH: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -393,10 +446,12 @@ jobs:
         run: "bun run build"
       - name: "Install all browser engines"
         if: "runner.os == 'Linux'"
-        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
+        timeout-minutes: 35
+        run: "bash scripts/ci/install-playwright-linux.sh chromium firefox webkit"
       - name: "Install all browser engines"
         if: "runner.os == 'Windows'"
         run: "node node_modules/playwright/cli.js install chromium firefox webkit"
+      - uses: ./.github/actions/setup-chrome
       - name: "Run browser suite in Chromium, Firefox, and WebKit"
         run: "bun run test:browser"
       - name: "Retain failed browser traces"
@@ -414,7 +469,9 @@ jobs:
     needs: checks
     if: "needs.checks.outputs.package == 'true'"
     runs-on: ${{ matrix.platform }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.platform == 'ubuntu-24.04' && 40 || 30 }}
+    env:
+      HESPERIA_REQUIRE_CHROME_EXECUTABLE_PATH: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -427,15 +484,53 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false
+      - name: "Initialize the package job dependency cache"
+        shell: bash
+        run: |
+          cache="$RUNNER_TEMP/hesperia-graphql-package-cache"
+          if [ -e "$cache" ]; then
+            echo "Package job dependency cache already exists: $cache" >&2
+            exit 1
+          fi
+          mkdir -p "$cache"
       - uses: ./.github/actions/setup
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/hesperia-graphql-package-cache
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.22.0
+          package-manager-cache: false
+      - name: "Record Node 24 scheduling profile"
+        shell: bash
+        run: "printf 'HESPERIA_SCHEDULING_NODE_24_22_0_EXE=%s\\n' \"$(node -p 'process.execPath')\" >> \"$GITHUB_ENV\""
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.10.0
+          package-manager-cache: false
+      - name: "Record Node 26.10 scheduling profile"
+        shell: bash
+        run: "printf 'HESPERIA_SCHEDULING_NODE_26_10_0_EXE=%s\\n' \"$(node -p 'process.execPath')\" >> \"$GITHUB_ENV\""
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.12.0
+          package-manager-cache: false
+      - name: "Record Node 26.12 scheduling profile"
+        shell: bash
+        run: "printf 'HESPERIA_SCHEDULING_NODE_26_12_0_EXE=%s\\n' \"$(node -p 'process.execPath')\" >> \"$GITHUB_ENV\""
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.2
+          package-manager-cache: false
       - name: "Build workspace packages"
         run: "bun run build"
       - name: "Install browser engines and system dependencies"
         if: "runner.os == 'Linux'"
-        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
+        timeout-minutes: 35
+        run: "bash scripts/ci/install-playwright-linux.sh chromium firefox webkit"
       - name: "Install browser engines"
         if: "runner.os == 'Windows'"
         run: "node node_modules/playwright/cli.js install chromium firefox webkit"
+      - uses: ./.github/actions/setup-chrome
       - name: "Download the tested package candidate"
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
@@ -444,9 +539,13 @@ jobs:
       - name: "Validate the package candidate"
         run: "bun scripts/ci/verify-release-candidate.ts --candidate-dir .hesperia/release-candidate"
       - name: "Run installed and linked package behavior"
-        run: "bun test --timeout=60000 tests/package"
+        shell: bash
+        run: |
+          export HESPERIA_SCHEDULING_NODE_22_23_2_EXE="$(node -p 'process.execPath')"
+          bun test --timeout=60000 tests/package
         env:
           HESPERIA_RELEASE_CANDIDATE_DIR: ${{ format('{0}/.hesperia/release-candidate', github.workspace) }}
+          HESPERIA_GRAPHQL_SEED_CACHE_DIR: ${{ runner.temp }}/hesperia-graphql-package-cache
   golden-plan:
     name: "Select implemented golden suites"
     runs-on: ubuntu-24.04
@@ -494,6 +593,7 @@ jobs:
     env:
       GOLDEN_PROJECT: ${{ matrix.project }}
       GOLDEN_SUITES_JSON: ${{ toJSON(matrix.suites) }}
+      HESPERIA_REQUIRE_CHROME_EXECUTABLE_PATH: "1"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -503,12 +603,16 @@ jobs:
       - uses: ./.github/actions/setup
       - name: "Build packages"
         run: "bun run build"
-      - name: "Install all browser engines"
+      - name: "Install the selected browser engine and system dependencies"
         if: "runner.os == 'Linux'"
-        run: "node node_modules/playwright/cli.js install --with-deps chromium firefox webkit"
-      - name: "Install all browser engines"
+        timeout-minutes: 35
+        run: 'bash scripts/ci/install-playwright-linux.sh "$GOLDEN_PROJECT"'
+        shell: bash
+      - name: "Install the selected browser engine"
         if: "runner.os == 'Windows'"
-        run: "node node_modules/playwright/cli.js install chromium firefox webkit"
+        run: 'node node_modules/playwright/cli.js install "$GOLDEN_PROJECT"'
+        shell: bash
+      - uses: ./.github/actions/setup-chrome
       - name: "Run every selected suite in the matrix browser"
         run: |
           mapfile -t suites < <(node -e 'for (const suite of JSON.parse(process.env.GOLDEN_SUITES_JSON)) console.log(suite)')
@@ -609,7 +713,7 @@ jobs:
       - name: "Set up Bun"
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - name: "Require every selected verification job"
         env:
           RESULTS: ${{ toJSON(needs) }}

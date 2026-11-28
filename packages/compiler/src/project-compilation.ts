@@ -12,6 +12,7 @@ import {
   type VirtualModule,
 } from "./checking.ts";
 import { relative } from "node:path";
+import { sealProjectTypingEvidence } from "./typing-inputs.ts";
 
 /**
  * Compile one module, obtaining declared prop mappings from the native TypeScript checker.
@@ -119,13 +120,18 @@ export function emitCheckingSession(
     }
   }
 
-  if (!emissionErrors.size) return { checking, modules: emitted };
+  if (!emissionErrors.size) {
+    const compilation = { checking, modules: emitted };
+
+    sealProjectTypingEvidence(session, checking, compilation);
+    return compilation;
+  }
 
   const modulesWithEmissionErrors = checking.modules.map((module) => ({
     ...module,
     diagnostics: [...module.diagnostics, ...(emissionErrors.get(module.filename) ?? [])],
   }));
-  return {
+  const compilation: ProjectCompilation = {
     checking: {
       ...checking,
       diagnostics: modulesWithEmissionErrors.flatMap((module) => module.diagnostics),
@@ -133,6 +139,9 @@ export function emitCheckingSession(
     },
     modules: emitted,
   };
+
+  sealProjectTypingEvidence(session, checking, compilation);
+  return compilation;
 }
 
 function styleIdentity(filename: string, root: string | undefined): string {

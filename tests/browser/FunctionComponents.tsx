@@ -65,6 +65,7 @@ function Frame(props: Component.Props<{ children: Rendered }>) {
 
 export default function FunctionComponents() {
   const label = state("first");
+
   return (
     <Frame>
       <button id="update-functions" on:click={() => label.set(upper("second"))}>

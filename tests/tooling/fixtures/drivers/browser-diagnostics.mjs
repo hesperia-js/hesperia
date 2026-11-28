@@ -335,6 +335,7 @@ export async function startBrowserDiagnostics(page, { directory, label }) {
 
       /** @param {number} limit */
       const remaining = (limit) => Math.max(1, Math.min(limit, deadline - Date.now()));
+
       traceStopped = true;
       const trace = bounded(
         () => context.tracing.stop({ path: join(artifactDirectory, "trace.zip") }),
@@ -422,6 +423,7 @@ export async function startBrowserDiagnostics(page, { directory, label }) {
         dom,
         screenshot,
       ]);
+
       captures.trace = traceResult;
       captures.screenshot =
         screenshotResult.status === "completed" ? { status: "completed" } : screenshotResult;

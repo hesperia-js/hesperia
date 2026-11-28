@@ -175,6 +175,7 @@ test("disposing releases old listeners and a recreated component gets fresh once
 
   const oldState = await oldPlainButton!.evaluate((node) => {
     const before = window.hesperiaNativeEvents.deliveries.length;
+
     return {
       connected: node.isConnected,
       dispatchResult: node.dispatchEvent(new MouseEvent("click", { bubbles: true })),
@@ -206,8 +207,10 @@ test("a callback-level shared once guard incorrectly suppresses the second eleme
 
   const delivered = await page.evaluate(() => {
     const first = document.createElement("button");
+
     first.id = "broken-shared-once-a";
     const second = document.createElement("button");
+
     second.id = "broken-shared-once-b";
     const calls: string[] = [];
     let alreadyCalled = false;

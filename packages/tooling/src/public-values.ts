@@ -96,6 +96,7 @@ export function projectPublicValues(input: unknown): PublicProjection {
   const declaration = `declare module "hesperia/config/public" {\n${names
     .map((name) => `  export const ${name}: ${typeExpression(values[name])};`)
     .join("\n")}\n}\n`;
+
   return { values: Object.freeze(values), browser, declaration };
 }
 
@@ -192,6 +193,7 @@ function copyValue(value: unknown, parents: Set<object>, path: string): PublicVa
           ? copyValue(readDataProperty(value, String(index)), parents, `${path}[${index}]`)
           : undefined,
       );
+
       return Object.freeze(array);
     }
 
@@ -217,6 +219,7 @@ function readDataProperty(value: object, name: string): unknown {
 
 function plain(value: object): boolean {
   const prototype = Object.getPrototypeOf(value);
+
   return prototype === Object.prototype || prototype === null;
 }
 

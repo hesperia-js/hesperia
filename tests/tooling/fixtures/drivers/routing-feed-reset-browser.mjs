@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../../../support/browser-launch.mjs";
 import assert from "node:assert/strict";
 
 const [playwrightModuleUrl, applicationUrl, group] = process.argv.slice(2);
@@ -14,7 +15,7 @@ const terminalModes =
   group === "terminal" ? ["failed-active", "failed-parked", "completed-active"] : [];
 
 for (const engine of [chromium, firefox, webkit]) {
-  const browser = await engine.launch();
+  const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
   try {
     for (const mode of continuationModes) {

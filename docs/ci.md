@@ -34,8 +34,8 @@ lookup can leave older runs active. Release runs and runs whose provenance is
 uncertain can overlap newer ordinary runs. See [npm release setup](#npm-release-setup).
 
 For same-repository pull requests, CI accepts `feature/<name>`, `fix/<name>`,
-and `release/<VERSION>` source branches. Release branches must name a supported
-version matching the shared workspace version. Fork branch names are exempt;
+`work/<name>`, and `release/<VERSION>` source branches. Release branches must
+name a supported version matching the shared workspace version. Fork branch names are exempt;
 a fork's `release/*` branch does not authorize a release.
 
 ## Required checks
@@ -51,8 +51,8 @@ may be skipped only when a successful scope decision explicitly excludes it.
 
 The check rejects incorrectly named branches at PR verification time. To also
 restrict branch creation, create a separate branch ruleset targeting all branches,
-exclude `main`, `feature/**/*`, `fix/**/*`, and `release/**/*`, and enable
-**Restrict creations** without bypass actors. CI still validates release versions.
+exclude `main`, `feature/**/*`, `fix/**/*`, `work/**/*`, and `release/**/*`.
+Enable **Restrict creations** without bypass actors. CI still validates release versions.
 See [GitHub's ruleset guide](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/creating-rulesets-for-a-repository).
 
 Build, typechecking, lint, and formatting always run. The following gates run
@@ -175,6 +175,16 @@ dependencies, and temporary modules are excluded. The check fails if any
 executable source has no coverage records or either floor is below 90%.
 Sources with no executable statements are reported separately.
 
+Full CI and selected tooling verification run the checked SVG import owner
+separately and require at least 70% line coverage across the five supported
+vendored Saxe modules. The report includes the sixth module in the complete
+closure and makes no line exclusions. The job retains the direct run's logs,
+capture inputs, raw coverage artifacts, and checker report. Changes to Saxe or
+its checked-import owner select tooling verification.
+After the frozen install and build, run the same capture and check locally with
+`bun run scripts/ci/check-saxe-integration-coverage.ts --capture`. This check does not
+replace the combined Windows and Linux coverage gate.
+
 For a bounded local in-process report, run `bun run test:coverage` followed by
 `bun run scripts/ci/check-coverage.ts`. Those commands do not include browser
 or editor subprocesses. To capture all owners locally, use
@@ -243,9 +253,11 @@ transform, source-map, population, and canonical-map checks still apply. It
 measures its own support code before creating the platform receipt. The
 aggregate also runs after a producer failure to report invalid or missing inputs;
 the verification result requires every producer and aggregate to succeed.
-Artifact names and execution binding include the attempt: rerun the complete workflow when new
-coverage evidence is needed. Rerunning only failed jobs cannot combine retained
-successful groups from an earlier attempt.
+Artifact names and execution binding include the attempt. Each platform
+downloads and checks for all four group manifests before installing workspace
+dependencies. After fixing any failed groups, choose **Re-run all jobs** to
+collect coverage from one attempt. A failed-jobs-only rerun leaves previously
+successful groups in the earlier attempt.
 
 After both platform aggregates succeed, CI downloads their separate artifacts
 and runs:
@@ -334,6 +346,34 @@ the baseline frozen. After approval, an expectation change is a contract change 
 requires author approval. CI reports whether tests pass; it does not provide
 that approval. Review changes to the test, fixture, and expected output
 together.
+
+## Supported Hesperia releases
+
+Hesperia intends two stable major releases each year: one during May through
+July and one during October through December. These are target windows, not
+exact dates or a limit on the number of major releases.
+
+Formal long-term support (LTS) applies only to stable Hesperia major versions.
+When a stable successor supersedes a major, that superseded major's full
+one-year LTS window starts on the successor's stable release date. Prereleases
+receive no separate formal LTS and do not start the preceding stable major's
+LTS clock.
+
+A major's initial active period is additional to its full one-year LTS window.
+
+LTS releases are limited to compatible patch fixes on the supported major's
+latest existing minor line. Users on an older minor line must upgrade within
+that major to receive those fixes. Hesperia does not add feature-bearing minor
+releases during LTS. A major keeps its declared minimum browser support
+throughout its lifetime. LTS does not promise every possible correction or a
+response time.
+
+Aeolia is a separate library and does not inherit Hesperia's release or support
+policy.
+
+The VS Code editor extension follows a separate Marketplace release lifecycle,
+described in [editor release guidance](editor-release.md). This Hesperia support
+calendar does not apply to it.
 
 ## npm release setup
 

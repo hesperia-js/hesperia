@@ -20,9 +20,77 @@ export default defineConfig({
 
 The defaults are `allowUnsafeHTML: false`, `allowUnsafeEmbed: false`, `mountURL: "/"`, and an empty `resolutionOverrides.browser` map. Unknown settings fail validation. Browser resolution overrides match exact import names and are checked as browser code after replacement. See [getting started](https://github.com/hesperia-js/hesperia/blob/main/docs/getting-started.md) for an override example and [environment values](https://github.com/hesperia-js/hesperia/blob/main/packages/hesperia/docs/env.md) for environment loading and exposure rules.
 
+## Production target
+
+To produce a target-bound browser/static build, declare the target in the project configuration:
+
+```json
+{
+  "target": { "version": 1, "runtime": "browser", "profile": "static" }
+}
+```
+
+The production build captures the scanned page routes, managed assets, and public files for the browser/static host. It requires at least one filesystem page. Preview uses the captured routes to return a 404 for an unmatched document request. Omitting `target` retains the existing browser build format. Development continues to use the browser development host.
+
+Each Page needs five explicit render constraints inherited from its route declarations. For a browser/static build, a root `src/routes/+route.ts` can supply them:
+
+```ts
+import { route } from "hesperia/routing";
+
+export default route({
+  render: {
+    clientRender: "required",
+    ssr: "forbidden",
+    stream: "forbidden",
+    ssg: "forbidden",
+    hydration: "forbidden",
+  },
+});
+```
+
+Descendant declarations can add constraints. A missing or conflicting field stops production admission. The browser/static target only provides complete client rendering and mounting, so it rejects a policy that requires server rendering, static generation, progressive delivery, or hydration. It also rejects request-time `load` and `headers` declarations.
+
+For a custom server, load a target-bound build with `readTargetedBuild` and pass the result to `createTargetedHost` from `@hesperia/hosting`. Use the returned browser resource's `host` to handle requests, and close the resource after its response bodies have been consumed or canceled. The older `readBuild` and `createHost` path accepts the legacy build format, not this target-bound record. The generated Elysia starter currently uses that older path, so omit `target` when using its server.
+
+Node/fetch, Bun/Elysia, Bun/Hono, and Workerd/module-worker declarations are recognized, but their target profiles are unavailable. Selecting one stops the build; the declaration does not enable server rendering.
+
+## Server data-binding supplier
+
+`serverDataBinding` records the module specifier for a server-only `dataBindingForRequest` supplier:
+
+```ts
+export default defineConfig({
+  serverDataBinding: "./src/server-data-binding.ts",
+});
+```
+
+The setting is an optional, nonempty module specifier. Omission or `undefined` selects no supplier. The configuration reader captures an own data property without invoking accessors and does not import the selected module. Empty or whitespace-only strings, embedded null characters, and non-string values are invalid.
+
+The current build does not resolve or run this supplier. A future server producer must resolve the private module, validate its named export, and invoke it for requests. Setting this option does not make server rendering or a production target available.
+
 ## Application mount and generated assets
 
-`mountURL` is the application's path prefix, such as `/dashboard`. It must be a pathname on the serving origin, without a query or fragment. The build saves its canonical value with the browser asset inventory. At the root mount, Hesperia serves its startup wrapper and generated assets under `/_hesperia/`; at `/dashboard`, that namespace is `/dashboard/_hesperia/`. Route navigation uses the same mount prefix. See [routing](https://github.com/hesperia-js/hesperia/blob/main/docs/routing.md) for the author-facing navigation behavior.
+`mountURL` is the application's path prefix, such as `/dashboard`. It must be a pathname on the serving origin, without a query or fragment. The build saves its canonical value with the browser asset inventory. By default, Hesperia serves its startup wrapper and generated assets under `/_hesperia/` at the root mount and `/dashboard/_hesperia/` at `/dashboard`. Route navigation uses the same mount prefix. See the [routing guide](../../../docs/routing.md) for navigation behavior.
+
+### Select a deployment's asset base
+
+For a browser/static production target, pass `generatedAssets.baseURL` to `writeBuild` to publish with a different generated asset base. Use a directory pathname on the application origin or an absolute HTTP(S) directory URL. Publication reuses the compiled modules and emitted assets and generates new startup wiring for the selected base. The application mount, page URLs, and captured public-file URLs keep their own locations.
+
+Supply `applicationOrigin` if an absolute asset base overlaps an application pathname and the host needs to tell the two origins apart. Use one HTTP(S) origin, such as `https://www.example.test`, including the port if needed. Supply the origin without credentials, path, query, or fragment. Admission rejects an actual generated resource that shares a public file or captured page URL on that origin. A separate asset origin can use the same pathname. A later publication cannot claim a URL still owned by a retained generated asset. Preview refuses an overlapping mount before serving requests. A legacy build has an HTML fallback for its whole mount outside the reserved asset namespace. When a retained URL falls within that fallback, select a disjoint mount or the browser/static target so publication can verify the actual routes.
+
+```ts
+import { prepareBuild, writeBuild } from "@hesperia/tooling/project-service";
+
+const build = await prepareBuild(projectRoot);
+await writeBuild(projectRoot, build, {
+  applicationOrigin: "https://www.example.test",
+  generatedAssets: { baseURL: "https://assets.example.test/releases/current/" },
+});
+```
+
+The published deployment fixes this binding for the completed capture. Pass the result of `readTargetedBuild` to `createTargetedHost` without an override to use its saved binding. Preview uses its actual loopback origin when it needs an application-origin binding and leaves the saved deployment intact. A custom adapter must arrange delivery at the selected asset origin. [Hosting API](../../hosting/README.md#serve-a-target-bound-capture).
+
+### Serve a legacy browser build
 
 The `@hesperia/hosting` package exposes `createHost` for a Fetch-based server adapter. Pass the captured build's `hosting` record and `files` map, which must contain exactly the recorded `/assets/...` Blobs. A host selection can place the same captured build at another mount without recompiling it:
 
@@ -46,13 +114,29 @@ const host = await createHost(captured, { mountURL: "/dashboard" });
 
 `readBuild` needs only the build directory. It checks the production record, complete asset inventory, and byte digests, and rejects symlinks in the captured paths. An interrupted read retries only when the published record changed, with at most three attempts. An unchanged missing or modified asset rejects immediately. In-memory hosting does not load filesystem APIs.
 
-Production preparation removes abandoned capture directories before compilation. Publication writes the complete validated build into an empty capture directory, replaces the published record, then retires the prior capture. A failed compilation or capture write leaves the prior published build available. There is no generated disk `index.html`; Fetch hosts generate the document wrapper for the selected mount. Static-file deployment is not part of this host format.
+Legacy browser publication writes a complete capture, replaces the published record, and retires the prior capture. A failed compilation or capture write leaves the prior published build available. The Fetch host generates the document wrapper for the selected mount. Use a browser/static production target for a persisted deployment selection and a generated `index.html`.
 
 Mounts and asset keys use the browser's WHATWG pathname representation. For example, `/@team/:scope+a` stays literal, while spaces, Unicode, and `^` use percent encoding. Mounts cannot contain query or fragment delimiters. Generated asset keys encode filename data such as `#` and `%`: a file named `image%20name.png` has the key `image%2520name.png`. The host looks up these encoded keys exactly, and build files use the same literal keys on disk. It never decodes them a second time. Traversal segments, once-decoded separators, malformed escapes, and control characters remain invalid. The host escapes HTML attributes when placing these URLs in the wrapper.
 
 Custom HTTP methods require support from both the client transport and the serving runtime. Elysia accepts custom method routes and documents [`M-SEARCH` as an example](https://elysiajs.com/essential/route#custom-method). In network checks with Bun 1.4.2 and Elysia 1.4.30, `M-SEARCH` carried a JSON body to the handler. Bun's `Request` constructor changed `BREW` to `GET`, and its listener rejected raw `BREW` requests before the handler ran. These observations describe the pinned runtime versions; the Elysia adapter has no custom-method allowlist.
 
 `allowUnsafeEmbed` permits an Embed instance to request sandbox relaxations beyond `allow-scripts`; the instance must explicitly list each requested permission. A nested imported component cannot change its host root's policy. Direct mounts without compiled project policy stay strict. The build carries this one boolean in private component metadata; the full project configuration and process environment are not exposed to the browser.
+
+## Public files
+
+Put files that the host should serve without importing them in `public/`. The development server captures their bytes at start and updates them when files change. A production build captures the same files. Hesperia serves each file at the same path under the selected application mount. An absent or empty `public/` directory adds no public-file inventory. Hesperia includes underscore-prefixed files such as `_status.bin`. These HTTP resources are separate from the compile-time `public` values exported through `hesperia/config/public`.
+
+`public/assets/logo.bin` is available at `/assets/logo.bin` at the root mount. With `mountURL: "/shop"`, it is available at `/shop/assets/logo.bin`. The host returns captured bytes and the recorded content type for `GET` and `HEAD`. Public paths use URL escaping. For example, `public/café #%.txt` is available at `/caf%C3%A9%20%23%25.txt`. A literal `%20` in a filename becomes `%2520`; the host does not decode the filename twice.
+
+Public paths share the application's mount. Generated browser assets use the reserved `/_hesperia/` namespace by default. A public path that equals a literal static page route, `/_hesperia`, or one of its descendants fails the build before publication. A parameterized, optional, or rest route can match the same public URL without creating a public-file collision. A custom asset base claims its generated files, and publication refuses a generated file that overlaps a public URL on the application origin. After source files change or disappear, `readBuild` loads the captured public bytes from the legacy build directory.
+
+Source links may select files or directories inside the project root, including targets outside `public/`. A linked `public/` directory follows the same rule. Each public URL comes from the link's path under `public/`, so two links to one target retain separate URLs. Broken links, directory cycles, and targets outside the project root fail the build. There is no option to admit an outside target. The build captures the resolved file bytes; later source-link or target changes do not alter that capture. These source rules are separate from `readBuild`, which continues to reject links in captured deployment paths.
+
+Before reading a public file, capture opens its resolved target, checks the opened regular file's filesystem identity, and resolves the authored path again under the same containment rules. It then reads once from that retained handle. Replacing the path between resolution and opening cannot substitute an outside file's bytes. The captured Blob and its digest use that same read; this check does not provide an atomic snapshot of concurrent in-place edits.
+
+Every followed link target must stay within the project. For example, `public/report.bin` cannot follow an outside link that points back to an in-project file. Relative targets keep native symlink-relative semantics, including `..`: Windows normalizes relative target components before following intervening links, while Unix follows each component before applying a later `..`. Development tracks contained link hops and target entries as well as directory contents, so target edits, link retargeting, and creation of a missing contained target can trigger recovery. An invalid rebuild keeps serving the last successful capture.
+
+The Fetch host and development server serve these URLs. Public files belong to the current capture. Browser/static preview can still serve retained versioned generated assets at their published URLs after a later build.
 
 ## Public values
 

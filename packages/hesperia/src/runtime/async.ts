@@ -14,6 +14,7 @@ import {
 import type { Rendered } from "./dom.ts";
 import {
   Owner,
+  disposeOwnerSyncPreservingFailure,
   registerOwnerResourceLifecycle,
   RenderFault,
   reportFault,
@@ -158,6 +159,7 @@ export function asyncBoundary(
 
   const inheritedBoundary = parent.asyncBoundary;
   const owner = new Owner(parent.context, parent, parent.identity + "/" + slot);
+
   owner.executingBody = false;
   const document = parent.context.document;
   const fragment = document.createDocumentFragment();
@@ -197,6 +199,7 @@ export function asyncBoundary(
 
   const ownerIsUnavailable = (): boolean => {
     const state = owner.state;
+
     return state === "suspended" || state === "cleaning" || state === "destroyed";
   };
 
@@ -395,6 +398,7 @@ export function asyncBoundary(
 
     const detach = (): void => {
       const lease = registration.lease;
+
       registration.lease = undefined;
 
       lease?.stop();
@@ -550,6 +554,7 @@ export function asyncBoundary(
 
     const needsActivationRefresh = (source: QuerySource): boolean => {
       const target = recoveryTargets.get(source.graph);
+
       return Boolean(activation && target?.refreshOnActivation.has(source));
     };
 
@@ -798,13 +803,14 @@ export function asyncBoundary(
     }
 
     const nextLoadingOwner = new Owner(parent.context, owner, owner.identity + "/loading");
+
     loadingOwner = nextLoadingOwner;
     nextLoadingOwner.asyncBoundary = inheritedBoundary;
 
     const replaceStaleLoading = (): void => {
       if (loadingOwner === nextLoadingOwner) loadingOwner = undefined;
 
-      if (nextLoadingOwner.state !== "destroyed") nextLoadingOwner.dispose();
+      if (nextLoadingOwner.state !== "destroyed") nextLoadingOwner.disposeSync();
 
       if (
         expectedGeneration === generation ||
@@ -883,7 +889,7 @@ export function asyncBoundary(
       if (loadingOwner === nextLoadingOwner) loadingOwner = undefined;
 
       if (nextLoadingOwner.state !== "destroyed")
-        nextLoadingOwner.dispose(current ? error : undefined);
+        nextLoadingOwner.disposeSync(current ? error : undefined);
 
       if (current && expectedGeneration === generation) throw error;
 
@@ -908,9 +914,10 @@ export function asyncBoundary(
     const nextContentOwner = contentOwner;
     const nextContentNodes = contentNodes;
     const oldLoadingOwner = loadingOwner;
+
     loadingOwner = undefined;
 
-    oldLoadingOwner?.dispose();
+    oldLoadingOwner?.disposeSync();
 
     if (
       expectedGeneration !== generation ||
@@ -1052,7 +1059,7 @@ export function asyncBoundary(
             try {
               reportFault(waitOwner, error);
             } finally {
-              waitOwner.dispose(error);
+              waitOwner.disposeSync(error);
             }
           }
 
@@ -1154,10 +1161,11 @@ export function asyncBoundary(
 
     installed = false;
     const oldContentOwner = contentOwner;
+
     contentOwner = undefined;
     contentNodes = document.createDocumentFragment();
 
-    oldContentOwner?.dispose(new RenderFault("query-reset", "Query content was invalidated"));
+    oldContentOwner?.disposeSync(new RenderFault("query-reset", "Query content was invalidated"));
 
     if (resetGeneration !== generation) return;
 
@@ -1190,6 +1198,7 @@ export function asyncBoundary(
     const nextOwnerIsDestroyed = (): boolean => nextOwner.state === "destroyed";
 
     const nextNodes = document.createDocumentFragment();
+
     nextOwner.commitDeferred = true;
     contentOwner = nextOwner;
     contentNodes = nextNodes;
@@ -1198,6 +1207,7 @@ export function asyncBoundary(
 
     try {
       const result = runRenderContext(nextOwner, () => runComponentBody(() => content(nextOwner)));
+
       nextOwner.executingBody = false;
 
       if (expectedGeneration !== generation || nextOwnerIsDestroyed()) return;
@@ -1226,7 +1236,7 @@ export function asyncBoundary(
 
       settleReady();
     } catch (error) {
-      if (nextOwner.state !== "destroyed") nextOwner.dispose(error);
+      if (nextOwner.state !== "destroyed") nextOwner.disposeSync(error);
 
       if (expectedGeneration !== generation) return;
 
@@ -1249,6 +1259,7 @@ export function asyncBoundary(
 
     hasFreshSource(graph, source) {
       const target = recoveryTargets.get(graph);
+
       return Boolean(
         target &&
         target.version === graph.resetVersion.get() &&
@@ -1311,7 +1322,7 @@ export function asyncBoundary(
 
     return fragment;
   } catch (error) {
-    owner.dispose(error);
+    disposeOwnerSyncPreservingFailure(owner, error);
 
     throw error;
   }
@@ -1369,6 +1380,7 @@ export function runAsyncBody(
 
     resumed() {
       const continuation = deferredContinuation;
+
       deferredContinuation = undefined;
 
       if (!continuation) return;
@@ -1446,6 +1458,7 @@ export function runAsyncBody(
 
     runStep("next", undefined);
   });
+
   return result;
 }
 
@@ -1477,7 +1490,7 @@ export function awaitComponent<P>(
 
     return registerFrameworkAwaitable(result, parent, "render");
   } catch (error) {
-    child.dispose(error);
+    disposeOwnerSyncPreservingFailure(child, error);
 
     throw error;
   }

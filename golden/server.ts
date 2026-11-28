@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
-import { createHost, type ApplicationHost, type CapturedBrowserBuild } from "@hesperia/hosting";
+import { createHost, type ApplicationHost, type CapturedBuild } from "@hesperia/hosting";
+import { BROWSER_MODULE_PRELOADS_ASSET } from "@hesperia/hosting/internal";
 import { prepareBuild } from "@hesperia/tooling/project-service";
 import { verifyAeoliaInputs } from "./verify-aeolia-inputs";
 import { verifyWorkspacePackages } from "./verify-packages";
@@ -59,9 +60,7 @@ const assetContentTypes: Readonly<Record<string, string>> = {
   map: "application/json; charset=utf-8",
 };
 
-function captureHostingBuild(
-  build: Awaited<ReturnType<typeof prepareBuild>>,
-): CapturedBrowserBuild {
+function captureHostingBuild(build: Awaited<ReturnType<typeof prepareBuild>>): CapturedBuild {
   const files = new Map<string, Blob>();
 
   for (const asset of build.hosting.assets) {
@@ -72,14 +71,17 @@ function captureHostingBuild(
     files.set(asset.path, file);
   }
 
-  return { hosting: build.hosting, files };
+  return "publicFiles" in build
+    ? { hosting: build.hosting, files, publicFiles: build.publicFiles }
+    : { hosting: build.hosting, files };
 }
 
 const browserAssets = new Map<string, Blob>();
 
 for (const build of [componentCssBuild, checklistBuild, publicValuesBuild]) {
   for (const [pathname, asset] of build.files) {
-    if (!pathname.startsWith("/assets/")) continue;
+    // Each host reads its own preload manifest from the captured build.
+    if (!pathname.startsWith("/assets/") || pathname === BROWSER_MODULE_PRELOADS_ASSET) continue;
 
     const previous = browserAssets.get(pathname);
 

@@ -13,7 +13,14 @@ import {
   writeBuild,
 } from "../../packages/tooling/src/project.ts";
 import { devProject, previewProject } from "../../packages/tooling/src/server.ts";
-import { createHost, readBuild } from "../../packages/hosting/src/index.ts";
+import {
+  createGeneratedAssetHost,
+  createHost,
+  createTargetedHost,
+  readBuild,
+  readTargetedBuild,
+} from "../../packages/hosting/src/index.ts";
+import { readRetainedManagedBuild } from "../../packages/hosting/src/internal/index.ts";
 import { startProcessDiagnostics } from "./fixtures/drivers/process-diagnostics.mjs";
 import { captureRejection } from "./capture-rejection.ts";
 import { linkFrameworkPackages, unlinkFrameworkPackages } from "./fixture-dependencies.ts";
@@ -21,6 +28,17 @@ import { identityMappings, pluginSourceMap } from "./plugin-source-map-fixture.t
 import type { Plugin } from "../../packages/tooling/src/plugins.ts";
 
 const roots: string[] = [];
+
+async function writeBrowserStaticPolicy(root: string): Promise<void> {
+  await writeFile(
+    join(root, "src/routes/+route.ts"),
+    `import { route } from "hesperia/routing";
+export default route({ render: {
+  clientRender: "required", ssr: "forbidden", stream: "forbidden",
+  ssg: "forbidden", hydration: "forbidden",
+} });`,
+  );
+}
 
 async function temporaryProject(linkPackages = true): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "hesperia-tooling-"));
@@ -41,6 +59,533 @@ afterEach(async () => {
 });
 
 describe("project commands", () => {
+  test("browser/static app-only refusal preserves retained capture bytes", async () => {
+    const root = await temporaryProject();
+    const output = join(root, ".hesperia", "build");
+    const capture = "33333333-3333-3333-3333-333333333333";
+    const assets = join(output, ".captures", capture, "assets");
+    const retained = new Uint8Array([0, 255, 13, 10, 42]);
+
+    await mkdir(assets, { recursive: true });
+    await mkdir(join(root, "src/routes"), { recursive: true });
+    await writeFile(join(assets, "retained.bin"), retained);
+    await writeBrowserStaticPolicy(root);
+    await writeFile(
+      join(root, "hesperia.config.json"),
+      JSON.stringify({ target: { version: 1, runtime: "browser", profile: "static" } }),
+    );
+    await writeFile(
+      join(root, "app.tsx"),
+      "export default function App() { return <html><head></head><body>App only</body></html>; }",
+    );
+
+    const failure = await captureRejection(prepareBuild(root));
+
+    expect(failure).toBeInstanceOf(ProjectError);
+    expect((failure as ProjectError).diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "HES-ROUTE-PLAN",
+          filename: join(root, "app.tsx"),
+          message: expect.stringContaining("app-only document routing is not implemented"),
+        }),
+      ]),
+    );
+    expect(new Uint8Array(await readFile(join(assets, "retained.bin")))).toStrictEqual(retained);
+    expect(await readdir(join(output, ".captures"))).toStrictEqual([capture]);
+    expect(existsSync(join(output, "hesperia-build.json"))).toBe(false);
+  });
+
+  test("browser/static admission rejects missing, unsupported, and request-only route policies", async () => {
+    const root = await temporaryProject();
+
+    await mkdir(join(root, "src/routes"), { recursive: true });
+    await writeFile(
+      join(root, "hesperia.config.json"),
+      JSON.stringify({ target: { version: 1, runtime: "browser", profile: "static" } }),
+    );
+    await writeFile(
+      join(root, "app.tsx"),
+      "export default function App() { return <html><head></head><body></body></html>; }",
+    );
+    await writeFile(
+      join(root, "src/routes/+page.tsx"),
+      "export default function Page() { return <main>Page</main>; }",
+    );
+
+    const missing = await captureRejection(prepareBuild(root));
+
+    expect(missing).toBeInstanceOf(ProjectError);
+    expect(
+      (missing as ProjectError).diagnostics.some((item) => item.code === "HES-ROUTE-PLAN"),
+    ).toBe(true);
+
+    await writeFile(
+      join(root, "src/routes/+route.ts"),
+      `import { route } from "hesperia/routing";
+export default route({ render: {
+  clientRender: "required", ssr: "forbidden", stream: "forbidden",
+  ssg: "required", hydration: "forbidden",
+} });`,
+    );
+
+    const unsupported = await captureRejection(prepareBuild(root));
+
+    expect(unsupported).toBeInstanceOf(ProjectError);
+    expect(
+      (unsupported as ProjectError).diagnostics.some((item) => item.code === "HES-ROUTE-PLAN"),
+    ).toBe(true);
+
+    await writeFile(
+      join(root, "src/routes/+route.ts"),
+      `import { route } from "hesperia/routing";
+export default route({ load: () => "server", render: {
+  clientRender: "required", ssr: "forbidden", stream: "forbidden",
+  ssg: "forbidden", hydration: "forbidden",
+} });`,
+    );
+
+    const request = await captureRejection(prepareBuild(root));
+
+    expect(request).toBeInstanceOf(ProjectError);
+    expect(
+      (request as ProjectError).diagnostics.some((item) => item.code === "HES-STATIC-REQUEST"),
+    ).toBe(true);
+  });
+
+  test("browser/static admission rejects conflicting inherited route constraints", async () => {
+    const root = await temporaryProject();
+
+    await mkdir(join(root, "src/routes/child"), { recursive: true });
+    await writeBrowserStaticPolicy(root);
+    await writeFile(
+      join(root, "hesperia.config.json"),
+      JSON.stringify({ target: { version: 1, runtime: "browser", profile: "static" } }),
+    );
+    await writeFile(
+      join(root, "app.tsx"),
+      "export default function App() { return <html><head></head><body></body></html>; }",
+    );
+    await writeFile(
+      join(root, "src/routes/child/+page.tsx"),
+      "export default function Page() { return <main>Child</main>; }",
+    );
+    await writeFile(
+      join(root, "src/routes/child/+route.ts"),
+      `import { route } from "hesperia/routing"; export default route({ render: { clientRender: "forbidden" } });`,
+    );
+
+    const failure = await captureRejection(prepareBuild(root));
+
+    expect(failure).toBeInstanceOf(ProjectError);
+    expect((failure as ProjectError).diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "HES-ROUTE-PLAN",
+          message: expect.stringContaining("required-forbidden-conflict"),
+        }),
+      ]),
+    );
+    const conflict = (failure as ProjectError).diagnostics.find(
+      (item) => item.code === "HES-ROUTE-PLAN",
+    );
+
+    expect(conflict?.message).toContain(`required at ${join(root, "src/routes/+route.ts")}:`);
+    expect(conflict?.message).toContain(
+      `forbidden at ${join(root, "src/routes/child/+route.ts")}:`,
+    );
+  });
+
+  test.each([false, true])(
+    "writes and serves a browser/static capture (public files: %s)",
+    async (withPublic) => {
+      const root = await temporaryProject();
+
+      await mkdir(join(root, "src/routes/items/[id]"), { recursive: true });
+      await writeBrowserStaticPolicy(root);
+      if (withPublic) await mkdir(join(root, "public"));
+      await writeFile(
+        join(root, "hesperia.config.json"),
+        JSON.stringify({
+          mountURL: "/dashboard",
+          target: { version: 1, runtime: "browser", profile: "static" },
+        }),
+      );
+      await writeFile(
+        join(root, "app.tsx"),
+        "export default function App() { return <html><head></head><body></body></html>; }",
+      );
+      await writeFile(
+        join(root, "src/routes/+page.tsx"),
+        "export default function Page() { return <main>Home</main>; }",
+      );
+      await writeFile(
+        join(root, "src/routes/items/[id]/+page.tsx"),
+        "export default function Page() { return <main>Item</main>; }",
+      );
+      if (withPublic) await writeFile(join(root, "public/robots.txt"), "fixture public bytes");
+
+      const built = await prepareBuild(root);
+      const output = await writeBuild(root, built);
+      const recordPath = join(output, "hesperia-build.json");
+      const published = await readFile(recordPath);
+      const captured = await readTargetedBuild(output);
+
+      expect(captured.control).toMatchObject({
+        version: 3,
+        kind: "browser",
+        productionTarget: { descriptorIdentity: "hesperia.target/browser-static/1" },
+        hosting: { version: withPublic ? 2 : 1 },
+      });
+
+      const resource = await createTargetedHost(captured);
+
+      if (resource.kind !== "browser") throw new Error("Expected a browser host");
+
+      try {
+        const page = resource.host.handle(
+          new Request("http://localhost/dashboard/items/42", { headers: { accept: "text/html" } }),
+        );
+
+        await page?.text();
+
+        const missing = resource.host.handle(
+          new Request("http://localhost/dashboard/missing", { headers: { accept: "text/html" } }),
+        );
+
+        await missing?.text();
+
+        const publicFile = withPublic
+          ? resource.host.handle(new Request("http://localhost/dashboard/robots.txt"))
+          : undefined;
+        const publicText = await publicFile?.text();
+
+        expect(page?.status).toBe(200);
+        expect(missing?.status).toBe(404);
+        if (withPublic) expect(publicText).toBe("fixture public bytes");
+      } finally {
+        await resource.close();
+      }
+
+      const preview = await previewProject(root, 0);
+
+      try {
+        const response = await fetch(new URL("/dashboard/items/42", preview.url), {
+          headers: { accept: "text/html" },
+        });
+
+        expect(response.status).toBe(200);
+        await response.text();
+      } finally {
+        await preview.close();
+      }
+
+      const damaged = { ...built, files: new Map(built.files) };
+
+      damaged.files.set(
+        "/assets/static-routing.json",
+        new Blob(["changed"], { type: "application/json" }),
+      );
+
+      await expect(writeBuild(root, damaged)).rejects.toThrow();
+      expect(await readFile(recordPath)).toEqual(published);
+      expect((await readTargetedBuild(output)).control).toEqual(captured.control);
+
+      if (withPublic) {
+        const deployedOutput = await writeBuild(root, built, {
+          mountURL: "/release",
+          generatedAssets: {
+            baseURL: "https://assets.example.test/release",
+            moduleCredentials: "use-credentials",
+          },
+        });
+        const deployed = await readTargetedBuild(deployedOutput);
+
+        if (!("deployment" in deployed)) throw new Error("Expected a published deployment");
+
+        expect(deployed.control).toEqual(captured.control);
+        expect(deployed.deployment).toMatchObject({
+          mountPathname: "/release",
+          generatedAssets: {
+            root: { kind: "url", href: "https://assets.example.test/release/" },
+            moduleCredentials: "use-credentials",
+            credentials: "include",
+          },
+        });
+
+        const deployedPreview = await previewProject(root, 0, { mountURL: "/moved" });
+
+        try {
+          const html = await fetch(new URL("/moved/items/42", deployedPreview.url), {
+            headers: { accept: "text/html" },
+          });
+
+          expect(html.status).toBe(200);
+          const document = await html.text();
+
+          expect(document).toContain(
+            '<script type="module" crossorigin="use-credentials" src="https://assets.example.test/release/startup.js">',
+          );
+
+          const preloads = [
+            ...document.matchAll(
+              /<link rel="modulepreload" crossorigin="use-credentials" href="https:\/\/assets\.example\.test\/release(\/assets\/[^"]+)">/gu,
+            ),
+          ].map((link) => link[1]!);
+
+          expect(preloads).toContain(deployed.inventory.hosting.startupAsset);
+          expect(preloads.length).toBeGreaterThan(1);
+          expect(preloads.every((path) => deployed.inventory.files.has(path))).toBe(true);
+          expect(deployed.control.kind).toBe("browser");
+
+          if (deployed.control.kind === "browser")
+            expect(preloads).not.toContain(deployed.control.routeTable);
+
+          const stored = JSON.parse(await readFile(recordPath, "utf8")) as {
+            assetDirectory: string;
+          };
+          const staticDocument = await readFile(
+            join(output, stored.assetDirectory, "..", "static", "index.html"),
+            "utf8",
+          );
+
+          expect(staticDocument).toBe(document);
+          expect(
+            await (await fetch(new URL("/moved/robots.txt", deployedPreview.url))).text(),
+          ).toBe("fixture public bytes");
+        } finally {
+          await deployedPreview.close();
+        }
+
+        const generated = await createGeneratedAssetHost(deployed, { mountURL: "/moved" });
+        const wrapper = await generated
+          .handle(new Request("https://assets.example.test/release/startup.js"))
+          ?.text();
+
+        expect(wrapper).toContain('await start("/moved",');
+
+        const assetPath = deployed.inventory.hosting.startupAsset;
+        const asset = generated.handle(
+          new Request("https://assets.example.test/release" + assetPath),
+        );
+
+        expect(await asset?.arrayBuffer()).toEqual(await built.files.get(assetPath)!.arrayBuffer());
+        expect(
+          generated.handle(new Request("https://wrong.example.test/release" + assetPath)),
+        ).toBeUndefined();
+
+        const priorCaptureId = JSON.parse(published.toString("utf8")).assetDirectory.split("/")[1];
+        const retained = await readRetainedManagedBuild(output, priorCaptureId);
+
+        expect(await retained.files.get(assetPath)?.arrayBuffer()).toEqual(
+          await built.files.get(assetPath)!.arrayBuffer(),
+        );
+        await writeBuild(root, built);
+        const inherited = await readTargetedBuild(output);
+
+        expect(inherited).toHaveProperty("deployment", deployed.deployment);
+
+        await writeBuild(root, built, { applicationOrigin: "https://app.example.test" });
+        const originBound = await readTargetedBuild(output);
+
+        if (!("deployment" in originBound)) throw new Error("Expected origin-bound deployment");
+
+        expect(originBound.deployment).toMatchObject({
+          version: 2,
+          applicationOrigin: "https://app.example.test",
+        });
+        const productionReceipt = await readFile(recordPath);
+        const originPreview = await previewProject(root, 0, { mountURL: "/moved" });
+
+        try {
+          const response = await fetch(new URL("/moved/items/42", originPreview.url), {
+            headers: { accept: "text/html" },
+          });
+
+          expect(response.status).toBe(200);
+          expect(await response.text()).toContain("https://assets.example.test/release/startup.js");
+          expect(await readFile(recordPath)).toEqual(productionReceipt);
+        } finally {
+          await originPreview.close();
+        }
+
+        const lastGood = await readFile(recordPath);
+
+        await writeFile(
+          join(root, "hesperia.config.json"),
+          JSON.stringify({ target: { version: 1, runtime: "bun", profile: "hono" } }),
+        );
+
+        expect(await captureRejection(prepareBuild(root))).toMatchObject({
+          message: expect.stringContaining("production-target-unavailable"),
+        });
+        expect(await readFile(recordPath)).toEqual(lastGood);
+      }
+    },
+  );
+
+  test("browser preview serves retained assets at their published paths", async () => {
+    const root = await temporaryProject();
+
+    await mkdir(join(root, "src/routes"), { recursive: true });
+    await writeBrowserStaticPolicy(root);
+    await mkdir(join(root, "public"));
+    await writeFile(
+      join(root, "hesperia.config.json"),
+      JSON.stringify({ target: { version: 1, runtime: "browser", profile: "static" } }),
+    );
+    await writeFile(
+      join(root, "app.tsx"),
+      "export default function App() { return <html><head></head><body></body></html>; }",
+    );
+    const page = join(root, "src/routes/+page.tsx");
+    const robots = join(root, "public/robots.txt");
+
+    await writeFile(page, "export default function Page() { return <main>Original page</main>; }");
+    await writeFile(robots, "original public file");
+
+    const first = await prepareBuild(root);
+
+    await writeBuild(root, first, { generatedAssets: { baseURL: "/first-assets" } });
+    await writeFile(
+      page,
+      "export default function Page() { return <main>Replacement page</main>; }",
+    );
+    await writeFile(robots, "replacement public file");
+
+    const second = await prepareBuild(root);
+    const earlierModule = first.hosting.assets.find(
+      ({ path }) => path.endsWith(".js") && !second.files.has(path),
+    );
+
+    if (!earlierModule) throw new Error("Expected a JavaScript module unique to the first build");
+
+    const original = await previewProject(root, 0);
+    const earlierPath = "/first-assets" + earlierModule.path;
+
+    try {
+      const response = await fetch(new URL(earlierPath, original.url));
+
+      expect(response.status).toBe(200);
+      expect(await response.arrayBuffer()).toEqual(
+        await first.files.get(earlierModule.path)!.arrayBuffer(),
+      );
+    } finally {
+      await original.close();
+    }
+
+    await writeBuild(root, second, { generatedAssets: { baseURL: "/second-assets" } });
+    const replacement = await previewProject(root, 0);
+
+    try {
+      const response = await fetch(
+        new URL("/second-assets" + second.hosting.startupAsset, replacement.url),
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.arrayBuffer()).toEqual(
+        await second.files.get(second.hosting.startupAsset)!.arrayBuffer(),
+      );
+      expect(await (await fetch(new URL("/robots.txt", replacement.url))).text()).toBe(
+        "replacement public file",
+      );
+      expect((await fetch(new URL("/first-assets/startup.js", replacement.url))).status).toBe(404);
+      expect(
+        (await fetch(new URL("/second-assets" + earlierModule.path, replacement.url))).status,
+      ).toBe(404);
+
+      const retained = await fetch(new URL(earlierPath, replacement.url));
+      const retainedBytes = await retained.arrayBuffer();
+
+      expect(retained.status).toBe(200);
+      expect(retained.headers.get("content-type")).toBe(earlierModule.contentType);
+      expect(retainedBytes).toEqual(await first.files.get(earlierModule.path)!.arrayBuffer());
+    } finally {
+      await replacement.close();
+    }
+
+    const collidingRoute = join(root, "src/routes", earlierPath.slice(1));
+
+    await mkdir(collidingRoute, { recursive: true });
+    await writeFile(
+      join(collidingRoute, "+page.tsx"),
+      "export default function Page() { return <main>Authored route</main>; }",
+    );
+    const colliding = await prepareBuild(root);
+    const recordPath = join(root, ".hesperia/build/hesperia-build.json");
+    const previous = await readFile(recordPath);
+
+    await expect(
+      writeBuild(root, colliding, { generatedAssets: { baseURL: "/second-assets" } }),
+    ).rejects.toThrow(`Retained generated asset collides with application path: ${earlierPath}`);
+    expect(await readFile(recordPath)).toEqual(previous);
+
+    const overlappingPreview = await captureRejection(
+      previewProject(root, 0, { mountURL: earlierPath }).then((preview) => preview.close()),
+    );
+
+    expect(overlappingPreview).toMatchObject({
+      message: `Retained generated asset collides with application path: ${earlierPath}`,
+    });
+
+    const retainedPreview = await previewProject(root, 0);
+
+    try {
+      const response = await fetch(new URL(earlierPath, retainedPreview.url));
+
+      expect(response.status).toBe(200);
+      expect(await response.arrayBuffer()).toEqual(
+        await first.files.get(earlierModule.path)!.arrayBuffer(),
+      );
+    } finally {
+      await retainedPreview.close();
+    }
+
+    await writeFile(join(root, "hesperia.config.json"), "{}");
+    const legacy = await prepareBuild(root);
+
+    await expect(writeBuild(root, legacy)).rejects.toThrow(
+      "Retained generated asset collides with application path",
+    );
+    expect(await readFile(recordPath)).toEqual(previous);
+
+    await writeFile(
+      join(root, "hesperia.config.json"),
+      JSON.stringify({ mountURL: "/legacy-next" }),
+    );
+    const disjointLegacy = await prepareBuild(root);
+
+    await writeBuild(root, disjointLegacy);
+    const legacyPreview = await previewProject(root, 0);
+
+    try {
+      const page = await fetch(new URL("/legacy-next", legacyPreview.url), {
+        headers: { accept: "text/html" },
+      });
+
+      await page.text();
+      expect(page.status).toBe(200);
+      expect(page.headers.get("content-type")).toContain("text/html");
+
+      const retained = await fetch(new URL(earlierPath, legacyPreview.url));
+
+      expect(retained.status).toBe(200);
+      expect(await retained.arrayBuffer()).toEqual(
+        await first.files.get(earlierModule.path)!.arrayBuffer(),
+      );
+    } finally {
+      await legacyPreview.close();
+    }
+
+    const overlappingLegacyPreview = await captureRejection(
+      previewProject(root, 0, { mountURL: "/" }).then((preview) => preview.close()),
+    );
+
+    expect(overlappingLegacyPreview).toMatchObject({
+      message: expect.stringContaining("Retained generated asset collides with application path"),
+    });
+  });
+
   test("checks imported modules outside src in the same source snapshot", async () => {
     const root = await temporaryProject();
 
@@ -151,6 +696,7 @@ describe("project commands", () => {
         new Response(child.stdout).text(),
         new Response(child.stderr).text(),
       ]);
+
       return { code, stdout, stderr };
     };
 
@@ -184,6 +730,79 @@ describe("project commands", () => {
 
       expect(invalid.stdout).not.toContain(`Hesperia ${command}:`);
     }
+  });
+
+  test("the emitted build command reports retained warnings without running lint", async () => {
+    const root = await temporaryProject();
+    const image = join(root, "photo.jpg");
+    const app = join(root, "app.tsx");
+
+    await mkdir(join(root, "src"), { recursive: true });
+
+    await writeFile(image, new Uint8Array([0, 255, 1, 2]));
+
+    await writeFile(
+      app,
+      `import photo from "./photo.jpg" with { type: "image/png" };
+export default function App() {
+  return <html><head></head><body><span>{photo.type}</span></body></html>;
+}`,
+    );
+
+    const lintSource = join(root, "src", "lint-only.ts");
+    const lintConfiguration = join(root, ".oxlintrc.json");
+
+    await writeFile(lintSource, "const lintOnlyBuildProbe = 1;\n");
+
+    await writeFile(
+      lintConfiguration,
+      JSON.stringify({ plugins: ["typescript"], rules: { "no-unused-vars": "error" } }),
+    );
+
+    const run = async (executable: string, arguments_: string[], cwd: string) => {
+      const child = Bun.spawn([executable, ...arguments_], {
+        cwd,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+
+      return { code, stdout, stderr };
+    };
+
+    const built = await run(
+      process.execPath,
+      [resolve(import.meta.dir, "../../packages/tooling/dist/cli.js"), "build"],
+      root,
+    );
+
+    expect(built.code).toBe(0);
+
+    expect(built.stdout).toContain("Built browser application");
+
+    expect(built.stderr).toContain(
+      `${app}: HES-PLUGIN: Declared MIME type image/png differs from image/jpeg for ${image}; bytes are not converted.`,
+    );
+
+    expect(built.stderr).not.toContain("lint-only.ts");
+
+    expect(built.stderr).not.toContain("lintOnlyBuildProbe");
+
+    const linted = await run(
+      process.execPath,
+      ["run", "lint", "--", "--config", lintConfiguration, lintSource],
+      resolve(import.meta.dir, "../.."),
+    );
+
+    expect(linted.code).toBe(1);
+
+    expect(`${linted.stdout}\n${linted.stderr}`).toContain("lintOnlyBuildProbe");
+
+    expect(`${linted.stdout}\n${linted.stderr}`).toContain("no-unused-vars");
   });
 
   test("creates the starter and refuses to overwrite a nonempty destination", async () => {
@@ -445,7 +1064,9 @@ describe("project commands", () => {
 
       expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
 
-      expect(await page.text()).toContain('<script type="module" src="/_hesperia/startup.js">');
+      expect(await page.text()).toContain(
+        '<script type="module" crossorigin="anonymous" src="/_hesperia/startup.js">',
+      );
 
       const script = await fetch(new URL("/_hesperia/assets/team%20docs/caf%C3%A9.js", server.url));
 
@@ -500,12 +1121,13 @@ describe("project commands", () => {
     await writeFile(join(root, "src", "image%20name.png"), image);
 
     const built = await prepareBuild(root);
-    const captured = {
-      hosting: built.hosting,
-      files: new Map(
-        built.hosting.assets.map((asset) => [asset.path, built.files.get(asset.path)!]),
-      ),
-    };
+    const files = new Map(
+      built.hosting.assets.map((asset) => [asset.path, built.files.get(asset.path)!]),
+    );
+    const captured =
+      "publicFiles" in built
+        ? { hosting: built.hosting, files, publicFiles: built.publicFiles }
+        : { hosting: built.hosting, files };
     const imagePaths = ["native%20pic%20%23%25.png", "image%2520name.png"].map((name) => {
       const path = built.hosting.assets.find((asset) => asset.path.endsWith(`/${name}`))?.path;
 
@@ -594,6 +1216,10 @@ describe("project commands", () => {
 
     expect(await built.files.get(record.routeTable)!.text()).toContain("routeTable");
 
+    await expect(
+      writeBuild(root, built, { applicationOrigin: "https://app.example.test" }),
+    ).rejects.toThrow("Deployment selection requires a browser/static production target");
+
     await writeBuild(root, built);
 
     expect(existsSync(join(root, ".hesperia/build/index.html"))).toBe(false);
@@ -652,6 +1278,77 @@ describe("project commands", () => {
 
       expect(digest).toBe(asset.sha256);
     }
+  });
+
+  test("targeted production retains earlier and unknown captures without a retirement policy", async () => {
+    const root = await temporaryProject();
+
+    await mkdir(join(root, "src/routes"), { recursive: true });
+    await writeBrowserStaticPolicy(root);
+    await writeFile(
+      join(root, "hesperia.config.json"),
+      JSON.stringify({ target: { version: 1, runtime: "browser", profile: "static" } }),
+    );
+    await writeFile(
+      join(root, "src/routes/+page.tsx"),
+      "export default function Page() { return <main>Retained route</main>; }",
+    );
+
+    const app = join(root, "app.tsx");
+
+    await writeFile(
+      app,
+      "export default function App() { return <html><head></head><body>Old</body></html>; }",
+    );
+
+    const first = await prepareBuild(root);
+    const output = await writeBuild(root, first);
+    const recordPath = join(output, "hesperia-build.json");
+    const oldRecord = await readFile(recordPath, "utf8");
+    const old = JSON.parse(oldRecord) as { assetDirectory: string };
+    const oldCaptureId = old.assetDirectory.split("/")[1]!;
+    const unknown = join(output, ".captures", "33333333-3333-3333-3333-333333333333");
+    const unknownBytes = new Uint8Array([0, 255, 13, 10, 42]);
+
+    await mkdir(join(unknown, "assets"), { recursive: true });
+    await writeFile(join(unknown, "assets", "retained.bin"), unknownBytes);
+    await writeFile(
+      app,
+      "export default function App() { const broken: string = 42; return <html><head></head><body>{broken}</body></html>; }",
+    );
+
+    expect(await captureRejection(prepareBuild(root))).toMatchObject({
+      message: expect.stringContaining("checking failed"),
+    });
+    expect(await readFile(recordPath, "utf8")).toBe(oldRecord);
+    expect(new Uint8Array(await readFile(join(unknown, "assets", "retained.bin")))).toStrictEqual(
+      unknownBytes,
+    );
+    expect((await readTargetedBuild(output)).inventory.hosting).toStrictEqual(first.hosting);
+
+    await writeFile(
+      app,
+      "export default function App() { return <html><head></head><body>New</body></html>; }",
+    );
+
+    const second = await prepareBuild(root);
+
+    await writeBuild(root, second);
+
+    const current = await readTargetedBuild(output);
+    const retained = await readRetainedManagedBuild(output, oldCaptureId);
+
+    expect(await readFile(recordPath, "utf8")).not.toBe(oldRecord);
+    expect(current.inventory.hosting).toStrictEqual(second.hosting);
+    expect(new Uint8Array(await readFile(join(unknown, "assets", "retained.bin")))).toStrictEqual(
+      unknownBytes,
+    );
+    expect(
+      await readFile(join(output, ".captures", oldCaptureId, "hesperia-build.json"), "utf8"),
+    ).toBe(oldRecord);
+    expect(await retained.files.get(first.hosting.startupAsset)?.arrayBuffer()).toEqual(
+      await first.files.get(first.hosting.startupAsset)!.arrayBuffer(),
+    );
   });
 
   test("production removes unpublished captures before checking and retires the old capture only after success", async () => {
@@ -809,6 +1506,7 @@ describe("project commands", () => {
         port: 0,
         report: (message) => reports.push(message),
       });
+
       mark("initial-build-complete");
 
       const abort = new AbortController();
@@ -1018,6 +1716,7 @@ describe("project commands", () => {
       const events = await fetch(new URL("/_hesperia/events", server.url), {
         signal: AbortSignal.any([abort.signal, AbortSignal.timeout(10000)]),
       });
+
       reader = events.body!.getReader();
 
       await reader.read();

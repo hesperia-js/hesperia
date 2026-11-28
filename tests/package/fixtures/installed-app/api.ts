@@ -22,4 +22,5 @@ const rename = createMutation({
 });
 const contract = defineContract({ namespace: "installed", operations: { greeting, rename } });
 const graph = createGraph({ contract });
+
 export const api = withAeolia(graph, contract);

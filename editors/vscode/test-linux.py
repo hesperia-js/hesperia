@@ -338,7 +338,7 @@ def pidfd_ready(fd: int) -> bool:
 
 
 def read_proc_kernel_identity(
-    pid: int, stage: str, *, allow_zombie: bool = False
+    pid: int, stage: str, *, allow_zombie: bool = False, allow_terminal: bool = False
 ) -> dict[str, int | str]:
     root = pathlib.Path("/proc") / str(pid)
 
@@ -364,7 +364,9 @@ def read_proc_kernel_identity(
 
     state = fields[0]
 
-    if state in {"X", "x"} or (state == "Z" and not allow_zombie):
+    if (state in {"X", "x"} and not allow_terminal) or (
+        state == "Z" and not (allow_zombie or allow_terminal)
+    ):
         raise ProcessLookupError(f"PID {pid} has no live /proc image while checking retained identity: {stage}")
 
     try:
@@ -400,7 +402,7 @@ def read_proc_kernel_identity(
 
     identity: dict[str, int | str] = {"pid": pid, "tgid": tgid, "startTicks": start_ticks, "ppid": ppid}
 
-    if allow_zombie:
+    if allow_zombie or allow_terminal:
         identity["state"] = state
 
     return identity
@@ -639,6 +641,8 @@ class PendingTraceGeneration:
     start_ticks: int
     pidfd: int
     attached_at: str
+    # Once identity is lost or terminal, only the retained pidfd and trace can close it.
+    exit_only: bool = False
 
 
 @dataclass
@@ -971,13 +975,15 @@ def open_generation(
 
         attachment: PendingTraceGeneration | None = None
         attached_at: str | None = None
-        retained_identity: dict[str, int] | None = None
+        retained_identity: dict[str, int | str] | None = None
 
         try:
             attached_at = utc_now()
 
             try:
-                retained_identity = read_proc_kernel_identity(pid, "incomplete argv pidfd attachment")
+                retained_identity = read_proc_kernel_identity(
+                    pid, "incomplete argv pidfd attachment", allow_terminal=True
+                )
             except (FileNotFoundError, ProcessLookupError) as identity_error:
                 if pidfd_ready(fd):
                     attachment = PendingTraceGeneration(pid, before["ppid"], before["startTicks"], fd, attached_at)
@@ -990,10 +996,14 @@ def open_generation(
                 retained_identity, pid, before["startTicks"], "incomplete argv pidfd attachment"
             )
 
-            if isinstance(error, IncompleteProcExecutable) and retained_identity["ppid"] != before["ppid"]:
+            if (
+                isinstance(error, IncompleteProcExecutable)
+                or retained_identity["state"] in {"Z", "X", "x"}
+            ) and retained_identity["ppid"] != before["ppid"]:
                 raise CaptureError(f"Traced process parent changed after incomplete executable sample: {pid}") from error
 
             attachment = PendingTraceGeneration(pid, before["ppid"], before["startTicks"], fd, attached_at)
+            attachment.exit_only = retained_identity["state"] in {"Z", "X", "x"}
             pending[pid] = attachment
 
             if pidfd_ready(fd):
@@ -1071,17 +1081,18 @@ def open_generation(
             )
 
             attachment = PendingTraceGeneration(pid, error.proc["ppid"], error.proc["startTicks"], fd, attached_at)
-            pending[pid] = attachment
 
             if pidfd_ready(fd):
+                pending[pid] = attachment
                 return None
 
             try:
                 retained_identity = read_proc_kernel_identity(
-                    pid, "incomplete second /proc sample pidfd recheck"
+                    pid, "incomplete second /proc sample pidfd recheck", allow_terminal=True
                 )
             except (FileNotFoundError, ProcessLookupError) as identity_error:
                 if pidfd_ready(fd):
+                    pending[pid] = attachment
                     return None
 
                 raise CaptureError(
@@ -1091,6 +1102,12 @@ def open_generation(
             validate_retained_generation(
                 retained_identity, pid, attachment.start_ticks, "incomplete second /proc sample pidfd recheck"
             )
+
+            if retained_identity["state"] in {"Z", "X", "x"} and retained_identity["ppid"] != attachment.ppid:
+                raise CaptureError(f"Traced process parent changed after incomplete executable sample: {pid}")
+
+            attachment.exit_only = retained_identity["state"] in {"Z", "X", "x"}
+            pending[pid] = attachment
 
             if pidfd_ready(fd):
                 return None
@@ -1169,15 +1186,36 @@ def retry_pending_trace_generation(
             < terminal_ns
         )
 
+    if attachment.exit_only:
+        return False
+
+    def terminal_identity(identity: dict[str, Any], stage: str) -> bool:
+        validate_retained_generation(identity, pid, attachment.start_ticks, stage)
+
+        if identity["state"] not in {"Z", "X", "x"}:
+            return False
+
+        if identity["ppid"] != attachment.ppid:
+            raise CaptureError(f"Pending traced process parent changed before terminal observation: {pid}")
+
+        attachment.exit_only = True
+
+        return True
+
     try:
-        before = read_proc_kernel_identity(pid, "pending traced process before full /proc sample")
-    except (FileNotFoundError, ProcessLookupError) as error:
+        before = read_proc_kernel_identity(
+            pid, "pending traced process before full /proc sample", allow_terminal=True
+        )
+    except (FileNotFoundError, ProcessLookupError):
         if pidfd_ready(attachment.pidfd):
             return False
 
-        raise CaptureError(f"Pending traced process PID {pid} disappeared before its /proc argv identity completed") from error
+        attachment.exit_only = True
 
-    validate_retained_generation(before, pid, attachment.start_ticks, "pending traced process before full /proc sample")
+        return False
+
+    if terminal_identity(before, "pending traced process before full /proc sample"):
+        return False
 
     if pidfd_ready(attachment.pidfd):
         return False
@@ -1193,26 +1231,34 @@ def retry_pending_trace_generation(
             return False
 
         try:
-            after = read_proc_kernel_identity(pid, "pending traced process after incomplete /proc sample")
-        except (FileNotFoundError, ProcessLookupError) as identity_error:
+            after = read_proc_kernel_identity(
+                pid, "pending traced process after incomplete /proc sample", allow_terminal=True
+            )
+        except (FileNotFoundError, ProcessLookupError):
             if pidfd_ready(attachment.pidfd):
                 return False
 
-            raise CaptureError(f"Pending traced process PID {pid} disappeared during its /proc argv retry") from identity_error
+            attachment.exit_only = True
 
-        validate_retained_generation(
-            after, pid, attachment.start_ticks, "pending traced process after incomplete /proc sample"
-        )
+            return False
+
+        terminal_identity(after, "pending traced process after incomplete /proc sample")
 
         if pidfd_ready(attachment.pidfd):
             return False
 
         return False
-    except (FileNotFoundError, ProcessLookupError) as error:
+    except ZombieProcSample as error:
+        terminal_identity(error.proc, "pending traced process zombie during full /proc sample")
+
+        return False
+    except (FileNotFoundError, ProcessLookupError):
         if pidfd_ready(attachment.pidfd):
             return False
 
-        raise CaptureError(f"Pending traced process PID {pid} lost its /proc identity before argv completion") from error
+        attachment.exit_only = True
+
+        return False
 
     validate_retained_generation(proc, pid, attachment.start_ticks, "pending traced process full /proc sample")
 
@@ -1220,14 +1266,19 @@ def retry_pending_trace_generation(
         return False
 
     try:
-        after = read_proc_kernel_identity(pid, "pending traced process after complete /proc sample")
-    except (FileNotFoundError, ProcessLookupError) as error:
+        after = read_proc_kernel_identity(
+            pid, "pending traced process after complete /proc sample", allow_terminal=True
+        )
+    except (FileNotFoundError, ProcessLookupError):
         if pidfd_ready(attachment.pidfd):
             return False
 
-        raise CaptureError(f"Pending traced process PID {pid} disappeared before complete admission") from error
+        attachment.exit_only = True
 
-    validate_retained_generation(after, pid, attachment.start_ticks, "pending traced process after complete /proc sample")
+        return False
+
+    if terminal_identity(after, "pending traced process after complete /proc sample"):
+        return False
 
     if pidfd_ready(attachment.pidfd):
         return False
@@ -4063,6 +4114,63 @@ def late_traced_kernel_identity(pid: int, supervisor_generation: Generation) -> 
     return after
 
 
+def cleanup_pending_traced_generations(
+    pending: dict[int, PendingTraceGeneration],
+    forced_pids: list[int],
+    cleanup_errors: list[dict[str, Any]],
+) -> None:
+    for pid, attachment in list(pending.items()):
+        deferred = False
+
+        try:
+            if not pidfd_ready(attachment.pidfd):
+                if attachment.exit_only:
+                    deferred = True
+                    continue
+
+                try:
+                    identity = read_proc_kernel_identity(pid, "pending traced process failure cleanup")
+                    validate_retained_generation(
+                        identity, pid, attachment.start_ticks, "pending traced process failure cleanup"
+                    )
+                except (CaptureError, OSError) as identity_error:
+                    cleanup_errors.append(
+                        {"pid": pid, "error": f"Could not recheck pending traced process before pidfd cleanup: {identity_error}"}
+                    )
+                    attachment.exit_only = True
+                    deferred = True
+                    continue
+
+                try:
+                    signal.pidfd_send_signal(attachment.pidfd, signal.SIGKILL)
+                    forced_pids.append(pid)
+                except ProcessLookupError:
+                    if not pidfd_ready(attachment.pidfd):
+                        raise
+
+                deadline = time.monotonic() + 5
+
+                while time.monotonic() < deadline and not pidfd_ready(attachment.pidfd):
+                    time.sleep(PROCESS_POLL_SECONDS)
+
+            if not pidfd_ready(attachment.pidfd):
+                cleanup_errors.append(
+                    {"pid": pid, "procStarttimeTicks": attachment.start_ticks, "error": "Pending traced process pidfd was not ready after SIGKILL cleanup"}
+                )
+        except BaseException as cleanup_error:
+            cleanup_errors.append(
+                {"pid": pid, "procStarttimeTicks": attachment.start_ticks, "error": f"Pending traced process pidfd cleanup failed: {cleanup_error}"}
+            )
+        finally:
+            if not deferred:
+                pending.pop(pid, None)
+
+                try:
+                    os.close(attachment.pidfd)
+                except OSError as cleanup_error:
+                    cleanup_errors.append({"pid": pid, "error": f"Could not close pending traced process pidfd: {cleanup_error}"})
+
+
 def drain_late_traced_generations(
     supervisor: subprocess.Popen[bytes],
     supervisor_generation: Generation,
@@ -4544,6 +4652,11 @@ def main() -> int:
     args.user_data_dir = user_data
     args.extensions_dir = extensions
     workspace = temporary_root / "workspace"
+
+    # VS Code otherwise prewarms its AI agent host in the fixture window.
+    user_settings = user_data / "User"
+    user_settings.mkdir(parents=True)
+    write_json(user_settings / "settings.json", {"chat.disableAIFeatures": True})
 
     (workspace / "src").mkdir(parents=True)
 
@@ -5372,48 +5485,7 @@ def main() -> int:
             tid_groups,
         )
 
-        for pid, attachment in list(pending_trace_generations.items()):
-            try:
-                if not pidfd_ready(attachment.pidfd):
-                    try:
-                        identity = read_proc_kernel_identity(pid, "pending traced process failure cleanup")
-
-                        validate_retained_generation(
-                            identity, pid, attachment.start_ticks, "pending traced process failure cleanup"
-                        )
-                    except BaseException as identity_error:
-                        cleanup_errors.append(
-                            {"pid": pid, "error": f"Could not recheck pending traced process before pidfd cleanup: {identity_error}"}
-                        )
-
-                    try:
-                        signal.pidfd_send_signal(attachment.pidfd, signal.SIGKILL)
-
-                        forced_pids.append(pid)
-                    except ProcessLookupError:
-                        if not pidfd_ready(attachment.pidfd):
-                            raise
-
-                    deadline = time.monotonic() + 5
-
-                    while time.monotonic() < deadline and not pidfd_ready(attachment.pidfd):
-                        time.sleep(PROCESS_POLL_SECONDS)
-
-                if not pidfd_ready(attachment.pidfd):
-                    cleanup_errors.append(
-                        {"pid": pid, "procStarttimeTicks": attachment.start_ticks, "error": "Pending traced process pidfd was not ready after SIGKILL cleanup"}
-                    )
-            except BaseException as cleanup_error:
-                cleanup_errors.append(
-                    {"pid": pid, "procStarttimeTicks": attachment.start_ticks, "error": f"Pending traced process pidfd cleanup failed: {cleanup_error}"}
-                )
-            finally:
-                pending_trace_generations.pop(pid, None)
-
-                try:
-                    os.close(attachment.pidfd)
-                except OSError as cleanup_error:
-                    cleanup_errors.append({"pid": pid, "error": f"Could not close pending traced process pidfd: {cleanup_error}"})
+        cleanup_pending_traced_generations(pending_trace_generations, forced_pids, cleanup_errors)
 
         for pid, attachment in list(pending_popen.items()):
             ready_before_cleanup = False
@@ -5497,6 +5569,22 @@ def main() -> int:
                 )
             except BaseException as cleanup_error:
                 cleanup_errors.append({"pid": supervisor.pid, "error": str(cleanup_error)})
+
+        for pid, attachment in list(pending_trace_generations.items()):
+            try:
+                if not pidfd_ready(attachment.pidfd):
+                    cleanup_errors.append(
+                        {"pid": pid, "procStarttimeTicks": attachment.start_ticks, "error": "Pending traced process custody could not be re-established during failure cleanup"}
+                    )
+            except BaseException as cleanup_error:
+                cleanup_errors.append({"pid": pid, "error": f"Could not check deferred pending pidfd: {cleanup_error}"})
+            finally:
+                pending_trace_generations.pop(pid, None)
+
+                try:
+                    os.close(attachment.pidfd)
+                except OSError as cleanup_error:
+                    cleanup_errors.append({"pid": pid, "error": f"Could not close pending traced process pidfd: {cleanup_error}"})
 
         if display_server is not None and display_generation is not None:
             try:

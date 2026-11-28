@@ -1,0 +1,8 @@
+{
+  "mountURL": "/",
+  "target": {
+    "version": 1,
+    "runtime": "browser",
+    "profile": "static"
+  }
+}

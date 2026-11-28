@@ -563,8 +563,15 @@ export type CanonicalAttribute =
       readonly span: SourceSpan;
     };
 
-/** A component prop retains whether its caller expression must remain lazy. */
+/** A component input retains its scalar expression or caller-owned structural value. */
 export type CanonicalComponentProp =
+  | {
+      /** Caller-owned JSX retained pending the native ordinary-prop contract check. */
+      readonly kind: "rendered";
+      readonly name: string;
+      readonly child: CanonicalChild;
+      readonly span: SourceSpan;
+    }
   | {
       readonly kind: "value";
       readonly name: string;

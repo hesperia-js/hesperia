@@ -83,6 +83,7 @@ export default function Page() {
     );
 
     const failureMarker = join(root, "css-failure.txt");
+
     server = await devProject(root, {
       port: 0,
       report: (message) => {
@@ -95,7 +96,8 @@ export default function Page() {
       import assert from "node:assert/strict";
       import { watch, writeFile } from "node:fs/promises";
       import { chromium } from ${JSON.stringify(pathToFileURL(resolve(import.meta.dir, "../../node_modules/playwright/index.mjs")).href)};
-      const browser = await chromium.launch();
+      import { browserLaunchOptions } from ${JSON.stringify(pathToFileURL(resolve(import.meta.dir, "../support/browser-launch.mjs")).href)};
+      const browser = await chromium.launch(browserLaunchOptions("chromium"));
       try {
         const page = await browser.newPage();
         await page.addInitScript(() => {

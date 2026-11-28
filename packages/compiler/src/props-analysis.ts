@@ -8,7 +8,19 @@ import {
 } from "typescript/unstable/async";
 import { SyntaxKind, type Node, type SourceFile } from "typescript/unstable/ast";
 import type { PropSchema } from "hesperia/runtime";
-import type { CompilerDiagnostic } from "./ir.ts";
+import type {
+  CanonicalChild,
+  CanonicalComponentProp,
+  CanonicalModule,
+  CompilerDiagnostic,
+} from "./ir.ts";
+import { checkedDataEncoding } from "./checking-origin.ts";
+import {
+  captureStructuralEvidence,
+  retainComponentPropsTypeEvidence,
+  type CheckedTypeEvidence,
+  type ComponentPropTypeEvidence,
+} from "./typing-inputs.ts";
 
 /** Prop metadata for one authored component parameter. */
 export interface ComponentPropsMetadata {
@@ -26,6 +38,82 @@ export interface ComponentPropsAnalysis {
   readonly byParameterStart: Readonly<Record<string, ComponentPropsMetadata>>;
   /** Unsupported branded prop types fail closed before generation. */
   readonly diagnostics: readonly CompilerDiagnostic[];
+}
+
+type RenderedProp = Extract<CanonicalComponentProp, { kind: "rendered" }>;
+type RenderedComponent = Extract<CanonicalChild, { kind: "component" | "await-child" }>;
+
+const checkedRenderedProps = new WeakMap<
+  ComponentPropsAnalysis,
+  {
+    readonly module: CanonicalModule;
+    readonly encoding: string;
+    readonly props: ReadonlySet<RenderedProp>;
+  }
+>();
+const renderedPropMessage =
+  "A JSX-valued component prop requires a checked ordinary Component.Props contract.";
+
+export function isPendingRenderedPropDiagnostic(diagnostic: CompilerDiagnostic): boolean {
+  return diagnostic.code === "HES-EXPRESSION" && diagnostic.message === renderedPropMessage;
+}
+
+export function unprovedRenderedPropDiagnostics(
+  analysis: ComponentPropsAnalysis | undefined,
+  module: CanonicalModule,
+  mapOffset: (offset: number) => number = (offset) => offset,
+): readonly CompilerDiagnostic[] {
+  const checked = analysis && checkedRenderedProps.get(analysis);
+  const admitted =
+    checked?.module === module && checked.encoding === checkedDataEncoding(module, true)
+      ? checked.props
+      : undefined;
+
+  return renderedPropCandidates(module).flatMap(({ prop }) =>
+    admitted?.has(prop)
+      ? []
+      : [
+          {
+            code: "HES-EXPRESSION",
+            severity: "error" as const,
+            message: renderedPropMessage,
+            span: { start: mapOffset(prop.span.start), end: mapOffset(prop.span.end) },
+          },
+        ],
+  );
+}
+
+function renderedPropCandidates(
+  module: CanonicalModule,
+): readonly { readonly component: RenderedComponent; readonly prop: RenderedProp }[] {
+  const candidates: { component: RenderedComponent; prop: RenderedProp }[] = [];
+  const seen = new Set<object>();
+  const visit = (value: unknown): void => {
+    if (typeof value !== "object" || value === null || seen.has(value)) return;
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child);
+      return;
+    }
+
+    const record = value as Record<string, unknown>;
+
+    if (
+      (record.kind === "component" || record.kind === "await-child") &&
+      Array.isArray(record.props)
+    ) {
+      const component = value as RenderedComponent;
+
+      for (const prop of component.props)
+        if (prop.kind === "rendered") candidates.push({ component, prop });
+    }
+
+    for (const child of Object.values(record)) visit(child);
+  };
+
+  visit(module);
+  return candidates;
 }
 
 interface FunctionLikeNode extends Node {
@@ -50,6 +138,11 @@ interface ImportTypeNode extends Node {
   readonly qualifier?: Node;
 }
 
+interface CallExpressionNode extends Node {
+  readonly expression?: Node;
+  readonly arguments?: readonly Node[];
+}
+
 /**
  * Recover runtime prop contracts from the native TypeScript checker.
  *
@@ -67,6 +160,13 @@ export async function analyzeComponentProps(
   project: Project,
   filename: string,
   mapOffset: (offset: number) => number = (offset) => offset,
+  includeStructuralEvidence = false,
+  rendered?: {
+    readonly module: CanonicalModule;
+    readonly mapOffset: (offset: number) => number;
+    readonly checkingSource: string;
+    readonly helperFilename: string;
+  },
 ): Promise<ComponentPropsAnalysis> {
   const source = await project.program.getSourceFile(filename);
 
@@ -88,6 +188,8 @@ export async function analyzeComponentProps(
   collectFunctions(source);
 
   const byParameterStart: Record<string, ComponentPropsMetadata> = {};
+  const typeEvidenceByParameterStart: Record<string, ComponentPropTypeEvidence> =
+    Object.create(null);
   const diagnostics: CompilerDiagnostic[] = [];
   const trusted = await findTrustedBrands(project);
 
@@ -98,11 +200,148 @@ export async function analyzeComponentProps(
       project,
       trusted,
       byParameterStart,
+      typeEvidenceByParameterStart,
+      includeStructuralEvidence,
       diagnostics,
       mapOffset,
     );
 
-  return { byParameterStart, diagnostics };
+  const result = { byParameterStart, diagnostics };
+  const encoding =
+    rendered && renderedPropCandidates(rendered.module).length
+      ? checkedDataEncoding(rendered.module, true)
+      : undefined;
+
+  if (
+    rendered &&
+    encoding !== undefined &&
+    source.text === rendered.checkingSource &&
+    trusted.helperSource?.fileName.replaceAll("\\", "/") ===
+      rendered.helperFilename.replaceAll("\\", "/")
+  ) {
+    const props = await admitRenderedProps(
+      project,
+      source,
+      trusted,
+      rendered.module,
+      mapOffset,
+      rendered.mapOffset,
+    );
+
+    if (encoding === checkedDataEncoding(rendered.module, true))
+      checkedRenderedProps.set(result, { module: rendered.module, encoding, props });
+  }
+
+  if (includeStructuralEvidence)
+    retainComponentPropsTypeEvidence(result, {
+      byParameterStart: typeEvidenceByParameterStart,
+    });
+
+  return result;
+}
+
+async function admitRenderedProps(
+  project: Project,
+  source: SourceFile,
+  trusted: { readonly component: ReadonlySet<number>; readonly helperSource?: SourceFile },
+  module: CanonicalModule,
+  checkingOffset: (offset: number) => number,
+  canonicalOffset: (offset: number) => number,
+): Promise<ReadonlySet<RenderedProp>> {
+  const admitted = new Set<RenderedProp>();
+
+  if (!trusted.helperSource) return admitted;
+  const calls = new Map<number, CallExpressionNode[]>();
+  const visit = (node: Node): void => {
+    if (node.kind === SyntaxKind.CallExpression) {
+      const call = node as CallExpressionNode;
+
+      if (call.expression?.getText(source) === "__hesperia_component") {
+        const start = checkingOffset(call.getStart(source));
+
+        calls.set(start, [...(calls.get(start) ?? []), call]);
+      }
+    }
+
+    node.forEachChild(visit);
+  };
+
+  visit(source);
+
+  for (const { component, prop } of renderedPropCandidates(module)) {
+    if (prop.name === "bind" || prop.name === "key") continue;
+    const matches = calls.get(canonicalOffset(component.span.start));
+
+    if (matches?.length !== 1) continue;
+    const call = matches[0]!;
+    const reference = call.arguments?.[0];
+    const inputs = call.arguments?.[1];
+
+    if (
+      !reference ||
+      !inputs ||
+      inputs.kind !== SyntaxKind.ObjectLiteralExpression ||
+      checkingOffset(reference.getStart(source)) !== canonicalOffset(component.reference.span.start)
+    )
+      continue;
+
+    const helper = call.expression && (await project.checker.getSymbolAtLocation(call.expression));
+
+    if (!helper || helper.declarations.length === 0) continue;
+    let trustedHelper = true;
+
+    for (const handle of helper.declarations) {
+      const declaration = await handle.resolve(project);
+
+      if (!declaration || declaration.getSourceFile() !== trusted.helperSource)
+        trustedHelper = false;
+    }
+
+    if (!trustedHelper) continue;
+    const target = await project.checker.getTypeAtLocation(reference);
+
+    if (!target) continue;
+    const signatures = await project.checker.getSignaturesOfType(target, SignatureKind.Call);
+
+    if (signatures.length !== 1) continue;
+    const parameter = (await signatures[0]!.getParameters())[0];
+    const mapped = parameter && (await project.checker.getTypeOfSymbol(parameter));
+    const brand = mapped && (await findBrandProperty(project, mapped, trusted.component));
+    const branded = brand && (await project.checker.getTypeOfSymbol(brand));
+    const raw = branded && (await project.checker.getNonNullableType(branded));
+    const member = raw && (await project.checker.getPropertyOfType(raw, prop.name));
+    const expected = member && (await project.checker.getTypeOfSymbol(member));
+
+    if (!expected || (await isCallable(project, expected))) continue;
+    const properties = (inputs as Node & { readonly properties: readonly Node[] }).properties;
+    const matching = properties.filter((property) => {
+      if (
+        property.kind !== SyntaxKind.PropertyAssignment ||
+        checkingOffset(property.getStart(source)) !== canonicalOffset(prop.span.start)
+      )
+        return false;
+
+      const name = (property as NamedDeclarationNode).name;
+
+      if (!name || name.kind !== SyntaxKind.StringLiteral) return false;
+      return (name as Node & { readonly text: string }).text === prop.name;
+    });
+
+    if (matching.length !== 1) continue;
+    const initializer = (matching[0] as Node & { readonly initializer: Node }).initializer;
+
+    if (checkingOffset(initializer.getStart(source)) !== canonicalOffset(prop.child.span.start))
+      continue;
+
+    const incoming = await project.checker.getTypeAtLocation(initializer);
+
+    if (!incoming || incoming.flags & (TypeFlags.Any | TypeFlags.Unknown | TypeFlags.Never))
+      continue;
+
+    if (await project.checker.isTypeAssignableTo(incoming, expected)) admitted.add(prop);
+  }
+
+  return admitted;
 }
 
 async function analyzeFunction(
@@ -111,6 +350,8 @@ async function analyzeFunction(
   project: Project,
   trusted: { readonly component: ReadonlySet<number>; readonly pageProps: ReadonlySet<number> },
   byParameterStart: Record<string, ComponentPropsMetadata>,
+  typeEvidenceByParameterStart: Record<string, ComponentPropTypeEvidence>,
+  includeStructuralEvidence: boolean,
   diagnostics: CompilerDiagnostic[],
   mapOffset: (offset: number) => number,
 ): Promise<void> {
@@ -135,6 +376,8 @@ async function analyzeFunction(
       source,
       project,
       byParameterStart,
+      typeEvidenceByParameterStart,
+      includeStructuralEvidence,
       diagnostics,
       mapOffset,
     );
@@ -178,10 +421,16 @@ async function analyzeFunction(
   }
 
   const props: Record<string, PropSchema> = {};
+  const mappedEvidence: Record<string, CheckedTypeEvidence> = Object.create(null);
 
   for (const property of properties) {
     const name = String(property.name);
     const type = await project.checker.getTypeOfSymbol(property);
+
+    if (includeStructuralEvidence)
+      mappedEvidence[name] = type
+        ? await captureStructuralEvidence(project, type)
+        : { kind: "unproved", reason: "checker-error" };
 
     Object.defineProperty(props, name, {
       configurable: true,
@@ -200,11 +449,15 @@ async function analyzeFunction(
   }
 
   const parameterStart = mapOffset(parameter.getStart(source));
+
   byParameterStart[String(parameterStart)] = {
     parameterStart,
     parameterEnd: mapOffset(parameter.end),
     props,
   };
+
+  if (includeStructuralEvidence)
+    typeEvidenceByParameterStart[String(parameterStart)] = { mapped: mappedEvidence };
 }
 
 async function analyzePageFunction(
@@ -214,6 +467,8 @@ async function analyzePageFunction(
   sourceFile: SourceFile,
   project: Project,
   byParameterStart: Record<string, ComponentPropsMetadata>,
+  typeEvidenceByParameterStart: Record<string, ComponentPropTypeEvidence>,
+  includeStructuralEvidence: boolean,
   diagnostics: CompilerDiagnostic[],
   mapOffset: (offset: number) => number,
 ): Promise<void> {
@@ -272,20 +527,40 @@ async function analyzePageFunction(
 
   const mappedProperties = await project.checker.getPropertiesOfType(mapped);
   const props: Record<string, PropSchema> = {};
+  const mappedEvidence: Record<string, CheckedTypeEvidence> = Object.create(null);
+  const authoredEvidence: Record<string, CheckedTypeEvidence> = Object.create(null);
 
   for (const property of mappedProperties) {
     const name = String(property.name);
 
     if (name.startsWith("__@")) continue;
 
+    if (includeStructuralEvidence) {
+      const mappedType = await project.checker.getTypeOfSymbol(property);
+
+      mappedEvidence[name] = mappedType
+        ? await captureStructuralEvidence(project, mappedType)
+        : { kind: "unproved", reason: "checker-error" };
+    }
+
     const authoredProperty = authoredProperties.find(
       (candidate) => String(candidate.name) === name,
     );
+
+    if (includeStructuralEvidence && authoredProperty) {
+      const authoredPropType = await project.checker.getTypeOfSymbol(authoredProperty);
+
+      authoredEvidence[name] = authoredPropType
+        ? await captureStructuralEvidence(project, authoredPropType)
+        : { kind: "unproved", reason: "checker-error" };
+    }
+
     const plain = name === "params" || name === "queryParams";
     let callback = false;
 
     if (!plain && name !== "bind" && authoredProperty) {
       const authoredType = await project.checker.getTypeOfSymbol(authoredProperty);
+
       callback = Boolean(authoredType && (await isCallable(project, authoredType)));
     }
 
@@ -303,11 +578,18 @@ async function analyzePageFunction(
   }
 
   const parameterStart = mapOffset(parameter.getStart(sourceFile));
+
   byParameterStart[String(parameterStart)] = {
     parameterStart,
     parameterEnd: mapOffset(parameter.end),
     props,
   };
+
+  if (includeStructuralEvidence)
+    typeEvidenceByParameterStart[String(parameterStart)] = {
+      mapped: mappedEvidence,
+      ...(Object.keys(authoredEvidence).length ? { authored: authoredEvidence } : {}),
+    };
 }
 
 async function findBrandProperty(
@@ -338,6 +620,7 @@ async function findBrandProperty(
 async function findTrustedBrands(project: Project): Promise<{
   readonly component: ReadonlySet<number>;
   readonly pageProps: ReadonlySet<number>;
+  readonly helperSource?: SourceFile;
 }> {
   const component = new Set<number>();
   const pageProps = new Set<number>();
@@ -382,7 +665,7 @@ async function findTrustedBrands(project: Project): Promise<{
     await addBrandSymbols(project, await project.checker.getAliasedSymbol(exported), target);
   }
 
-  return { component, pageProps };
+  return { component, pageProps, helperSource: source };
 }
 
 async function addBrandSymbols(

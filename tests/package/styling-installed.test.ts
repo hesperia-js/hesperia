@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { expect, test } from "bun:test";
 import { readPinnedAeoliaVersion, writePackageManifest } from "./package-manifest.ts";
 import { suppliedReleaseArchive } from "./release-candidate.ts";
@@ -80,10 +81,67 @@ async function pack(workspace: string, root: string): Promise<string> {
   return join(workspace, name).replaceAll("\\", "/");
 }
 
-async function waitForServer(process_: ReturnType<typeof Bun.spawn>): Promise<string> {
-  const reader = (process_.stdout as ReadableStream<Uint8Array>).getReader();
+function captureStderr(stream: ReadableStream<Uint8Array>) {
+  const limit = 16_384;
+  let tail = new Uint8Array(0);
+  let truncated = false;
+  let finished = false;
+  let readFailure: string | undefined;
 
-  const stderr = new Response(process_.stderr as ReadableStream<Uint8Array>).text();
+  const done = (async () => {
+    try {
+      const reader = stream.getReader();
+
+      try {
+        while (true) {
+          const chunk = await reader.read();
+
+          if (chunk.done) break;
+
+          const current = chunk.value.subarray(Math.max(0, chunk.value.byteLength - limit));
+          const retained = Math.min(tail.byteLength, limit - current.byteLength);
+          const next = new Uint8Array(retained + current.byteLength);
+
+          next.set(tail.subarray(tail.byteLength - retained));
+          next.set(current, retained);
+          truncated ||= retained < tail.byteLength || current.byteLength < chunk.value.byteLength;
+          tail = next;
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    } catch (error) {
+      try {
+        const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+
+        readFailure = detail.slice(0, 1_024);
+      } catch {
+        readFailure = "Unprintable stderr stream error";
+      }
+    } finally {
+      finished = true;
+    }
+  })();
+
+  return {
+    done,
+    snapshot(): string {
+      let state = finished ? "complete" : "still draining";
+
+      if (readFailure !== undefined) state = `read failed: ${readFailure}`;
+
+      const prefix = truncated ? "earlier bytes discarded; " : "";
+
+      return `[stderr ${prefix}${state}]\n${new TextDecoder().decode(tail)}`;
+    },
+  };
+}
+
+async function waitForServer(
+  process_: ReturnType<typeof Bun.spawn>,
+  stderr: ReturnType<typeof captureStderr>,
+): Promise<string> {
+  const reader = (process_.stdout as ReadableStream<Uint8Array>).getReader();
 
   let output = "";
 
@@ -92,10 +150,10 @@ async function waitForServer(process_: ReturnType<typeof Bun.spawn>): Promise<st
       const chunk = await reader.read();
 
       if (chunk.done) {
-        const [status, errors] = await Promise.all([process_.exited, stderr]);
+        const [status] = await Promise.all([process_.exited, stderr.done]);
 
         throw new Error(
-          `Hesperia server exited before listening (${status})\n${output}\n${errors}`,
+          `Hesperia server exited before listening (${status})\n${output}\n${stderr.snapshot()}`,
         );
       }
 
@@ -110,6 +168,50 @@ async function waitForServer(process_: ReturnType<typeof Bun.spawn>): Promise<st
   }
 }
 
+async function waitForServerExit(child: ReturnType<typeof Bun.spawn>): Promise<number | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      child.exited,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), 1_500);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function retireServer(
+  child: ReturnType<typeof Bun.spawn>,
+  name: string,
+  afterFailure: boolean,
+  stage: (message: string) => void,
+): Promise<void> {
+  stage("signal " + name + " server " + child.pid);
+
+  if (child.exitCode === null) child.kill();
+
+  stage("await " + name + " server exit " + child.pid);
+  const status = afterFailure ? await waitForServerExit(child) : await child.exited;
+
+  if (status !== undefined) {
+    stage(name + " server exited with status " + status);
+    return;
+  }
+
+  stage("force " + name + " server exit " + child.pid);
+
+  if (child.exitCode === null) child.kill("SIGKILL");
+
+  const forcedStatus = await waitForServerExit(child);
+
+  if (forcedStatus === undefined) throw new Error(name + " server exit was not observed");
+
+  throw new Error(name + " server exceeded its graceful exit bound (status " + forcedStatus + ")");
+}
+
 function isInside(parent: string, child: string): boolean {
   const path = relative(resolve(parent), resolve(child));
 
@@ -117,6 +219,9 @@ function isInside(parent: string, child: string): boolean {
 }
 
 test("packed PostCSS, Tailwind, and StyleX work in an installed development and production app", async () => {
+  const stage = (name: string) => console.error(`[Q10-STYLING] ${name}`);
+
+  stage("create temporary workspace");
   const tempRoot = resolve(tmpdir());
 
   const workspace = await mkdtemp(join(tempRoot, "hesperia-styling-installed-"));
@@ -124,12 +229,16 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
   const application = join(workspace, "application with spaces");
 
   let devServer: ReturnType<typeof Bun.spawn> | undefined;
+  let devStderr: ReturnType<typeof captureStderr> | undefined;
 
   let previewServer: ReturnType<typeof Bun.spawn> | undefined;
+  let previewStderr: ReturnType<typeof captureStderr> | undefined;
 
   let passed = false;
+  let primaryFailure: { error: unknown } | undefined;
 
   try {
+    stage("prepare package archives");
     if (!isInside(tempRoot, workspace)) throw new Error(`Unsafe temp workspace path: ${workspace}`);
 
     const tarballs = {
@@ -186,6 +295,7 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
       expect(entries).toContain("package/dist/index.d.ts");
     }
 
+    stage("create application");
     await run(
       packageRoot,
       resolve(packageRoot, "packages/create-hesperia/dist/cli.js"),
@@ -242,15 +352,20 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
 
     await writePackageManifest(manifestPath, applicationManifest);
 
+    stage("install application dependencies");
     await run(application, "install", "--ignore-scripts");
 
+    stage("check application");
     expect(await run(application, "run", "check")).toContain("Hesperia checking passed");
 
     const errors: string[] = [];
 
-    const browser = await chromium.launch();
+    stage("launch browser");
+    const browser = await chromium.launch(browserLaunchOptions("chromium"));
+    let browserFailure: { error: unknown } | undefined;
 
     try {
+      stage("start development server");
       devServer = Bun.spawn(
         [process.execPath, "node_modules/@hesperia/tooling/dist/cli.js", "dev", "--port", "0"],
         {
@@ -260,8 +375,10 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
         },
       );
 
-      const devUrl = await waitForServer(devServer);
+      devStderr = captureStderr(devServer.stderr as ReadableStream<Uint8Array>);
+      const devUrl = await waitForServer(devServer, devStderr);
 
+      stage("exercise development app");
       const devPage = await browser.newPage();
 
       devPage.on("pageerror", (error) => errors.push(error.message));
@@ -326,6 +443,7 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
         throw new Error("CSS fixture update did not change its input");
 
       await writeFile(cssPath, revisedCss);
+      stage("CSS revision input written");
 
       await devPage.waitForFunction(
         () =>
@@ -334,6 +452,7 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
         undefined,
         { timeout: 15_000 },
       );
+      stage("CSS revision visible");
 
       expect(await counter.textContent()).toBe("Count: 2");
 
@@ -347,14 +466,17 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
 
       await devPage.close();
 
+      stage("stop development server");
       devServer.kill();
 
       await devServer.exited;
 
       devServer = undefined;
 
+      stage("build application");
       expect(await run(application, "run", "build")).toContain("Built browser application");
 
+      stage("start preview server");
       previewServer = Bun.spawn(
         [process.execPath, "node_modules/@hesperia/tooling/dist/cli.js", "preview", "--port", "0"],
         {
@@ -364,8 +486,10 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
         },
       );
 
-      const previewUrl = await waitForServer(previewServer);
+      previewStderr = captureStderr(previewServer.stderr as ReadableStream<Uint8Array>);
+      const previewUrl = await waitForServer(previewServer, previewStderr);
 
+      stage("exercise preview app");
       const previewPage = await browser.newPage();
 
       previewPage.on("pageerror", (error) => errors.push(error.message));
@@ -407,30 +531,71 @@ test("packed PostCSS, Tailwind, and StyleX work in an installed development and 
       expect(errors).toStrictEqual([]);
 
       await previewPage.close();
+    } catch (error) {
+      browserFailure = { error };
+      console.error("[Q10-STYLING] browser exercise failed", error);
+
+      try {
+        if (devServer && devStderr)
+          console.error("[Q10-STYLING] development server stderr tail", devStderr.snapshot());
+
+        if (previewServer && previewStderr)
+          console.error("[Q10-STYLING] preview server stderr tail", previewStderr.snapshot());
+      } catch {
+        // The stderr diagnostic must not replace the browser failure.
+      }
     } finally {
-      await browser.close();
+      stage("close browser");
+
+      try {
+        await browser.close();
+      } catch (error) {
+        browserFailure = {
+          error: browserFailure
+            ? new AggregateError(
+                [browserFailure.error, error],
+                "Browser exercise and close failed",
+                { cause: browserFailure.error },
+              )
+            : error,
+        };
+      }
     }
+
+    if (browserFailure) throw browserFailure.error;
 
     passed = true;
+  } catch (error) {
+    primaryFailure = { error };
   } finally {
-    if (devServer) {
-      devServer.kill();
+    stage("clean up application");
 
-      await devServer.exited;
-    }
+    try {
+      if (devServer) await retireServer(devServer, "development", !passed, stage);
 
-    if (previewServer) {
-      previewServer.kill();
+      if (previewServer) await retireServer(previewServer, "preview", !passed, stage);
 
-      await previewServer.exited;
-    }
+      if (!passed && process.env.HESPERIA_PACKAGE_TEST_KEEP_TEMP_ON_FAILURE === "1") {
+        console.error(`Retained failed optional-styling consumer at ${workspace}`);
+      } else if (!isInside(tempRoot, workspace)) {
+        console.error(`Skipped cleanup outside the temp root: ${workspace}`);
+      } else {
+        stage("remove temporary workspace");
+        await rm(workspace, { recursive: true, force: true });
+        stage("temporary workspace removed");
+      }
+    } catch (error) {
+      console.error(`Retained optional-styling consumer after cleanup failure at ${workspace}`);
 
-    if (!passed && process.env.HESPERIA_PACKAGE_TEST_KEEP_TEMP_ON_FAILURE === "1") {
-      console.error(`Retained failed optional-styling consumer at ${workspace}`);
-    } else if (!isInside(tempRoot, workspace)) {
-      console.error(`Skipped cleanup outside the temp root: ${workspace}`);
-    } else {
-      await rm(workspace, { recursive: true, force: true });
+      primaryFailure = {
+        error: primaryFailure
+          ? new AggregateError([primaryFailure.error, error], "Styling test and cleanup failed", {
+              cause: primaryFailure.error,
+            })
+          : error,
+      };
     }
   }
+
+  if (primaryFailure) throw primaryFailure.error;
 }, 300_000);

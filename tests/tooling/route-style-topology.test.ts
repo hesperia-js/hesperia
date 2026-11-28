@@ -46,6 +46,7 @@ function fixture(loading = true): { manifest: RouteManifest; topology: StyleTopo
     ["src/routes/child/+page.tsx", ["page"]],
     ["src/routes/child/+not-found.tsx", ["not-found"]],
   ] as const;
+
   return {
     manifest: { root: parent, routes: [child] },
     topology: {

@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chromium, firefox, webkit } from "playwright";
 import { resolve } from "node:path";
@@ -27,6 +28,7 @@ beforeAll(async () => {
     throw new AggregateError(build.logs, "Navigation facade browser fixture did not bundle");
 
   const script = await build.outputs[0]!.text();
+
   server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -60,7 +62,7 @@ afterAll(async () => {
 
 for (const engine of [chromium, firefox, webkit]) {
   test(`${engine.name()} routes two iframe Windows independently through one runtime`, async () => {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
     const page = await browser.newPage();
 
     try {
@@ -93,10 +95,12 @@ for (const engine of [chromium, firefox, webkit]) {
 
         const createFrame = async (id: string, path: string): Promise<HTMLIFrameElement> => {
           const frame = document.createElement("iframe");
+
           frame.id = id;
           const loaded = new Promise<void>((resolve) => {
             frame.addEventListener("load", () => resolve(), { once: true });
           });
+
           frame.src = path;
 
           document.body.append(frame);
@@ -124,6 +128,7 @@ for (const engine of [chromium, firefox, webkit]) {
         page.evaluate(() => {
           const read = (id: string) => {
             const frame = document.querySelector(`#${id}`) as HTMLIFrameElement;
+
             return {
               pathname: frame.contentWindow!.location.pathname,
               page: frame.contentDocument!.querySelector("main")?.getAttribute("data-page"),
@@ -181,7 +186,7 @@ for (const engine of [chromium, firefox, webkit]) {
   }, 30_000);
 
   test(`${engine.name()} default: same-origin query navigation is routed`, async () => {
-    const browser = await engine.launch();
+    const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
     try {
       const page = await browser.newPage();
@@ -224,6 +229,7 @@ for (const engine of [chromium, firefox, webkit]) {
         });
         const committed = await navigation.committed;
         const finished = await navigation.finished;
+
         return {
           beforeGuards,
           afterGuards: fixture.guardCalls,
@@ -261,7 +267,7 @@ for (const engine of [chromium, firefox, webkit]) {
 
   for (const mode of modes) {
     test(`${engine.name()} ${mode}: authored navigation uses the routed facade`, async () => {
-      const browser = await engine.launch();
+      const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
       try {
         const page = await browser.newPage();
@@ -322,6 +328,7 @@ for (const engine of [chromium, firefox, webkit]) {
 
           exportedNavigation.onnavigate = originalHandler;
           const originalHandlerReadback = exportedNavigation.onnavigate === originalHandler;
+
           exportedNavigation.onnavigate = replacementHandler;
           const replacementHandlerReadback = exportedNavigation.onnavigate === replacementHandler;
           const documentBefore = document;
@@ -335,6 +342,7 @@ for (const engine of [chromium, firefox, webkit]) {
           const replacedMain = document.querySelector("main") !== initial;
           const mainText = document.querySelector("main")?.textContent;
           const routerUrl = fixture.router.url;
+
           exportedNavigation.onnavigate = null;
           const handlerCleared = exportedNavigation.onnavigate === null;
 
@@ -343,6 +351,7 @@ for (const engine of [chromium, firefox, webkit]) {
           const laterNavigation = exportedNavigation.navigate("/one", { history: "push" });
           const laterFinished = await laterNavigation.finished;
           const events = [...fixture.events];
+
           return {
             originalHandlerReadback,
             replacementHandlerReadback,
@@ -407,7 +416,7 @@ for (const engine of [chromium, firefox, webkit]) {
     }, 30_000);
 
     test(`${engine.name()} ${mode}: exact explicit-fragment navigation skips route work`, async () => {
-      const browser = await engine.launch();
+      const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
       try {
         const page = await browser.newPage();
@@ -468,6 +477,7 @@ for (const engine of [chromium, firefox, webkit]) {
           });
           const exactCommitted = await exactFragment.committed;
           const exactFinished = await exactFragment.finished;
+
           return {
             sameDocument: document === documentBefore,
             changedFragmentRetainedMain: pageAfterChanged === initialMain,
@@ -529,7 +539,7 @@ for (const engine of [chromium, firefox, webkit]) {
     }, 30_000);
 
     test(`${engine.name()} ${mode}: direct History writes stay native`, async () => {
-      const browser = await engine.launch();
+      const browser = await engine.launch(browserLaunchOptions(engine.name()));
 
       try {
         const page = await browser.newPage();
@@ -565,6 +575,7 @@ for (const engine of [chromium, firefox, webkit]) {
             }
           ).navigationFacadeFixture;
           const fragment = fixture.navigation.navigate("/one#start", { history: "push" });
+
           await fragment.finished;
 
           Object.assign(window, { nativeHistoryFixtureMain: document.querySelector("main") });
@@ -626,6 +637,7 @@ for (const engine of [chromium, firefox, webkit]) {
               };
             }
           ).navigationFacadeFixture;
+
           return {
             routerUrl: fixture.router.url,
             locationUrl: location.href,

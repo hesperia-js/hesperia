@@ -37,6 +37,7 @@ const numbers = createStream({
 
       if (waiting) {
         const resolve = waiting;
+
         waiting = undefined;
 
         resolve({ done: false, value });
@@ -68,6 +69,7 @@ const numbers = createStream({
 
 const contract = defineContract({ namespace: "browser-stream", operations: { numbers } });
 const graph = createGraph({ contract, idleMs: 1000 });
+
 export const api = withAeolia(graph, contract);
 
 export const streamStats = () => ({ opens, aborts });

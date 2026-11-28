@@ -67,6 +67,7 @@ export default function EmbedSecurity() {
 
       const currentWrapper = publishedWrapper();
       const currentFrame = currentWrapper.querySelector("iframe");
+
       return {
         wrapperBindingStable: currentWrapper === rememberedWrapper,
         wrapperConnected: currentWrapper.isConnected,

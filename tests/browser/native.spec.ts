@@ -132,6 +132,62 @@ test("compiled event pairs retain native once, capture, passive, fault, and rele
 
   await page.locator("#native-option-once-b").click();
 
+  // Adapted from WPT at 01591897eff8424a3ead6e79f5ee5d1c39fb1437:
+  // dom/events/AddEventListenerOptions-once.any.js and
+  // dom/events/AddEventListenerOptions-passive.any.js. Hesperia accepts boolean
+  // options; the WPT getter and numeric-coercion cases are not adapted here.
+  const nativeControl = await page.evaluate(() => {
+    const onceTarget = document.createElement("button");
+    let onceCalls = 0;
+
+    onceTarget.addEventListener(
+      "click",
+      () => {
+        onceCalls += 1;
+
+        if (onceCalls === 1) onceTarget.dispatchEvent(new Event("click"));
+      },
+      { once: true },
+    );
+    onceTarget.dispatchEvent(new Event("click"));
+
+    const results = [true, false].map((passive) => {
+      const target = document.createElement("button");
+      const event = new Event("click", { cancelable: true });
+
+      target.addEventListener("click", (current) => (current.returnValue = false), { passive });
+      const dispatched = target.dispatchEvent(event);
+
+      return {
+        dispatched,
+        returnValue: event.returnValue,
+        defaultPrevented: event.defaultPrevented,
+      };
+    });
+
+    return { onceCalls, results };
+  });
+
+  expect(nativeControl).toStrictEqual({
+    onceCalls: 1,
+    results: [
+      { dispatched: true, returnValue: true, defaultPrevented: false },
+      { dispatched: false, returnValue: false, defaultPrevented: true },
+    ],
+  });
+
+  await page.locator("#native-option-once-recursive").dispatchEvent("click");
+
+  const passiveReturnDispatch = await page
+    .locator("#native-option-passive-return")
+    .evaluate((node) => node.dispatchEvent(new Event("click", { cancelable: true })));
+  const ordinaryReturnDispatch = await page
+    .locator("#native-option-ordinary-return")
+    .evaluate((node) => node.dispatchEvent(new Event("click", { cancelable: true })));
+
+  expect(passiveReturnDispatch).toBe(true);
+  expect(ordinaryReturnDispatch).toBe(false);
+
   await page.locator("#native-option-capture-target").click();
 
   const passiveDispatch = await page
@@ -152,6 +208,9 @@ test("compiled event pairs retain native once, capture, passive, fault, and rele
   expect(await page.evaluate(() => window.nativeFixture.optionEvents())).toStrictEqual([
     "once:native-option-once-a:true",
     "once:native-option-once-b:true",
+    "once-recursive:1",
+    "passive-return:true:false",
+    "ordinary-return:false:true",
     "capture",
     "target",
     "passive:false",
@@ -169,6 +228,7 @@ test("compiled event pairs retain native once, capture, passive, fault, and rele
   await capture.evaluate((node) => {
     window.eventOptionRemovals = [];
     const remove = node.removeEventListener.bind(node);
+
     node.removeEventListener = ((
       type: string,
       listener: EventListener | null,
@@ -184,6 +244,7 @@ test("compiled event pairs retain native once, capture, passive, fault, and rele
 
   await ordinary.evaluate((node) => {
     const remove = node.removeEventListener.bind(node);
+
     node.removeEventListener = ((
       type: string,
       listener: EventListener | null,
@@ -207,7 +268,7 @@ test("compiled event pairs retain native once, capture, passive, fault, and rele
 
   expect(removals).toContain("click:false");
 
-  expect(await page.evaluate(() => window.nativeFixture.optionEvents())).toHaveLength(7);
+  expect(await page.evaluate(() => window.nativeFixture.optionEvents())).toHaveLength(10);
 
   expect(errors).toStrictEqual([]);
 });

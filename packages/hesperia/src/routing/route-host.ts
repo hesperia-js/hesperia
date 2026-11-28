@@ -14,7 +14,12 @@ import {
 import { child, component, prepareTree, type Rendered, type RuntimeRoot } from "../runtime/dom.ts";
 import { asyncBoundary } from "../runtime/async.ts";
 import { errorBoundary } from "../runtime/error-boundary.ts";
-import { Owner, RenderFault, reportFault } from "../runtime/owner.ts";
+import {
+  disposeOwnerSyncPreservingFailure,
+  Owner,
+  RenderFault,
+  reportFault,
+} from "../runtime/owner.ts";
 import type {
   PreparedRoute,
   PreparedRouteInstallOptions,
@@ -133,6 +138,7 @@ function preparedWithChildren(
       ? Object.freeze([name, children] as const)
       : Object.freeze([name, value] as const),
   );
+
   return {
     definition: prepared.definition,
     entries: Object.freeze(entries),
@@ -152,12 +158,14 @@ function asyncRouteDefinition(
   onReady: (ready: Promise<void>) => void,
 ): Component<unknown> {
   const schema = Object.fromEntries(prepared.schema);
+
   return defineComponent(
     (owner, props) => {
       const incoming = Object.fromEntries(
         prepared.entries.map(([name]) => {
           const value = (props as Record<string, unknown>)[name];
           const slot = prepared.schema.get(name);
+
           return [
             name,
             slot?.kind === "value" && typeof value === "function"
@@ -166,6 +174,7 @@ function asyncRouteDefinition(
           ];
         }),
       );
+
       return asyncBoundary(
         owner,
         "filesystem-loading",
@@ -282,6 +291,7 @@ function instantiatePart(
   }
 
   const tree = prepareTree(owner, () => output);
+
   return { owner, tree, instance, children, contentOwner, handledFailure, failureState, ready };
 }
 
@@ -368,12 +378,12 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
   const disposeStaged = (candidate: Candidate, reason: unknown): void => {
     const root = candidate.staged[0];
 
-    if (root) root.dispose(reason);
+    if (root) root.disposeSync(reason);
   };
 
   const disposeInstalled = (candidate: Candidate, reason: unknown, firstLayer = 0): void => {
     if (candidate.parked && candidate.parkedRoot) {
-      candidate.parkedRoot.dispose(reason);
+      candidate.parkedRoot.disposeSync(reason);
 
       return;
     }
@@ -382,7 +392,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
 
     if (!root) return;
 
-    root.dispose(reason);
+    root.disposeSync(reason);
   };
 
   const disposeCandidate = (candidate: Candidate, reason: unknown): void => {
@@ -535,6 +545,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
           const selected = buildingCandidate ?? active ?? candidate;
           const shouldActivate =
             buildingCandidate === selected || (selected.installed && active === selected);
+
           selected.styleSelection = module.errorStyleKey;
 
           if (!selected.styles) return;
@@ -551,6 +562,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
 
               selected.styles?.activate(selected.styleSelection);
             });
+
             selected.styleReady = selected.styleReady
               ? Promise.all([selected.styleReady, ready]).then(() => undefined)
               : ready;
@@ -576,6 +588,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
             parent,
             ownerIdentity("layout", common.length + index),
           );
+
           owner.deferStructural = true;
 
           staged.push(owner);
@@ -623,7 +636,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
             // whether the candidate can continue with the boundary's fallback.
             reportFault(pageOwner, error);
 
-            pageOwner.dispose(error);
+            pageOwner.disposeSync(error);
 
             page = undefined;
           }
@@ -646,6 +659,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
           module: suffixModules[index]!,
         }));
         const suffixChildValues = suffixChildOutlets;
+
         candidate.layers = [...common, ...suffixLayers];
         candidate.page = page;
         candidate.ready = Promise.all([page?.ready, candidate.styleReady]).then(() => undefined);
@@ -655,6 +669,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
             ? childValue
             : (previous?.childValues[index] ?? runtime.context.document.createDocumentFragment()),
         );
+
         candidate.childValues = [...commonChildValues, ...suffixChildValues];
         candidate.layerProps = route.layouts.map((_, index) =>
           preparedWithChildren(layoutPrepared[index]!, candidate.childValues[index]!),
@@ -667,6 +682,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
 
       candidate.build = () => {
         const previousBuilding = buildingCandidate;
+
         buildingCandidate = candidate;
 
         try {
@@ -819,6 +835,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
           const failure = [...candidate.layers, ...(candidate.page ? [candidate.page] : [])].find(
             (part) => part.failureState.handled,
           );
+
           return failure ? { error: failure.failureState.error } : undefined;
         },
 
@@ -848,6 +865,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
 
           if (failedCommonIndex >= 0) {
             const retainedCount = failedCommonIndex + 1;
+
             candidate.common = common.slice(0, retainedCount);
             candidate.layers = candidate.layers.slice(0, retainedCount);
             candidate.commonProps = candidate.commonProps.slice(0, retainedCount);
@@ -909,7 +927,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
               if (!outgoing)
                 throw new RenderFault("route-invalid", "The active route has no root owner");
 
-              outgoing.dispose(new RenderFault("route-replaced", "The route was replaced"));
+              outgoing.disposeSync(new RenderFault("route-replaced", "The route was replaced"));
 
               previous.disposed = true;
 
@@ -1014,7 +1032,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
 
             if (first >= 0) disposeInstalled(candidate, reason, first);
             else if (candidate.page && !retained.has(candidate.page.owner))
-              candidate.page.owner.dispose(reason);
+              candidate.page.owner.disposeSync(reason);
 
             candidate.disposed = true;
 
@@ -1034,9 +1052,10 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
           );
         },
       };
+
       return prepared;
     } catch (error) {
-      staged[0]!.dispose(error);
+      disposeOwnerSyncPreservingFailure(staged[0]!, error);
 
       throw error;
     }
@@ -1056,7 +1075,7 @@ export function createRouteHost(runtime: RuntimeRoot, target: Node): RouteHost {
 
       active = undefined;
 
-      hostOwner.dispose(reason);
+      hostOwner.disposeSync(reason);
     },
   };
 }

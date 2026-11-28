@@ -1,3 +1,4 @@
+import { browserLaunchOptions } from "../support/browser-launch.mjs";
 import { expect, test } from "bun:test";
 import { readPinnedAeoliaVersion } from "./package-manifest.ts";
 import { suppliedReleaseArchive } from "./release-candidate.ts";
@@ -88,16 +89,25 @@ function sha256(bytes: Uint8Array): string {
   return new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 }
 
-test("packed tooling and hosting serve one built route at root and a nested mount", async () => {
+test("packed hosting serves legacy mounts and renders a browser/static capture in preview", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "hesperia-hosting-installed-"));
 
   const application = join(workspace, "external hosted app");
+  const cli = join(application, "node_modules", "@hesperia", "tooling", "dist", "cli.js");
+  const previewCommand = [process.execPath, cli, "preview", "--port", "0"];
+  const previewOptions = { cwd: application, stdout: "pipe", stderr: "pipe" } as const;
 
   let consumer: ReturnType<typeof Bun.spawn> | undefined;
 
   let preview: ReturnType<typeof Bun.spawn> | undefined;
 
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+
+  async function readPreviewURL(child: ReturnType<typeof Bun.spawn>): Promise<URL> {
+    const ready = await waitForOutput(child, /Hesperia preview: http:\/\/127\.0\.0\.1:\d+\//u);
+
+    return new URL(ready.match[0]!.replace("Hesperia preview: ", ""));
+  }
 
   try {
     const tarballs = {
@@ -266,12 +276,12 @@ test("packed tooling and hosting serve one built route at root and a nested moun
       expect(document.status).toBe(200);
 
       expect(await document.text()).toContain(
-        '<script type="module" src="' + assetBase + '/startup.js">',
+        '<script type="module" crossorigin="anonymous" src="' + assetBase + '/startup.js">',
       );
 
       const wrapper = await fetch(new URL(assetBase + "/startup.js", fixture.url));
 
-      expect(await wrapper.text()).toContain('await start("' + (fixture.mount || "/") + '")');
+      expect(await wrapper.text()).toContain('await start("' + (fixture.mount || "/") + '",');
 
       for (const asset of serving.hosting.assets) {
         const response = await fetch(new URL(assetBase + asset.path, fixture.url));
@@ -315,7 +325,7 @@ test("packed tooling and hosting serve one built route at root and a nested moun
       }
     }
 
-    browser = await chromium.launch();
+    browser = await chromium.launch(browserLaunchOptions("chromium"));
 
     for (const fixture of mounts) {
       const page = await browser.newPage();
@@ -392,23 +402,9 @@ test("packed tooling and hosting serve one built route at root and a nested moun
       await page.close();
     }
 
-    preview = Bun.spawn(
-      [
-        process.execPath,
-        join(application, "node_modules", "@hesperia", "tooling", "dist", "cli.js"),
-        "preview",
-        "--port",
-        "0",
-      ],
-      { cwd: application, stdout: "pipe", stderr: "pipe" },
-    );
+    preview = Bun.spawn(previewCommand, previewOptions);
 
-    const previewReady = await waitForOutput(
-      preview,
-      /Hesperia preview: http:\/\/127\.0\.0\.1:\d+\//u,
-    );
-
-    const previewURL = previewReady.match[0]!.replace("Hesperia preview: ", "");
+    const previewURL = await readPreviewURL(preview);
 
     const previewDocument = await fetch(new URL("/dashboard/early", previewURL), {
       headers: { accept: "text/html" },
@@ -417,7 +413,7 @@ test("packed tooling and hosting serve one built route at root and a nested moun
     expect(previewDocument.status).toBe(200);
 
     expect(await previewDocument.text()).toContain(
-      '<script type="module" src="/dashboard/_hesperia/startup.js">',
+      '<script type="module" crossorigin="anonymous" src="/dashboard/_hesperia/startup.js">',
     );
 
     for (const path of ["/hesperia-build.json", "/src/routes/+route.ts", "/package.json"]) {
@@ -444,6 +440,67 @@ test("packed tooling and hosting serve one built route at root and a nested moun
         ).status,
       ).toBe(404);
     }
+
+    preview.kill();
+    await preview.exited;
+    preview = undefined;
+
+    await writeFile(
+      join(application, "src/routes/+route.ts"),
+      `import { route } from "hesperia/routing";
+const guard = () => true;
+export default route({ guard, render: {
+  clientRender: "required", ssr: "forbidden", stream: "forbidden",
+  ssg: "forbidden", hydration: "forbidden",
+} });`,
+    );
+
+    await writeFile(
+      join(application, "hesperia.config.json"),
+      JSON.stringify({
+        mountURL: "/dashboard",
+        target: { version: 1, runtime: "browser", profile: "static" },
+      }),
+    );
+
+    await run(application, cli, "build");
+
+    await copyFile(
+      join(hostingFixtures, "read-targeted-build.ts"),
+      join(application, "read-targeted-build.ts"),
+    );
+    await run(application, "read-targeted-build.ts");
+
+    preview = Bun.spawn(previewCommand, previewOptions);
+
+    const targetedURL = await readPreviewURL(preview);
+    const missing = await fetch(new URL("/dashboard/missing-targeted-route", targetedURL), {
+      headers: { accept: "text/html" },
+    });
+
+    await missing.text();
+
+    expect(missing.status).toBe(404);
+
+    const page = await browser.newPage();
+    const errors: string[] = [];
+
+    page.on("pageerror", (error) => errors.push(error.message));
+
+    const response = await page.goto(new URL("/dashboard/early", targetedURL).href);
+
+    expect(response?.status()).toBe(200);
+
+    await page.waitForFunction(
+      () => document.querySelector(".early-proof")?.textContent === "Installed early route",
+    );
+
+    expect(
+      await page.locator(".early-proof").evaluate((node) => getComputedStyle(node).color),
+    ).toBe("rgb(17, 34, 51)");
+    expect(errors).toStrictEqual([]);
+
+    await page.close();
   } finally {
     await browser?.close();
 

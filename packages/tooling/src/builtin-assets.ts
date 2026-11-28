@@ -1,5 +1,5 @@
 import { dirname, extname, resolve } from "node:path";
-import { SaxNamespaceParser, type QName } from "@federicocarboni/saxe";
+import { SaxNamespaceParser, type QName } from "./vendor/saxe/index.ts";
 import {
   GenMapping,
   maybeAddSegment,
@@ -134,6 +134,7 @@ export function isDefaultAsset(specifier: string): boolean {
   if (!specifier.startsWith("./") && !specifier.startsWith("../")) return false;
 
   const extension = extname(specifier).toLowerCase();
+
   return extension !== ".css" && !sourceExtensions.has(extension);
 }
 
@@ -165,12 +166,10 @@ export async function interpretBuiltinAsset(
   const knownMime = mediaTypes[extension];
 
   if (type === "html" || type === "svg") {
-    if (!options.allowUnsafeHTML)
-      throw new TypeError(`Imported ${type} components require allowUnsafeHTML: true`);
-
     const source = await decodeText(file, origin);
     const roots = type === "html" ? parseHTMLFragment(source) : parseSVGDocument(source);
     const markup = validateMarkup(roots, type, file.filename, origin);
+
     return {
       result: markupProjection(
         roots,
@@ -239,6 +238,7 @@ export async function interpretBuiltinAsset(
     );
 
   const bytes = Buffer.from(await file.blob.arrayBuffer()).toString("base64");
+
   return {
     declaration: { code: "declare const value: Blob; export default value;", origin },
     browser: {
@@ -288,12 +288,14 @@ function parseHTMLFragment(source: string): MarkupNode[] {
     throw new TypeError("HTML component imports accept fragments and reject document wrappers");
 
   const fragment = parseFragment(source, { sourceCodeLocationInfo: true });
+
   return fragment.childNodes.flatMap((node) => htmlNodes(node));
 }
 
 function htmlNodes(node: DefaultTreeAdapterTypes.ChildNode): MarkupNode[] {
   if (node.nodeName === "#text") {
     const text = node as DefaultTreeAdapterTypes.TextNode;
+
     return text.value ? [{ kind: "text", value: text.value }] : [];
   }
 
@@ -304,6 +306,7 @@ function htmlNodes(node: DefaultTreeAdapterTypes.ChildNode): MarkupNode[] {
     element.tagName === "template"
       ? (element as DefaultTreeAdapterTypes.Template).content.childNodes
       : element.childNodes;
+
   return [
     {
       kind: "element",
@@ -314,6 +317,7 @@ function htmlNodes(node: DefaultTreeAdapterTypes.ChildNode): MarkupNode[] {
         const qualifiedName = attribute.prefix
           ? `${attribute.prefix}:${attribute.name}`
           : attribute.name;
+
         return {
           name: qualifiedName,
           localName: attribute.name,
@@ -446,6 +450,7 @@ function validateMarkup(
       dirname(filename),
       decoded.replaceAll("/", process.platform === "win32" ? "\\" : "/"),
     );
+
     return { filename: target, suffix: pathEnd < 0 ? "" : trimmed.slice(pathEnd) };
   };
 
@@ -746,6 +751,7 @@ function isNavigation(node: MarkupElement, attribute: MarkupAttribute): boolean 
     return false;
 
   const tag = node.localName.toLowerCase();
+
   return (
     (node.namespace === htmlNamespace || node.namespace === svgNamespace) &&
     ["a", "area"].includes(tag)
@@ -911,6 +917,7 @@ function consumeCssUrl(value: string, start: number): ConsumedCssUrl | undefined
 
       if (char === quote) {
         const contentEnd = cursor++;
+
         cursor = skipCssWhitespaceAndComments(value, cursor);
 
         if (value[cursor] !== ")") return undefined;
@@ -964,6 +971,7 @@ function consumeCssUrl(value: string, start: number): ConsumedCssUrl | undefined
 
     if (/[\t\n\f\r ]/u.test(char)) {
       const end = cursor;
+
       cursor = skipCssWhitespaceAndComments(value, cursor);
 
       if (value[cursor] === ")")
@@ -1007,6 +1015,7 @@ function consumeBadCssUrl(value: string, start: number): number {
 
     if (value[cursor] === "\\") {
       const escapeEnd = cssEscapeEnd(value, cursor);
+
       cursor = escapeEnd ?? cursor + 1;
     } else cursor++;
   }
@@ -1072,6 +1081,7 @@ function skipCssComments(value: string, start: number): number {
 
 function skipCssComment(value: string, start: number): number {
   const end = value.indexOf("*/", start + 2);
+
   return end < 0 ? value.length : end + 2;
 }
 
@@ -1110,6 +1120,7 @@ function readCssIdentifier(
 
     if (hex) {
       const codepoint = Number.parseInt(hex[0], 16);
+
       decoded += String.fromCodePoint(codepoint === 0 || codepoint > 0x10ffff ? 0xfffd : codepoint);
       index += hex[0].length;
 
@@ -1130,6 +1141,7 @@ function decodeCssValue(value: string): string {
       if (!hex) return escaped ?? "";
 
       const codepoint = Number.parseInt(hex, 16);
+
       return String.fromCodePoint(codepoint === 0 || codepoint > 0x10ffff ? 0xfffd : codepoint);
     },
   );
@@ -1151,6 +1163,7 @@ function cssString(value: string): string {
 function isExecutableCssUrl(value: string): boolean {
   try {
     const protocol = new URL(value.trim(), "https://hesperia.invalid/").protocol;
+
     return protocol === "javascript:" || protocol === "vbscript:";
   } catch {
     return false;
@@ -1276,6 +1289,7 @@ function markupElementType(root: MarkupElement, type: "html" | "svg"): string {
       : root.namespace === mathmlNamespace
         ? "mathml"
         : "html";
+
   return `HesperiaNativeElement<${JSON.stringify(root.localName.toLowerCase())}, ${JSON.stringify(namespace)}>`;
 }
 
@@ -1302,7 +1316,7 @@ function markupNodeCode(
 
   const attributes = node.attributes.filter((attribute) => !attribute.namespace);
   const namespace =
-    node.namespace || (node.name.toLowerCase() === "svg" ? svgNamespace : undefined);
+    node.namespace ?? (node.name.toLowerCase() === "svg" ? svgNamespace : undefined);
   const children = node.children
     .map((child) => markupNodeCode(child, "{}", resourceCount))
     .filter((child) => child.code !== "null");
@@ -1315,6 +1329,7 @@ function markupNodeCode(
 
     const entryStart = staticPropsBody.length;
     const name = JSON.stringify(attribute.name);
+
     staticPropsBody += `[${name},${markupAttributeCode(attribute, resourceCount)}]`;
 
     if (attribute.sourceStart !== undefined) {
@@ -1334,7 +1349,7 @@ function markupNodeCode(
       : `Object.assign(Object.create(null), ${staticProps}, ${rootProps})`;
   const childrenCode = `[${children.map((child) => child.code).join(",")}]`;
   const prefix = `__element(owner, ${JSON.stringify(node.name)}, ${merged}, `;
-  const nodeCode = `${prefix}${childrenCode}${namespace ? `, ${JSON.stringify(namespace)}` : ""})`;
+  const nodeCode = `${prefix}${childrenCode}${namespace !== undefined ? `, ${JSON.stringify(namespace)}` : ""})`;
   const staticPropsOffset = nodeCode.indexOf(staticProps);
   const nameLiteral = JSON.stringify(node.name);
   const nameLiteralStart = nodeCode.indexOf(nameLiteral, "__element(owner, ".length);
@@ -1380,6 +1395,7 @@ function markupNodeCode(
 
     const operation = `__node.setAttributeNS(${JSON.stringify(attribute.namespace)}, ${JSON.stringify(attribute.name)}, ${markupAttributeCode(attribute, resourceCount)});`;
     const operationOffset = operations.length;
+
     operations += operation;
 
     if (attribute.sourceStart !== undefined) {
@@ -1510,6 +1526,7 @@ function jsonType(value: unknown): string {
 
   if (Array.isArray(value)) {
     const types = [...new Set(value.map(jsonType))];
+
     return `${types.length > 1 ? `(${types.join(" | ")})` : (types[0] ?? "unknown")}[]`;
   }
 

@@ -11,6 +11,47 @@ function routeSource(body: string): string {
   return `import { route } from "hesperia/routing";\n${body}\nexport default route({ guard, load: async () => { if (true) return { server: true }; }, headers: { "cache-control": "private" } });\n`;
 }
 
+test("retains literal render facts and request-member presence from the authored route", () => {
+  const source = `import { route } from "hesperia/routing";
+export default route({ render: { clientRender: "required", ssr: "forbidden" }, load: undefined });`;
+  const result = analyzeRouteModule(source, { filename: "src/routes/+route.ts" });
+
+  expect(result.diagnostics).toStrictEqual([]);
+  expect(result.renderPolicy?.clientRender?.value).toBe("required");
+  expect(result.renderPolicy?.ssr?.value).toBe("forbidden");
+  const span = result.renderPolicy!.clientRender!.span;
+
+  expect(source.slice(span.start, span.end)).toBe('"required"');
+  expect(result.requestMembers?.declarations.map((item) => item.field)).toEqual(["load"]);
+
+  const invalid = analyzeRouteModule(
+    `import { route } from "hesperia/routing"; export default route({ render: { ssr: "sometimes" } });`,
+    { filename: "src/routes/+route.ts" },
+  );
+
+  expect(invalid.diagnostics.some((item) => item.code === "HES-ROUTE-RENDER")).toBe(true);
+  expect(invalid.renderPolicy).toBeUndefined();
+});
+
+test("projects literal route tags without treating dynamic declarations as literals", () => {
+  const inspect = (member: string) =>
+    analyzeRouteModule(
+      `import { route } from "hesperia/routing"; export default route({ ${member} });`,
+      { filename: "src/routes/+route.ts" },
+    ).tagProjection;
+
+  expect(inspect("")).toStrictEqual({ version: 1, kind: "none" });
+  expect(inspect('tags: ["a", " a ", "A", "a"]')).toStrictEqual({
+    version: 1,
+    kind: "literal",
+    tags: ["a", " a ", "A"],
+  });
+  expect(inspect("tags: []")).toStrictEqual({ version: 1, kind: "literal", tags: [] });
+
+  for (const member of ['tags: ["a", ""]', 'tags: ["a", 1]', 'tags: [, "a"]', "tags: value"])
+    expect(inspect(member)).toStrictEqual({ version: 1, kind: "unproved" });
+});
+
 test("a generated guard retains dependencies reached through yield and yield delegation", async () => {
   const result = analyzeRouteModule(
     routeSource(`

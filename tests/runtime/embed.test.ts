@@ -95,6 +95,7 @@ function spyOnIframeOperations(window: Window): {
   };
   const originalSetAttribute = elementPrototype.setAttribute;
   const originalAddEventListener = iframePrototype.addEventListener;
+
   elementPrototype.setAttribute = function (this: Element, name: string, value: string): void {
     if (this.localName === "iframe") operations.push(`attribute:${name.toLowerCase()}`);
 
@@ -195,6 +196,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const Root = defineComponent((owner) => {
     root = owner;
     const client = createClient(owner);
+
     src = client.state(options.src);
     srcdoc = client.state(options.srcdoc);
     title = client.state(options.title);
@@ -234,6 +236,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
       ? Root
       : registerProjectPolicy(Root, { allowUnsafeEmbed: options.allowUnsafeEmbed });
   const app = mount(target, definition, {}, { onError: (error) => errors.push(error) });
+
   return {
     window,
     target,
@@ -295,6 +298,7 @@ test("a detached-document Embed publishes its native wrapper and still guards or
   });
   const Root = defineComponent((owner) => {
     const client = createClient(owner);
+
     wrapperBinding = client.bind<HTMLElement>();
     interfaceBinding = client.bind<{ ping(): string }>();
     return [

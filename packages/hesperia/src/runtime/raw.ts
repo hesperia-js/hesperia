@@ -1,5 +1,5 @@
 import { Signal } from "aeolia";
-import { Owner, RenderFault } from "./owner.ts";
+import { disposeOwnerSyncPreservingFailure, Owner, RenderFault } from "./owner.ts";
 
 interface TrustedTypesFactory {
   isHTML(value: unknown): boolean;
@@ -26,6 +26,7 @@ export function rawHTML(
   parent.context.warn("unsafe HTML inserts application-supplied markup without sanitization");
 
   const owner = new Owner(parent.context, parent, `${parent.identity}/${slot}`);
+
   owner.executingBody = false;
   const document = parent.context.document;
   const fragment = document.createDocumentFragment();
@@ -63,7 +64,7 @@ export function rawHTML(
       Signal.subtle.untrack(() => {
         if (initialized) owner.context.scheduler.requestRawReplacement(owner);
 
-        current?.dispose();
+        current?.disposeSync();
 
         const next = new Owner(parent.context, owner, `${owner.identity}/content`);
 
@@ -111,7 +112,7 @@ export function rawHTML(
             owner.context.scheduler.requestEffects();
           }
         } catch (error) {
-          next.dispose(error);
+          disposeOwnerSyncPreservingFailure(next, error);
 
           throw error;
         }

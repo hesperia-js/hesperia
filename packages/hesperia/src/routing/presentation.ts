@@ -26,9 +26,11 @@ export class RoutePresentation {
     this.focusEpoch++;
     this.lastFocused = this.window.document.activeElement;
   };
+
   private readonly scrollIntent = () => {
     this.scrollEpoch++;
   };
+
   private readonly scrollChanged = (event: Event) => {
     if (event.target === this.window || event.target === this.window.document) {
       const position = [this.window.scrollX, this.window.scrollY] as const;
@@ -93,6 +95,7 @@ export class RoutePresentation {
     const document = this.window.document;
     const focused = document.activeElement;
     const meaningful = focused !== document.body && focused !== document.documentElement;
+
     return {
       focus: meaningful && focused ? new WeakRef(focused) : undefined,
       focusId: meaningful && focused?.id ? focused.id : undefined,

@@ -129,6 +129,8 @@ interface ChildCaptureConfiguration {
   readonly populationFingerprint: string;
   readonly outputDirectory: string;
   readonly workerTemplatePath: string;
+  readonly binRealPath: string;
+  readonly binSha256: string;
   readonly entryPath: string;
   readonly entryRealPath: string;
   readonly entrySha256: string;
@@ -196,8 +198,9 @@ interface CaptureState {
 }
 
 const repoPath = resolve(import.meta.dir, "../..");
-const cliSource = "packages/tooling/src/cli.ts";
-const cliDist = "packages/tooling/dist/cli.js";
+const cliSource = "packages/tooling/src/cli-main.ts";
+const cliMainDist = "packages/tooling/dist/cli-main.js";
+const cliBinDist = "packages/tooling/dist/cli.js";
 const installedCliChildSource = "scripts/ci/coverage-installed-cli.ts";
 const coverageVariable = "__hesperiaCoverage__";
 const installedCliChildMarker = "HESPERIA_COVERAGE_INSTALLED_CLI_CHILD";
@@ -211,10 +214,11 @@ const creatorCliSource = "packages/create-hesperia/src/cli.ts";
 const creatorCliSources = [
   installedCliChildSource,
   creatorCliSource,
+  "packages/create-hesperia/src/creator.ts",
   "packages/create-hesperia/src/templates/elysia.ts",
   "packages/create-hesperia/src/templates/frontend.ts",
 ] as const;
-const creatorParentInvocationLimit = 8;
+const creatorParentInvocationLimit = 15;
 let creatorParentInvocationCount = 0;
 const configuredPluginBuildChildMarker = "HESPERIA_COVERAGE_CONFIGURED_PLUGIN_BUILD_CHILD";
 const configuredPluginBuildChildConfig = "HESPERIA_COVERAGE_CONFIGURED_PLUGIN_BUILD_CONFIG";
@@ -226,16 +230,53 @@ let configuredPluginBuildCwd: string | undefined;
 
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
+
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
 function isWithin(parent: string, candidate: string): boolean {
   const path = relative(resolve(parent), resolve(candidate));
+
   return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
 }
 
 function sha256(bytes: Uint8Array | string): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function bindCliMain(
+  binPath: string,
+): Pick<
+  ChildCaptureConfiguration,
+  "binRealPath" | "binSha256" | "entryPath" | "entryRealPath" | "entrySha256" | "relativeImports"
+> {
+  const bin = readFileSync(binPath);
+  const normalBin = readFileSync(resolve(repoPath, cliBinDist));
+
+  if (!bin.equals(normalBin))
+    throw new Error("CLI executable differs from the current package dist entry");
+
+  const binRealPath = realpathSync.native(binPath);
+  const entryPath = Bun.resolveSync("#hesperia-cli-main", dirname(binPath));
+  const entryRealPath = realpathSync.native(entryPath);
+
+  if (canonicalPath(entryRealPath) !== canonicalPath(join(dirname(binRealPath), "cli-main.js")))
+    throw new Error("CLI private main did not resolve to the executable's package");
+
+  const main = readFileSync(entryPath);
+  const normalMain = readFileSync(resolve(repoPath, cliMainDist));
+
+  if (!main.equals(normalMain))
+    throw new Error("CLI private main differs from the current package dist output");
+
+  return {
+    binRealPath,
+    binSha256: sha256(bin),
+    entryPath,
+    entryRealPath,
+    entrySha256: sha256(main),
+    relativeImports: relativeCliImports(main),
+  };
 }
 
 function relativeCliImports(bytes: Buffer): readonly string[] {
@@ -384,7 +425,7 @@ function readWorkerInputs(mode: ChildCaptureConfiguration["mode"] = "installed-c
     throw new Error("Installed CLI coverage graph has no unique authored child-helper seed");
   }
 
-  const normalCliPath = resolve(repoPath, cliDist.replaceAll("/", sep));
+  const normalCliPath = resolve(repoPath, cliMainDist.replaceAll("/", sep));
   const outputs = JSON.parse(readFileSync(workerOutputMapPath, "utf8")) as WorkerOutput[];
 
   if (!Array.isArray(outputs)) throw new Error("Installed CLI worker output map is malformed");
@@ -473,11 +514,15 @@ function validateChildReceipt(
   }
 
   const expectedArgv = [configuration.expectedExecPath, ...configuration.expectedArgs];
+  const binPaths = new Set([
+    canonicalPath(expectedArgv[1]!),
+    canonicalPath(configuration.binRealPath),
+  ]);
 
   const actualArgvMatches = (actual: readonly string[]) =>
     actual.length === expectedArgv.length &&
     canonicalPath(actual[0]!) === canonicalPath(expectedArgv[0]!) &&
-    entryPaths.has(canonicalPath(actual[1]!)) &&
+    binPaths.has(canonicalPath(actual[1]!)) &&
     actual.slice(2).every((item, index) => item === expectedArgv[index + 2]);
 
   if (!actualArgvMatches(value.processArgv) || !actualArgvMatches(value.bunArgv)) {
@@ -524,6 +569,7 @@ async function runCapturedChild(
 ): Promise<CommandResult> {
   const installedMode = configuration.mode === "installed-cli";
   const childEnvironment: Record<string, string | undefined> = { ...process.env };
+
   delete childEnvironment.BUN_OPTIONS;
   delete childEnvironment.NODE_OPTIONS;
 
@@ -568,6 +614,7 @@ async function runCapturedChild(
       const reasons = [stdoutResult, stderrResult]
         .filter((result) => result.status === "rejected")
         .map((result) => String(result.reason));
+
       throw new Error(
         `${modeLabel} child exited naturally with ${status}, but output capture failed: ${reasons.join("; ")}`,
       );
@@ -629,16 +676,7 @@ export async function runInstalledCli(input: InstalledCliAdapterInput): Promise<
     throw new Error("Installed CLI owner did not use its packed tooling entry");
   }
 
-  const entryRealPath = realpathSync.native(entryPath);
-  const normalEntryPath = resolve(repoPath, cliDist.replaceAll("/", sep));
-  const installedEntryBytes = readFileSync(entryPath);
-  const normalEntryBytes = readFileSync(normalEntryPath);
-
-  if (!installedEntryBytes.equals(normalEntryBytes)) {
-    throw new Error("Installed CLI bytes differ from the current package dist entry");
-  }
-
-  const entrySha256 = sha256(installedEntryBytes);
+  const main = bindCliMain(entryPath);
   const invocationId = `installed-cli-${parentInvocationCount}-${randomUUID()}`;
   const contextId = invocationId;
   const receiptDirectory = mkdtempSync(join(tmpdir(), "hesperia-installed-cli-"));
@@ -650,10 +688,7 @@ export async function runInstalledCli(input: InstalledCliAdapterInput): Promise<
     populationFingerprint: workerInputs.template.sourcePopulation.fingerprint,
     outputDirectory: workerInputs.outputDirectory,
     workerTemplatePath: workerInputs.workerTemplatePath,
-    entryPath,
-    entryRealPath,
-    entrySha256,
-    relativeImports: relativeCliImports(installedEntryBytes),
+    ...main,
     graphEntryPath: workerInputs.graphEntryPath,
     graphEntrySha256: workerInputs.graphEntrySha256,
     runtimeHash: workerInputs.runtimeHash,
@@ -670,6 +705,7 @@ export async function runInstalledCli(input: InstalledCliAdapterInput): Promise<
     expectedArgs: input.args,
   };
   const spawnArgs = [input.execPath, "--preload", configuration.childPreloadPath, ...input.args];
+
   return runCapturedChild(configuration, receiptDirectory, spawnArgs);
 }
 
@@ -709,15 +745,13 @@ export async function runConfiguredPluginBuildCli(
   configuredPluginBuildCwd = expectedCwd;
 
   const entryPath = resolve(input.entryPath);
-  const expectedEntryPath = resolve(repoPath, cliDist.replaceAll("/", sep));
+  const expectedEntryPath = resolve(repoPath, cliBinDist);
 
   if (canonicalPath(entryPath) !== canonicalPath(expectedEntryPath)) {
     throw new Error("Configured plugin owner did not use the current tooling CLI entry");
   }
 
-  const entryRealPath = realpathSync.native(entryPath);
-  const entryBytes = readFileSync(entryPath);
-  const entrySha256 = sha256(entryBytes);
+  const main = bindCliMain(entryPath);
   const invocationId = `configured-plugin-build-${ordinal}-${randomUUID()}`;
   const contextId = `configured-plugin-build-${ordinal}`;
   const receiptDirectory = mkdtempSync(join(tmpdir(), "hesperia-configured-plugin-build-"));
@@ -729,10 +763,7 @@ export async function runConfiguredPluginBuildCli(
     populationFingerprint: workerInputs.template.sourcePopulation.fingerprint,
     outputDirectory: workerInputs.outputDirectory,
     workerTemplatePath: workerInputs.workerTemplatePath,
-    entryPath,
-    entryRealPath,
-    entrySha256,
-    relativeImports: relativeCliImports(entryBytes),
+    ...main,
     graphEntryPath: workerInputs.graphEntryPath,
     graphEntrySha256: workerInputs.graphEntrySha256,
     runtimeHash: workerInputs.runtimeHash,
@@ -755,6 +786,7 @@ export async function runConfiguredPluginBuildCli(
     ...configuration.expectedArgs,
   ];
   const expectedStatus = ordinal === 1 ? 0 : 1;
+
   return runCapturedChild(configuration, receiptDirectory, spawnArgs, {
     code: expectedStatus,
     label: `Configured plugin build ${ordinal}`,
@@ -867,6 +899,7 @@ function creatorProfileFromEnvironment(): CreatorCaptureProfile {
   const ownerId = requiredEnvironment("HESPERIA_COVERAGE_OWNER_ID");
   const outputDirectory = resolve(requiredEnvironment("HESPERIA_COVERAGE_OUTPUT_DIR"));
   const profilePath = resolve(requiredEnvironment(creatorCliProfileEnvironment));
+
   return creatorProfileFromValue(
     JSON.parse(readFileSync(profilePath, "utf8")) as unknown,
     profilePath,
@@ -1002,6 +1035,7 @@ export async function runCreatorCli(input: CreatorCliAdapterInput): Promise<{
   writeFileSync(configPath, JSON.stringify(configuration), { flag: "wx" });
 
   const childEnvironment: Record<string, string | undefined> = { ...input.env };
+
   delete childEnvironment.BUN_OPTIONS;
   delete childEnvironment.NODE_OPTIONS;
 
@@ -1047,6 +1081,7 @@ export async function runCreatorCli(input: CreatorCliAdapterInput): Promise<{
       const reasons = [stdoutResult, stderrResult]
         .filter((result) => result.status === "rejected")
         .map((result) => String(result.reason));
+
       throw new Error(
         `Creator CLI child exited naturally with ${status}, but output capture failed: ${reasons.join("; ")}`,
       );
@@ -1085,7 +1120,11 @@ function childConfiguration(): ChildCaptureConfiguration | undefined {
 
   try {
     const configuration = JSON.parse(raw) as ChildCaptureConfiguration;
-    return configuration.mode === mode && isStringArray(configuration.relativeImports)
+
+    return configuration.mode === mode &&
+      isStringArray(configuration.relativeImports) &&
+      isStringArray(configuration.expectedArgs) &&
+      configuration.expectedArgs.length > 0
       ? configuration
       : undefined;
   } catch {
@@ -1148,6 +1187,18 @@ function installChildCapture(): void {
         throw new Error("Standalone child helper runtime identity or bootstrap is stale");
       }
 
+      const main = bindCliMain(configuration.expectedArgs[0]!);
+
+      if (
+        canonicalPath(main.binRealPath) !== canonicalPath(configuration.binRealPath) ||
+        main.binSha256 !== configuration.binSha256 ||
+        canonicalPath(main.entryPath) !== canonicalPath(configuration.entryPath) ||
+        canonicalPath(main.entryRealPath) !== canonicalPath(configuration.entryRealPath) ||
+        main.entrySha256 !== configuration.entrySha256 ||
+        JSON.stringify(main.relativeImports) !== JSON.stringify(configuration.relativeImports)
+      )
+        throw new Error("CLI executable or private main changed after parent validation");
+
       const graphBytes = readFileSync(configuration.graphEntryPath);
 
       if (sha256(graphBytes) !== configuration.graphEntrySha256) {
@@ -1195,6 +1246,7 @@ function installChildCapture(): void {
 
               installedBytes = readFileSync(args.path);
               const originalSha256 = sha256(installedBytes);
+
               state.substitutedEntryPath = args.path;
               state.entrySha256 = originalSha256;
               const realPath = realpathSync.native(args.path);
@@ -1336,6 +1388,7 @@ function installChildCapture(): void {
           sourcePopulation,
           coverage,
         });
+
         hitArtifactPath = writeCoverageFragment({
           directory: configuration.outputDirectory,
           contextId: `${configuration.contextId}-hits`,
@@ -1529,6 +1582,7 @@ function installCreatorChildCapture(): void {
           sourcePopulation: state.profile.sourcePopulation,
           coverage,
         });
+
         hitArtifactPath = writeCoverageFragment({
           directory: state.profile.outputDirectory,
           contextId: `${configuration.contextId}-hits`,

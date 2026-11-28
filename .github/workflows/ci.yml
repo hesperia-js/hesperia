@@ -4,6 +4,8 @@ on:
     branches:
       - main
       - "release/*"
+      - "feature/**"
+      - "work/**"
     types:
       - opened
       - synchronize

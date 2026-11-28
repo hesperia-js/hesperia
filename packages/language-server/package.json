@@ -16,6 +16,12 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "imports": {
+    "#hesperia-cli-main": {
+      "types": "./dist/cli-main.d.ts",
+      "default": "./dist/cli-main.js"
+    }
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -25,7 +31,7 @@
     "./bin": "./dist/cli.js"
   },
   "scripts": {
-    "build": "bunx tsc -p tsconfig.build.json"
+    "build": "bunx --bun --no-install tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@hesperia/compiler": "workspace:*",

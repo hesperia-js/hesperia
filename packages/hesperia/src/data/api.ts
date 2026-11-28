@@ -161,6 +161,7 @@ function bindValue(
 
       get() {
         const current = Reflect.get(value, property);
+
         return isObjectLike(current)
           ? bindValue(owner, current, cache, namespaces, "direct")
           : current;

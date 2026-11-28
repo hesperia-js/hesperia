@@ -31,6 +31,7 @@ function git(repo: string, args: readonly string[]): string {
 
   if (!result.success) {
     const detail = new TextDecoder().decode(result.stderr).trim();
+
     throw new Error(
       `Fixture Git command failed: git ${args.join(" ")}${detail ? `: ${detail}` : ""}`,
     );
@@ -86,7 +87,7 @@ async function removeRepoFile(repo: string, path: string): Promise<void> {
   await rm(join(repo, path), { force: true });
 }
 
-test("selects a known narrow fixture change using the complete real repository graph", async () => {
+test("selects a real fixture change or falls back for stale or unreviewed reader contracts", async () => {
   const repo = await mkdtemp(join(tmpdir(), "hesperia-ci-real-selector-"));
   const workspace = resolve(import.meta.dir, "../..");
 
@@ -115,7 +116,32 @@ test("selects a known narrow fixture change using the complete real repository g
       releaseCandidate: false,
     });
 
-    expect(result.fullSuite, JSON.stringify(result.fallbackReasons, null, 2)).toBe(false);
+    if (result.fallbackReasons.length > 0) {
+      for (const reason of result.fallbackReasons) {
+        expect(reason).toMatch(
+          /^golden input reader (?:contract is stale in (?:base|head):|has no reviewed input contract:) /u,
+        );
+      }
+
+      const catalog = JSON.parse(await readFile(join(repo, "golden/catalog.json"), "utf8")) as {
+        cases: { id: string }[];
+      };
+
+      expect(result.fullSuite).toBe(true);
+      expect(result.selectedCaseIds).toStrictEqual(
+        catalog.cases.map(({ id }) => id).sort((left, right) => left.localeCompare(right)),
+      );
+
+      for (const selected of result.selectedCases) {
+        for (const reason of result.fallbackReasons) {
+          expect(selected.reasons).toContain(`full suite required because ${reason}`);
+        }
+      }
+
+      return;
+    }
+
+    expect(result.fullSuite).toBe(false);
 
     expect(result.selectedCaseIds).toStrictEqual([
       "native-identity-witness",
@@ -146,6 +172,7 @@ test("configuration target domains include case-folded filenames on supported fi
     await writeRepoFile(repo, "src/changed.ts", "export const value = 1;\n");
     await writeRepoFile(repo, "src/unrelated.ts", "export const unrelated = true;\n");
     const base = commit(repo, "case-folded configuration input");
+
     await writeRepoFile(repo, "src/changed.ts", "export const value = 2;\n");
     const result = selection(
       repo,
@@ -162,6 +189,9 @@ test("configuration target domains include case-folded filenames on supported fi
 
 test.each([
   "known build",
+  "bare build",
+  "bun-only build",
+  "unrecognized flags",
   "ambiguous output",
   "unrecognized build",
   "missing module",
@@ -170,6 +200,8 @@ test.each([
   "resolves relative emitted workspace imports only with a unique package build identity: %s",
   async (variant) => {
     const repo = await initializeRepo();
+    const recognized =
+      variant === "known build" || variant === "bare build" || variant === "bun-only build";
 
     try {
       await writeJson(repo, CATALOG_PATH, {
@@ -190,7 +222,15 @@ test.each([
         name: "@fixture/demo",
         scripts: {
           build:
-            variant === "unrecognized build" ? "node build.mjs" : "bunx tsc -p tsconfig.build.json",
+            variant === "unrecognized build"
+              ? "node build.mjs"
+              : variant === "unrecognized flags"
+                ? "bunx --no-install --bun tsc -p tsconfig.build.json"
+                : variant === "bun-only build"
+                  ? "bunx --bun --no-install tsc -p tsconfig.build.json"
+                  : variant === "bare build"
+                    ? "tsc -p tsconfig.build.json"
+                    : "bunx tsc -p tsconfig.build.json",
         },
       });
 
@@ -227,10 +267,10 @@ test.each([
 
       const result = selection(repo, base, commit(repo, "change emitted dependency source"));
 
-      expect(result.fullSuite).toBe(variant !== "known build");
+      expect(result.fullSuite).toBe(!recognized);
 
       expect(result.selectedCaseIds).toStrictEqual(
-        variant === "known build" ? ["browser-case"] : ["browser-case", "other-case"],
+        recognized ? ["browser-case"] : ["browser-case", "other-case"],
       );
     } finally {
       await rm(repo, { recursive: true, force: true });

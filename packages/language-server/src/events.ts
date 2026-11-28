@@ -94,6 +94,7 @@ export async function eventCompletions(
       const initializer = encoding && isJsxAttribute(encoding) ? encoding.initializer : undefined;
       const value =
         initializer && isJsxExpression(initializer) ? initializer.expression : initializer;
+
       context = childNamespace({
         ...namespaceForTag(context, ancestor.tagName.getText()),
         ...(value && isStringLiteral(value) ? { encoding: value.text } : {}),
@@ -109,6 +110,7 @@ export async function eventCompletions(
           : "HTMLElementEventMap",
       SymbolFlags.Type,
     );
+
     type = symbol ? await project.checker.getDeclaredTypeOfSymbol(symbol) : undefined;
   }
 

@@ -51,9 +51,27 @@ export interface PublishedRouteGuard {
   readonly map: PublishedSourceMap;
 }
 
-/** Route guard build output; diagnostics preserve the route/helper owning each span. */
+/** Authored render constraints retained separately from executable browser guards. */
+export interface RouteRenderPolicyRecord {
+  /** Scanner-selected route declaration that supplied these facts. */
+  readonly routeFilename: string;
+  /** Partial authored facts and their source provenance. */
+  readonly policy: NonNullable<ReturnType<typeof analyzeRouteModule>["renderPolicy"]>;
+}
+
+/** Request-only member presence retained for target admission. */
+export interface RouteRequestMembersRecord {
+  /** Scanner-selected route declaration. */
+  readonly routeFilename: string;
+  /** Complete request-member presence from its proved route shape. */
+  readonly requestMembers: NonNullable<ReturnType<typeof analyzeRouteModule>["requestMembers"]>;
+}
+
+/** Route analysis and guard output, with source-owned diagnostics. */
 export interface RouteBuildResult {
   readonly guards: readonly PublishedRouteGuard[];
+  readonly renderPolicies: readonly RouteRenderPolicyRecord[];
+  readonly requestMembers: readonly RouteRequestMembersRecord[];
   readonly diagnostics: readonly RouteDiagnostic[];
 }
 
@@ -90,6 +108,7 @@ export async function buildRouteGuards(
       options.runtimeModule ?? "hesperia/runtime",
       import.meta.dir,
     );
+
     runtimeEntry = resolution.captureCompilerEntry(runtimeFilename);
   } catch {
     // Preserve the existing per-route build diagnostic when an explicitly selected runtime is invalid.
@@ -110,9 +129,11 @@ export async function buildRouteGuards(
   const sourceByKey = new Map(input.modules.map((item) => [sourceKey(item.filename), item]));
   const diagnostics: RouteDiagnostic[] = [...runtimeDiagnostics];
   const guards: PublishedRouteGuard[] = [];
+  const renderPolicies: RouteRenderPolicyRecord[] = [];
+  const requestMembers: RouteRequestMembersRecord[] = [];
 
   if (runtimeDiagnostics.some((item) => item.severity === "error"))
-    return { guards: [], diagnostics };
+    return { guards: [], renderPolicies: [], requestMembers: [], diagnostics };
 
   for (const filename of input.routeFiles) {
     const source = sourceByKey.get(sourceKey(filename));
@@ -137,8 +158,18 @@ export async function buildRouteGuards(
 
     diagnostics.push(...analysis.diagnostics);
 
-    if (!analysis.artifact || analysis.diagnostics.some((item) => item.severity === "error"))
-      continue;
+    if (analysis.diagnostics.some((item) => item.severity === "error")) continue;
+
+    if (analysis.renderPolicy)
+      renderPolicies.push({ routeFilename: source.filename, policy: analysis.renderPolicy });
+
+    if (analysis.requestMembers)
+      requestMembers.push({
+        routeFilename: source.filename,
+        requestMembers: analysis.requestMembers,
+      });
+
+    if (!analysis.artifact) continue;
 
     try {
       guards.push(await bundleGuard(analysis.artifact, source.filename, buildOptions));
@@ -158,8 +189,12 @@ export async function buildRouteGuards(
     }
   }
 
+  const failed = diagnostics.some((item) => item.severity === "error");
+
   return {
-    guards: diagnostics.some((item) => item.severity === "error") ? [] : guards,
+    guards: failed ? [] : guards,
+    renderPolicies: failed ? [] : renderPolicies,
+    requestMembers: failed ? [] : requestMembers,
     diagnostics,
   };
 }
@@ -235,6 +270,7 @@ async function bundleGuard(
     const module =
       moduleById.get(importer) ??
       emitted.modules.find((item) => sourceKey(item.filename) === sourceKey(importer));
+
     return module !== undefined;
   };
 
@@ -281,6 +317,7 @@ async function bundleGuard(
               (item) => item.source === args.path,
             )?.resolvedFilename;
             const path = resolved ? moduleIds.get(resolved) : undefined;
+
             return path ? { path, namespace: "hesperia-route" } : undefined;
           });
 
@@ -336,6 +373,7 @@ async function bundleGuard(
             { filter: /^hesperia-route-module:/, namespace: "hesperia-route" },
             (args) => {
               const module = moduleById.get(args.path);
+
               return module ? { contents: module.code, loader: "js" } : undefined;
             },
           );
@@ -363,6 +401,7 @@ async function bundleGuard(
         const moduleId = source.startsWith("hesperia-route:")
           ? source.slice("hesperia-route:".length)
           : source;
+
         return (moduleMaps.get(moduleId) as SourceMapInput | undefined) ?? null;
       },
       {
@@ -371,6 +410,7 @@ async function bundleGuard(
     ),
   );
   const outputPathname = outputUrl(output.path);
+
   return {
     routeFilename,
     outputUrl: outputPathname,
@@ -406,6 +446,7 @@ function mapCapabilityDiagnostic(
     source && end.source === start.source && end.line != null && end.column != null
       ? positionOffset(source, end.line, end.column)
       : mappedStart;
+
   return {
     ...diagnostic,
     filename: sourceFilename,
@@ -416,6 +457,7 @@ function mapCapabilityDiagnostic(
 function offsetPosition(source: string, offset: number): { line: number; column: number } {
   const prefix = source.slice(0, Math.max(0, Math.min(offset, source.length)));
   const lines = prefix.split(/\r?\n/u);
+
   return { line: lines.length, column: lines.at(-1)?.length ?? 0 };
 }
 
@@ -434,6 +476,7 @@ function positionOffset(source: string, line: number, column: number): number {
 
   const lineEnd = source.indexOf("\n", offset);
   const limit = lineEnd < 0 ? source.length : lineEnd;
+
   return Math.min(limit, offset + Math.max(0, column));
 }
 
@@ -442,6 +485,7 @@ function stripSourcesContent(value: unknown): PublishedSourceMap {
     throw new Error("Route guard bundle produced an invalid source map.");
 
   const map = { ...(value as PublishedSourceMap), sourcesContent: undefined };
+
   delete (map as { sourcesContent?: readonly (string | null)[] }).sourcesContent;
   return map;
 }
@@ -449,6 +493,7 @@ function stripSourcesContent(value: unknown): PublishedSourceMap {
 function outputUrl(path: string): string {
   const normalized = path.replaceAll("\\", "/");
   const marker = normalized.indexOf("assets/");
+
   return `/${marker >= 0 ? normalized.slice(marker) : normalized.replace(/^\.\//u, "")}`;
 }
 

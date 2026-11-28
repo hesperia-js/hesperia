@@ -12,7 +12,7 @@ import {
 } from "./components.ts";
 import type { Rendered } from "./dom.ts";
 import type { Accessor } from "../client.ts";
-import { Owner, RenderFault } from "./owner.ts";
+import { disposeOwnerSyncPreservingFailure, Owner, RenderFault } from "./owner.ts";
 
 const itemMarker = Symbol("hesperia.component-item");
 const nativeDefinitions = new WeakMap<Function, Component<unknown>>();
@@ -218,7 +218,7 @@ function instantiateEntry(owner: Owner, candidate: Candidate): Entry {
 
     return { id: candidate.id, start, end, instance };
   } catch (error) {
-    itemOwner.dispose(error);
+    disposeOwnerSyncPreservingFailure(itemOwner, error);
 
     throw error;
   }
@@ -295,7 +295,7 @@ export function region(parent: Owner, slot: string, read: () => RegionValue): Do
             if (retained.has(entry)) continue;
 
             try {
-              entry.instance.owner.dispose();
+              entry.instance.owner.disposeSync();
             } catch (error) {
               cleanupErrors.push(error);
             }
@@ -320,7 +320,7 @@ export function region(parent: Owner, slot: string, read: () => RegionValue): Do
             }
           } catch (error) {
             for (const entry of next) {
-              if (!retained.has(entry)) entry.instance.owner.dispose(error);
+              if (!retained.has(entry)) entry.instance.owner.disposeSync(error);
             }
 
             entries = entries.filter((entry) => retained.has(entry));

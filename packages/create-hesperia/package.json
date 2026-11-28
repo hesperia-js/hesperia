@@ -15,7 +15,16 @@
     "templates"
   ],
   "type": "module",
+  "imports": {
+    "#hesperia-package-resources": {
+      "types": "./dist/package-resources.d.ts",
+      "default": "./dist/package-resources.js"
+    }
+  },
   "scripts": {
-    "build": "bunx tsc -p tsconfig.build.json"
+    "build": "bunx --bun --no-install tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "citty": "0.2.2"
   }
 }

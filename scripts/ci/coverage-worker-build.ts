@@ -60,11 +60,13 @@ export interface WorkerCoverageFixtureBuildOptions<T> {
 
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
+
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
 function coverageCompilerEnvironment(): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = { ...process.env };
+
   delete environment.BUN_OPTIONS;
   delete environment.NODE_OPTIONS;
 
@@ -140,6 +142,7 @@ function declarationShape(path: string, source: string): string {
     .split(/\r?\n/u)
     .filter((line) => /^\s*\/\/\//u.test(line))
     .map((line) => line.trim());
+
   return JSON.stringify({
     syntax: stripPositions(parsed.program),
     directives,
@@ -403,6 +406,65 @@ export async function buildCoverageWorkerGraph(options: {
       writeFileSync(destination, readFileSync(declarationPath));
     }
 
+    const elysiaPrivateInputs = (() => {
+      if (packageName !== "elysia") return undefined;
+
+      const manifestPath = join(packagePath, "package.json");
+      const manifestBytes = readFileSync(manifestPath);
+      const manifest = JSON.parse(manifestBytes.toString("utf8")) as {
+        readonly name?: unknown;
+        readonly imports?: Readonly<
+          Record<string, { readonly types?: unknown; readonly default?: unknown }>
+        >;
+      };
+      const resource = manifest.imports?.["#hesperia-elysia-resources"];
+
+      if (
+        manifest.name !== "@hesperia/elysia" ||
+        resource?.types !== "./dist/package-resources.d.ts" ||
+        resource.default !== "./dist/package-resources.js"
+      ) {
+        throw new Error(
+          "Coverage worker Elysia private resource import changed its package-owned targets",
+        );
+      }
+
+      const originalSource = join(packagePath, "src", "package-resources.ts");
+      const resourceSource = prepared.get(canonicalPath(originalSource));
+      const preparedSource = join(sourceDirectory, "package-resources.ts");
+
+      if (
+        !resourceSource ||
+        !existsSync(preparedSource) ||
+        readFileSync(preparedSource, "utf8") !== resourceSource.instrumentedCode ||
+        !sourceOutputs.some(
+          (item) =>
+            canonicalPath(item.originalPath) === canonicalPath(originalSource) &&
+            canonicalPath(item.preparedPath) === canonicalPath(preparedSource),
+        )
+      ) {
+        throw new Error("Coverage worker omitted the actual instrumented Elysia resource source");
+      }
+
+      const declarationPath = join(packagePath, "dist", "package-resources.d.ts");
+      const declarationBytes = readFileSync(declarationPath);
+      const stagedManifest = join(buildDirectory, "package.json");
+      const stagedDeclaration = join(outDirectory, "package-resources.d.ts");
+
+      mkdirSync(outDirectory, { recursive: true });
+      writeFileSync(stagedManifest, manifestBytes, { flag: "wx" });
+      writeFileSync(stagedDeclaration, declarationBytes, { flag: "wx" });
+
+      return Object.freeze({
+        manifestPath,
+        manifestBytes,
+        stagedManifest,
+        declarationPath,
+        declarationBytes,
+        stagedDeclaration,
+      });
+    })();
+
     const configPath = join(buildDirectory, "tsconfig.json");
 
     writeFileSync(
@@ -445,7 +507,7 @@ export async function buildCoverageWorkerGraph(options: {
           "false",
           "--declaration",
           "--emitDeclarationOnly",
-          "--outDir",
+          packageName === "elysia" ? "--declarationDir" : "--outDir",
           instrumentedDeclarationDirectory,
         ],
         {
@@ -616,6 +678,34 @@ export async function buildCoverageWorkerGraph(options: {
 
       outputs.push({ originalPath: resolve(originalPath), compiledPath: resolve(compiledPath) });
     }
+
+    if (elysiaPrivateInputs) {
+      const resourceOriginal = canonicalPath(join(currentDist, "package-resources.js"));
+      const resourceCompiled = canonicalPath(join(outDirectory, "package-resources.js"));
+      const resourceOutputs = outputs.filter(
+        (item) =>
+          canonicalPath(item.originalPath) === resourceOriginal &&
+          canonicalPath(item.compiledPath) === resourceCompiled,
+      );
+
+      if (
+        resourceOutputs.length !== 1 ||
+        !readFileSync(elysiaPrivateInputs.manifestPath).equals(elysiaPrivateInputs.manifestBytes) ||
+        !readFileSync(elysiaPrivateInputs.stagedManifest).equals(
+          elysiaPrivateInputs.manifestBytes,
+        ) ||
+        !readFileSync(elysiaPrivateInputs.declarationPath).equals(
+          elysiaPrivateInputs.declarationBytes,
+        ) ||
+        !readFileSync(elysiaPrivateInputs.stagedDeclaration).equals(
+          elysiaPrivateInputs.declarationBytes,
+        )
+      ) {
+        throw new Error(
+          "Coverage worker changed its Elysia private import inputs or output mapping",
+        );
+      }
+    }
   }
 
   if (outputs.length === 0) throw new Error("Coverage worker emitted no JavaScript modules");
@@ -739,6 +829,7 @@ export async function withCoverageWorkerBuild<T>(options: {
   const scopedBuilds: WorkerCoverageBuildRecord[] = [];
   const originalBuild = Bun.build;
   let wrappedBuild!: typeof Bun.build;
+
   wrappedBuild = ((buildOptions: Parameters<typeof Bun.build>[0]) => {
     if (
       typeof buildOptions.root !== "string" ||
@@ -785,6 +876,7 @@ export async function withCoverageWorkerBuild<T>(options: {
     const promise = Reflect.apply(originalBuild, Bun, [
       { ...buildOptions, plugins: [plugin, ...(buildOptions.plugins ?? [])] },
     ]) as ReturnType<typeof Bun.build>;
+
     return promise.then((result) => {
       scopedBuilds.push({
         kind,
@@ -1093,6 +1185,7 @@ export async function withCoverageWorkerFixtureBuild<T>(
     const promise = Reflect.apply(originalBuild, Bun, [
       { ...buildOptions, plugins: [plugin, ...(buildOptions.plugins ?? [])] },
     ]) as ReturnType<typeof Bun.build>;
+
     return promise.then((result) => {
       scopedBuilds.push({ kind: "fixture", entrypoints: [...entrypoints], substitutions });
 

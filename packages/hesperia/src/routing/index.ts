@@ -46,15 +46,48 @@ type PatternParams<S extends string> = string extends S
     ? SegmentParams<H> & PatternParams<T>
     : SegmentParams<S>;
 
-/** Typed route declaration inspected by the compiler; its server members never enter the browser manifest. */
+/**
+ * Declare a route with readonly literal tag types for compiler inspection.
+ * Server members are not included in the browser manifest.
+ * @typeParam Tags The authored literal tags.
+ * @param configuration The authored route declaration.
+ * @returns The same configuration object with readonly tag types.
+ */
+export function route<const Tags extends readonly string[]>(
+  configuration: Route.Declaration & { readonly tags: Tags },
+): Route.Declaration & { readonly tags: Readonly<Tags> };
+/**
+ * Declare a route with an explicit path pattern for its guard parameters.
+ * @typeParam Pattern Route path pattern.
+ * @param configuration The authored route declaration.
+ * @returns The same configuration object.
+ */
 export function route<Pattern extends string = string>(
   configuration: Route.Declaration<Pattern>,
-): Route.Declaration<Pattern> {
+): Route.Declaration<Pattern>;
+export function route(configuration: object): object {
   return configuration;
 }
 
 /** Types associated with a route declaration. */
 export namespace Route {
+  /** An authored requirement on a route rendering capability. */
+  export type RenderConstraint = "required" | "optional" | "forbidden";
+
+  /** Partial rendering constraints inherited by descendant routes. */
+  export interface RenderPolicy {
+    /** Browser rendering capability. */
+    readonly clientRender?: RenderConstraint;
+    /** Request-time rendering capability. */
+    readonly ssr?: RenderConstraint;
+    /** Progressive response delivery capability. */
+    readonly stream?: RenderConstraint;
+    /** Static generation capability. */
+    readonly ssg?: RenderConstraint;
+    /** Browser adoption of server or static output. */
+    readonly hydration?: RenderConstraint;
+  }
+
   /** Referenced client guard; the compiler validates path parameter names against the route pattern. */
   export type Guard<Pattern extends string = string> = (
     context: Omit<import("./navigation.ts").NavigationContext, "params"> & {
@@ -67,11 +100,15 @@ export namespace Route {
 
   /** Statically inspected declaration; request-time loader execution remains a separate target. */
   export interface Declaration<Pattern extends string = string> {
+    /** Literal rendering constraints inherited by descendant routes. */
+    readonly render?: RenderPolicy;
     /** Identifier reference to a separately client-eligible guard binding. */
     readonly guard?: Guard<Pattern>;
     /** Server-only request loader, preserved for compiler target diagnostics rather than browser execution. */
     readonly load?: unknown;
     /** Literal response policy inspected by the compiler. */
     readonly headers?: Readonly<Record<string, string>>;
+    /** Literal tag declarations inspected by the compiler; generation does not yet publish them. */
+    readonly tags?: readonly string[];
   }
 }

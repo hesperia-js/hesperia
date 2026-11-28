@@ -229,6 +229,7 @@ function installNavigation(
 
   const onProgrammaticNavigate = (event: NavigateEvent): void => {
     const candidate = programmaticCandidate;
+
     programmaticGeneration++;
 
     if (candidate) clearProgrammaticCandidate(candidate);
@@ -260,6 +261,7 @@ function installNavigation(
         signal: event.signal,
         onAbort: () => clearProgrammaticCandidate(pending),
       };
+
       programmaticCandidate = pending;
 
       event.signal.addEventListener("abort", pending.onAbort, { once: true });
@@ -281,6 +283,7 @@ function installNavigation(
 
       if (physical) {
         const physicalEntry = readNavigationEntry(physical);
+
         current = result?.logicalEntry
           ? {
               ...physicalEntry,
@@ -311,6 +314,7 @@ function installNavigation(
           position: result.logicalEntry.position,
           history: result.logicalEntry,
         };
+
         current = committed;
 
         logicalEntries.set(committed.key, committed);
@@ -507,6 +511,7 @@ function installNavigation(
       const state = states.has(committedEntry.key)
         ? states.get(committedEntry.key)
         : committedEntry.state;
+
       current = { ...committedEntry, state };
 
       states.set(current.key, current.state);
@@ -709,6 +714,7 @@ function installHistory(options: BrowserHistoryAdapterOptions): BrowserHistoryAd
     pending?.abort();
 
     const controller = new AbortController();
+
     pending = controller;
     pendingEntry = destination;
     const previous = current;

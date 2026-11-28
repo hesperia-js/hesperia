@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import {
+  createGeneratedAssetHost,
   createHost,
   type CapturedBrowserBuild,
+  type CapturedPublicBuild,
   type HostingAssetRecord,
+  type HostingRecordV2,
   type HostingRecordV1,
 } from "../../packages/hosting/src/index.ts";
 
@@ -24,6 +27,7 @@ const sources = new Map([
 async function sha256Hex(value: string): Promise<string> {
   const bytes = await new Blob([value]).arrayBuffer();
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -48,7 +52,42 @@ async function fixture(mount = "/source"): Promise<Fixture> {
     startupAsset: "/assets/nested/start.js",
     assets,
   };
+
   return { build: { hosting, files }, sources };
+}
+
+async function publicFixture(relativePath = "assets/published.txt"): Promise<{
+  readonly build: CapturedPublicBuild;
+  readonly content: string;
+}> {
+  const { build } = await fixture();
+  const urlPath = `/${relativePath}`;
+  const content = "captured public bytes";
+  const contentType = "text/plain; charset=utf-8";
+  const hosting: HostingRecordV2 = {
+    version: 2,
+    mode: build.hosting.mode,
+    standaloneMountURL: build.hosting.standaloneMountURL,
+    startupAsset: build.hosting.startupAsset,
+    assets: build.hosting.assets,
+    publicFiles: [
+      {
+        relativePath,
+        urlPath,
+        sha256: await sha256Hex(content),
+        contentType,
+      },
+    ],
+  };
+
+  return {
+    build: {
+      hosting,
+      files: build.files,
+      publicFiles: new Map([[urlPath, new Blob([content], { type: contentType })]]),
+    },
+    content,
+  };
 }
 
 function request(path: string, init?: RequestInit): Request {
@@ -56,6 +95,169 @@ function request(path: string, init?: RequestInit): Request {
 }
 
 describe("createHost", () => {
+  test("serves a legacy static-routing asset as captured bytes", async () => {
+    const { build } = await publicFixture();
+    const path = "/assets/static-routing.json";
+    const content = '{"label":"ordinary asset"}';
+    const contentType = "application/json";
+    const legacy: CapturedPublicBuild = {
+      ...build,
+      hosting: {
+        ...build.hosting,
+        assets: [...build.hosting.assets, { path, sha256: await sha256Hex(content), contentType }],
+      },
+      files: new Map([...build.files, [path, new Blob([content], { type: contentType })]]),
+    };
+
+    for (const create of [createHost, createGeneratedAssetHost]) {
+      const host = await create(legacy);
+      const response = host.handle(request(`/source/_hesperia${path}`));
+
+      expect(response?.status).toBe(200);
+      expect(await response?.text()).toBe(content);
+    }
+  });
+
+  test("rejects unknown fields in a direct version 2 public-file record", async () => {
+    const { build } = await publicFixture();
+    const record = build.hosting.publicFiles[0]! as unknown as { debug?: boolean };
+
+    record.debug = true;
+
+    await expect(createHost(build)).rejects.toThrow("unexpected fields");
+  });
+
+  test("rejects unsafe direct public-file inputs before hosting them", async () => {
+    const cases: readonly {
+      readonly message: string;
+      readonly mutate: (build: CapturedPublicBuild) => void;
+    }[] = [
+      {
+        message: "duplicate public file storage path: assets/published.txt",
+        mutate(build) {
+          const records = build.hosting.publicFiles as (typeof build.hosting.publicFiles)[number][];
+
+          records.push({ ...records[0]! });
+        },
+      },
+      {
+        message: "public file storage paths conflict as a file and directory",
+        mutate(build) {
+          const records = build.hosting.publicFiles as (typeof build.hosting.publicFiles)[number][];
+          const original = records[0]!;
+          const urlPath = `${original.urlPath}/child`;
+
+          records.push({ ...original, relativePath: `${original.relativePath}/child`, urlPath });
+          (build.publicFiles as Map<string, Blob>).set(
+            urlPath,
+            build.publicFiles.get(original.urlPath)!,
+          );
+        },
+      },
+      {
+        message: "public file urlPath must already be canonical",
+        mutate(build) {
+          (build.hosting.publicFiles[0] as { urlPath: string }).urlPath = "/assets/%70ublished.txt";
+        },
+      },
+      {
+        message: "public file URL path does not match its storage path",
+        mutate(build) {
+          (build.hosting.publicFiles[0] as { relativePath: string }).relativePath =
+            "assets/other.txt";
+        },
+      },
+      {
+        message: "public file path is reserved: /_hesperia/private.txt",
+        mutate(build) {
+          const record = build.hosting.publicFiles[0] as {
+            relativePath: string;
+            urlPath: string;
+          };
+          const blob = build.publicFiles.get(record.urlPath)!;
+
+          record.relativePath = "_hesperia/private.txt";
+          record.urlPath = "/_hesperia/private.txt";
+          (build.publicFiles as Map<string, Blob>).delete("/assets/published.txt");
+          (build.publicFiles as Map<string, Blob>).set(record.urlPath, blob);
+        },
+      },
+      {
+        message: "public file inventory and file map do not match",
+        mutate(build) {
+          (build.publicFiles as Map<string, Blob>).delete("/assets/published.txt");
+        },
+      },
+      {
+        message: "public file digest mismatch: /assets/published.txt",
+        mutate(build) {
+          (build.hosting.publicFiles[0] as { sha256: string }).sha256 = "0".repeat(64);
+        },
+      },
+    ];
+
+    for (const scenario of cases) {
+      const { build } = await publicFixture();
+
+      scenario.mutate(build);
+
+      await expect(createHost(build)).rejects.toThrow(scenario.message);
+    }
+  });
+
+  test("accepts an explicit empty version 2 public inventory", async () => {
+    const { build, sources } = await fixture();
+    const publicBuild: CapturedPublicBuild = {
+      hosting: { ...build.hosting, version: 2, publicFiles: [] },
+      files: build.files,
+      publicFiles: new Map(),
+    };
+    const host = await createHost(publicBuild);
+    const managed = host.handle(request("/source/_hesperia/assets/nested/start.js"));
+
+    expect(managed?.status).toBe(200);
+    expect(await managed?.text()).toBe(sources.get("/assets/nested/start.js"));
+  });
+
+  test("captures public records and bytes before its first asynchronous digest", async () => {
+    const { build, content } = await publicFixture();
+    const mutableHosting = build.hosting as unknown as {
+      publicFiles: {
+        relativePath: string;
+        urlPath: string;
+        sha256: string;
+        contentType: string;
+      }[];
+    };
+    const mutableFiles = build.publicFiles as Map<string, Blob>;
+    const pending = createHost(build, { mountURL: "/dashboard" });
+
+    mutableHosting.publicFiles[0] = {
+      relativePath: "elsewhere/changed.txt",
+      urlPath: "/changed.txt",
+      sha256: "0".repeat(64),
+      contentType: "text/plain",
+    };
+    mutableFiles.set("/assets/published.txt", new Blob(["replacement bytes"]));
+    mutableFiles.set("/changed.txt", new Blob(["changed path"]));
+
+    const host = await pending;
+    const response = host.handle(
+      request("/dashboard/assets/published.txt", {
+        headers: { accept: "application/octet-stream" },
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(await response?.text()).toBe(content);
+    expect(
+      host.handle(
+        request("/dashboard/changed.txt", { headers: { accept: "application/octet-stream" } }),
+      ),
+    ).toBeUndefined();
+  });
+
   test("preserves ampersands when a browser parses the transport document", async () => {
     const { build } = await fixture("/&copy;");
     const host = await createHost(build);
@@ -123,7 +325,9 @@ describe("createHost", () => {
 
     expect(wrapperSource).toContain('import { start } from "./assets/nested/start.js";');
 
-    expect(wrapperSource).toContain('await start("/dashboard");');
+    expect(wrapperSource).toContain(
+      'await start("/dashboard", {"root":{"kind":"path","pathname":"/dashboard/_hesperia/"},"moduleCredentials":"anonymous","credentials":"same-origin"});',
+    );
 
     for (const [path, source] of sources) {
       const relative = path.slice("/assets/".length);
@@ -140,6 +344,44 @@ describe("createHost", () => {
     expect(rootHost.mount).toEqual({ pathname: "/", assetPath: "/_hesperia" });
 
     expect(await rootAsset?.text()).toBe(sources.get("/assets/nested/start.js"));
+  });
+
+  test("selects a separate origin for captured generated resources and leaves the app mount intact", async () => {
+    const { build } = await fixture("/");
+    const selection = {
+      baseURL: "https://static.example.test/deploy",
+      moduleCredentials: "use-credentials",
+    } as const;
+    const host = await createHost(build, { mountURL: "/app", generatedAssets: selection });
+    const document = host.handle(
+      new Request("https://app.example.test/app/page", {
+        headers: { accept: "text/html" },
+      }),
+    );
+
+    expect(await document?.text()).toContain(
+      '<script type="module" crossorigin="use-credentials" src="https://static.example.test/deploy/startup.js">',
+    );
+
+    const wrapper = host.handle(new Request("https://static.example.test/deploy/startup.js"));
+
+    expect(await wrapper?.text()).toContain(
+      'await start("/app", {"root":{"kind":"url","href":"https://static.example.test/deploy/"},"moduleCredentials":"use-credentials","credentials":"include"});',
+    );
+
+    const asset = host.handle(
+      new Request("https://static.example.test/deploy/assets/runtime/chunk.js"),
+    );
+
+    expect(await asset?.text()).toBe(sources.get("/assets/runtime/chunk.js"));
+
+    expect(
+      host.handle(new Request("https://app.example.test/deploy/assets/runtime/chunk.js")),
+    ).toBeUndefined();
+    expect(
+      host.handle(new Request("https://app.example.test/app/_hesperia/assets/runtime/chunk.js"))
+        ?.status,
+    ).toBe(404);
   });
 
   test("captures record, map and selection before its first asynchronous digest", async () => {
@@ -238,6 +480,70 @@ describe("createHost", () => {
     ).toBeUndefined();
   });
 
+  test("requires an application origin for an ambiguous absolute public destination", async () => {
+    const { build, content } = await publicFixture("deploy/startup.js");
+    const sameOrigin = { baseURL: "https://example.test/source/deploy/" };
+
+    await expect(createHost(build, { generatedAssets: sameOrigin })).rejects.toThrow(
+      "applicationOrigin",
+    );
+    await expect(
+      createHost(build, {
+        generatedAssets: sameOrigin,
+        applicationOrigin: "https://example.test",
+      }),
+    ).rejects.toThrow("collides");
+
+    const host = await createHost(build, {
+      generatedAssets: { baseURL: "https://static.example.test/source/deploy/" },
+      applicationOrigin: "https://example.test",
+    });
+    const publicFile = host.handle(request("/source/deploy/startup.js"));
+    const startup = host.handle(
+      new Request("https://static.example.test/source/deploy/startup.js"),
+    );
+
+    expect(publicFile?.status).toBe(200);
+    expect(await publicFile?.text()).toBe(content);
+    expect(startup?.status).toBe(200);
+    expect(await startup?.text()).toContain("start(");
+    const head = host.handle(request("/source/deploy/startup.js", { method: "HEAD" }));
+
+    expect(head?.status).toBe(200);
+    expect(head?.body).toBeNull();
+    expect(
+      host.handle(new Request("https://wrong.example.test/source/deploy/startup.js")),
+    ).toBeUndefined();
+    expect(
+      host.handle(new Request("https://static.example.test/source/deploy/assets/missing.js"))
+        ?.status,
+    ).toBe(404);
+    expect(host.handle(request("/source/deploy/startup.js", { method: "POST" }))).toBeUndefined();
+    expect(
+      host.handle(
+        new Request("https://static.example.test/source/deploy/startup.js", { method: "POST" }),
+      )?.status,
+    ).toBe(405);
+  });
+
+  test("serves a public file beneath an unowned custom generated assets path", async () => {
+    const { build, content } = await publicFixture();
+    const host = await createHost(build, { generatedAssets: { baseURL: "/source/" } });
+    const publicFile = host.handle(request("/source/assets/published.txt"));
+
+    expect(publicFile?.status).toBe(200);
+    expect(await publicFile?.text()).toBe(content);
+    expect(
+      host.handle(request("/source/assets/published.txt", { method: "POST" })),
+    ).toBeUndefined();
+    expect(host.handle(request("/source/assets/missing.js"))?.status).toBe(404);
+    expect(host.handle(request("/source/assets/%2Fsecret.js"))?.status).toBe(404);
+    expect(host.handle(request("/source/assets/nested/start.js", { method: "POST" }))?.status).toBe(
+      405,
+    );
+    expect(host.handle(request("/source/_hesperia/assets/missing.js"))?.status).toBe(404);
+  });
+
   test("returns 404 for misses and malformed keys inside the managed namespace", async () => {
     const { build } = await fixture("/dashboard");
     const host = await createHost(build);
@@ -276,16 +582,19 @@ describe("createHost", () => {
 
   test("rejects malformed records, mismatched maps, invalid digests and unsafe inventory paths", async () => {
     const badVersion = await fixture();
-    (badVersion.build.hosting as unknown as { version: number }).version = 2;
+
+    (badVersion.build.hosting as unknown as { version: number }).version = 4;
 
     await expect(createHost(badVersion.build)).rejects.toThrow("version");
 
     const badMode = await fixture();
+
     (badMode.build.hosting as unknown as { mode: string }).mode = "preview";
 
     await expect(createHost(badMode.build)).rejects.toThrow("mode");
 
     const unexpectedField = await fixture();
+
     (unexpectedField.build.hosting as unknown as { debug: boolean }).debug = true;
 
     await expect(createHost(unexpectedField.build)).rejects.toThrow("unexpected fields");
@@ -301,11 +610,13 @@ describe("createHost", () => {
     await expect(createHost(unknownFile.build)).rejects.toThrow("do not match");
 
     const wrongDigest = await fixture();
+
     (wrongDigest.build.hosting.assets[0] as { sha256: string }).sha256 = "f".repeat(64);
 
     await expect(createHost(wrongDigest.build)).rejects.toThrow("digest mismatch");
 
     const unsafeContentType = await fixture();
+
     (unsafeContentType.build.hosting.assets[0] as { contentType: string }).contentType =
       "text/javascript\r";
 
@@ -337,6 +648,7 @@ describe("createHost", () => {
     }
 
     const missingStartup = await fixture();
+
     (missingStartup.build.hosting as unknown as { startupAsset: string }).startupAsset =
       "/assets/not-present.js";
 
