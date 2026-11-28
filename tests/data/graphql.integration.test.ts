@@ -1570,6 +1570,7 @@ test("native request sharing stays graph-scoped while fixed auth contexts stay i
     link,
     context: { headers: { "x-fixture-identity": "reviewer" } },
   });
+
   clients.push(authorClient, reviewerClient);
 
   const authorDefinition = authorClient.query({
@@ -1694,6 +1695,7 @@ test("mutation failure retires its prediction without pretending the server writ
       resolvePrediction(value);
     });
   });
+
   subscriptions.push(disposePrediction);
 
   const task = api.write();
@@ -1780,6 +1782,7 @@ test("successful native mutation publishes its typed result and runs its declare
       resolveRefresh(value);
     });
   });
+
   subscriptions.push(disposeRefresh);
 
   const task = api.write();

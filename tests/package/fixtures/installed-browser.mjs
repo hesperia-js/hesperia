@@ -272,6 +272,7 @@ for (const [name, engine] of Object.entries(engines)) {
     );
 
     const schedulingDocument = await page.evaluateHandle(() => document);
+
     assert.equal(
       await page.evaluate(() => document.documentElement.dataset.installedSchedulingCleanup),
       undefined,

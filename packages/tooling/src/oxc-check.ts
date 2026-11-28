@@ -47,6 +47,7 @@ function isExcluded(filename: string): boolean {
 
 function normalized(filename: string): string {
   const path = resolve(filename).replaceAll("\\", "/");
+
   return process.platform === "win32" ? path.toLowerCase() : path;
 }
 
@@ -80,6 +81,7 @@ function isConfigurationFile(name: string): boolean {
 
 function skipCssComment(source: string, start: number): number {
   const end = source.indexOf("*/", start + 2);
+
   return end < 0 ? source.length : end + 2;
 }
 
@@ -323,6 +325,7 @@ async function collectOxcProjectFiles(
 
 function binaryPath(packageName: string, executableName: string): string {
   const entry = require.resolve(packageName);
+
   return resolve(dirname(dirname(entry)), "bin", executableName);
 }
 
@@ -346,6 +349,7 @@ async function runTool(
     });
     const code = await child.exited;
     const [stdout, stderr] = await Promise.all([stdoutFile.text(), stderrFile.text()]);
+
     return { code, stdout, stderr };
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -443,6 +447,7 @@ function parseOxlint(root: string, output: ToolOutput): ProjectDiagnostic[] {
     const start = sourceSpan?.offset;
     const length = sourceSpan?.length;
     const filename = item.filename ? resolve(root, item.filename) : resolve(root, ".");
+
     return {
       filename,
       code: item.code ?? "OXLINT",

@@ -87,6 +87,7 @@ test("public capture rejects swaps before canonical resolution and final byte op
     const savedDirectory = join(root, "saved-source");
     const savedFile = join(root, "saved-file.bin");
     const outsideRoot = await native.mkdtemp(`${root}-outside-`);
+
     outside = outsideRoot;
 
     await native.mkdir(publicRoot);
@@ -168,6 +169,7 @@ test("public capture rejects swaps before canonical resolution and final byte op
     ): T {
       spySetupUncertain = true;
       const spy = create();
+
       spies.push({ spy, restored });
       activeSpies++;
       spySetupUncertain = false;
@@ -184,6 +186,7 @@ test("public capture rejects swaps before canonical resolution and final byte op
         () => spyOn(filesystem, "readFile"),
         () => filesystem.readFile === native.readFile,
       );
+
       readSpy.mockImplementation(((...args: Parameters<typeof filesystem.readFile>) => {
         if (!armed() || typeof args[0] !== "string" || !fixtureTarget(args[0]))
           return Reflect.apply(native.readFile, native, args);
@@ -204,6 +207,7 @@ test("public capture rejects swaps before canonical resolution and final byte op
         () => spyOn(filesystem, "open"),
         () => filesystem.open === native.open,
       );
+
       openSpy.mockImplementation(((...args: Parameters<typeof filesystem.open>) => {
         if (!fixtureTarget(args[0])) return Reflect.apply(native.open, native, args);
 
@@ -226,6 +230,7 @@ test("public capture rejects swaps before canonical resolution and final byte op
                 () => spyOn(handle, "close"),
                 () => handle.close === originalClose,
               );
+
               closeHandle.mockImplementation(((...closeArgs: Parameters<typeof handle.close>) =>
                 Reflect.apply(originalClose, handle, closeArgs).then(() => {
                   if (!handleClosed) {
@@ -243,6 +248,7 @@ test("public capture rejects swaps before canonical resolution and final byte op
                   () => spyOn(handle, "readFile"),
                   () => handle.readFile === originalRead,
                 );
+
                 readHandle.mockImplementation(((...readArgs: unknown[]) => {
                   outsideReads++;
                   return Reflect.apply(originalRead, handle, readArgs);
@@ -316,12 +322,14 @@ test("public capture rejects swaps before canonical resolution and final byte op
         () => spyOn(filesystem, "readdir"),
         () => filesystem.readdir === native.readdir,
       );
+
       readdirSpy.mockImplementation(((...args: Parameters<typeof filesystem.readdir>) => {
         if (!matches(args[0], directory) && !matches(args[0], canonicalDirectory))
           return Reflect.apply(native.readdir, native, args);
 
         return (async () => {
           const result = await Reflect.apply(native.readdir, native, args);
+
           listed = true;
           return result;
         })();
@@ -332,6 +340,7 @@ test("public capture rejects swaps before canonical resolution and final byte op
         () => spyOn(filesystem, "lstat"),
         () => filesystem.lstat === native.lstat,
       );
+
       lstatSpy.mockImplementation(((...args: Parameters<typeof filesystem.lstat>) => {
         if (
           !listed ||
@@ -479,6 +488,7 @@ test("public capture rejects swaps before canonical resolution and final byte op
     },
     () => {
       if (!outside) return;
+
       if (
         !serverStopped ||
         spySetupUncertain ||

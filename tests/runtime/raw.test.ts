@@ -109,6 +109,7 @@ test("raw replacements warn on the second replacement per connected frame withou
   let html!: State<string>;
   const App = defineComponent((owner) => {
     const client = createClient(owner);
+
     html = client.state("zero");
 
     client.effect(() => {

@@ -66,10 +66,12 @@ for (const [entry, scheduling] of [
 
       run.cancel(reason);
       const error = await rejected;
+
       expect(error).toMatchObject({ name: "AbortError", code: "ABORT_ERR" });
       expect((error as Error).cause).toBe(reason);
       expect(run.pendingCount).toBe(0);
       const later = run("later");
+
       run.flush();
       expect(await later).toBe("later");
     });
@@ -82,9 +84,11 @@ for (const [entry, scheduling] of [
 
       controller.abort(reason);
       const queuedError = await queued;
+
       expect(queuedError).toMatchObject({ name: "AbortError", code: "ABORT_ERR" });
       expect((queuedError as Error).cause).toBe(reason);
       const futureError = await run("future").catch((error: unknown) => error);
+
       expect(futureError).toMatchObject({
         name: "AbortError",
         code: "ABORT_ERR",
@@ -189,6 +193,7 @@ for (const [entry, scheduling] of [
       expect(run.unref().ref()).toBe(run);
       run.cancel(reason);
       const error = await queued;
+
       expect(error).toMatchObject({ name: "AbortError", code: "ABORT_ERR" });
       expect((error as Error).cause).toBe(reason);
       expect(run.activeCount).toBe(1);
@@ -214,6 +219,7 @@ for (const [entry, scheduling] of [
 
       expect(await run(1)).toBe(1);
       const queued = run(2).catch((error: unknown) => error);
+
       expect(run.pendingCount).toBe(1);
       expect(run.hasImmediateCapacity()).toBe(false);
       expect(run.unref().ref()).toBe(run);
@@ -245,9 +251,11 @@ for (const [entry, scheduling] of [
 
       controller.abort(reason);
       const queuedError = await queued;
+
       expect(queuedError).toMatchObject({ name: "AbortError", code: "ABORT_ERR" });
       expect((queuedError as Error).cause).toBe(reason);
       const futureError = await run("future").catch((error: unknown) => error);
+
       expect(futureError).toMatchObject({
         name: "AbortError",
         code: "ABORT_ERR",
@@ -310,6 +318,7 @@ for (const [entry, scheduling] of [
 
       const controller = new AbortController();
       const reason = { source: "pre-aborted" };
+
       controller.abort(reason);
       expect(thrownBy(() => debounce(callback, 1, { signal: controller.signal }))).toMatchObject({
         name: "AbortError",

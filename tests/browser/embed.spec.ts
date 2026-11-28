@@ -82,6 +82,7 @@ test("Embed applies native sandboxing and preserves its sized bound wrapper acro
   const beforeSize = await page.locator('iframe[name="dynamic"]').evaluate((frame) => {
     const wrapper = frame.parentElement!;
     const rect = wrapper.getBoundingClientRect();
+
     return {
       width: wrapper.style.width,
       height: wrapper.style.height,
@@ -139,6 +140,7 @@ test("Embed applies native sandboxing and preserves its sized bound wrapper acro
   const afterSize = await page.locator('iframe[name="dynamic"]').evaluate((frame) => {
     const wrapper = frame.parentElement!;
     const rect = wrapper.getBoundingClientRect();
+
     return {
       width: wrapper.style.width,
       height: wrapper.style.height,

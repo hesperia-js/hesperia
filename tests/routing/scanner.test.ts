@@ -226,5 +226,6 @@ const _guardTypeProbe: Route.Guard<"/users/[[...parts]]/[id]/[[lang]]"> = ({ par
   const parts: readonly string[] | undefined = params.parts;
   const id: string = params.id;
   const lang: string | undefined = params.lang;
+
   return Boolean(parts || id || lang);
 };

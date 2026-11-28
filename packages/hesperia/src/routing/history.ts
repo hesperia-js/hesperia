@@ -188,6 +188,7 @@ function projectState(value: unknown, origin: string, url: string): unknown {
   if (!isNonNullObject(metadata) || typeof metadata.origin !== "string") return value;
 
   const entry = readEnvelope(value, url, origin);
+
   return entry ? entry.state : value;
 }
 
@@ -211,6 +212,7 @@ function installStateProjection(window: Window): () => unknown {
 
       get() {
         const value = Reflect.apply(getNativeState!, history, []);
+
         return projectState(value, window.location.origin, window.location.href);
       },
     });
@@ -302,6 +304,7 @@ export function installHistoryTracking(window: Window): HistoryTracker {
   }
 
   const tracker = record.tracker ?? new SharedHistoryTracker(window, record);
+
   record.tracker = tracker;
   return tracker.lease();
 }
@@ -352,6 +355,7 @@ class SharedHistoryTracker {
       this.#window.location.href,
       this.#window.location.origin,
     );
+
     this.#trackerId = initial?.trackerId ?? tokenFor(this.#window);
 
     if (initial) {
@@ -396,8 +400,10 @@ class SharedHistoryTracker {
 
       if (nativeArgs.length > 2 && nativeArgs[2] !== undefined && nativeArgs[2] !== null) {
         const urlArgument = `${nativeArgs[2]}`;
+
         nativeArgs[2] = urlArgument;
         let resolvedUrl: string | undefined;
+
         url = () => {
           if (resolvedUrl !== undefined) return resolvedUrl;
 
@@ -465,6 +471,7 @@ class SharedHistoryTracker {
   lease(): HistoryTracker {
     this.#leases++;
     let released = false;
+
     return {
       read: (url, state) => this.read(url, state),
       create: (url, state, disposition) => this.create(url, state, disposition),
@@ -577,6 +584,7 @@ class SharedHistoryTracker {
       disposition === "replace" && current
         ? current.id
         : Math.max(this.#nextEntryId, current?.id ?? 0) + 1;
+
     return {
       trackerId: disposition === "replace" && current ? current.trackerId : this.#trackerId,
       id,
@@ -669,6 +677,7 @@ class SharedHistoryTracker {
       state,
       __hesperiaHistory: metadata,
     };
+
     return wrapped;
   }
 }

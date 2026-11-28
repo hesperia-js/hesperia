@@ -116,8 +116,10 @@ if (location.pathname === "/window-driver") {
 
         prepare() {
           const main = document.createElement("main");
+
           main.textContent = url.pathname;
           let localState = 0;
+
           main.dataset.localState = String(localState);
 
           main.addEventListener("click", () => {

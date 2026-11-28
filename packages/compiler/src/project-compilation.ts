@@ -122,6 +122,7 @@ export function emitCheckingSession(
 
   if (!emissionErrors.size) {
     const compilation = { checking, modules: emitted };
+
     sealProjectTypingEvidence(session, checking, compilation);
     return compilation;
   }
@@ -138,6 +139,7 @@ export function emitCheckingSession(
     },
     modules: emitted,
   };
+
   sealProjectTypingEvidence(session, checking, compilation);
   return compilation;
 }

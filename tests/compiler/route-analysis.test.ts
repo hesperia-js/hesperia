@@ -20,6 +20,7 @@ export default route({ render: { clientRender: "required", ssr: "forbidden" }, l
   expect(result.renderPolicy?.clientRender?.value).toBe("required");
   expect(result.renderPolicy?.ssr?.value).toBe("forbidden");
   const span = result.renderPolicy!.clientRender!.span;
+
   expect(source.slice(span.start, span.end)).toBe('"required"');
   expect(result.requestMembers?.declarations.map((item) => item.field)).toEqual(["load"]);
 

@@ -33,6 +33,7 @@ export function validateComponentAsyncIteration(
 
     if (record.kind === "function") {
       const declaration = value as Extract<CanonicalStatement, { kind: "function" }>;
+
       component =
         declaration.async &&
         !declaration.generator &&
@@ -44,6 +45,7 @@ export function validateComponentAsyncIteration(
         CanonicalExpression,
         { kind: "arrow" | "function-expression" }
       >;
+
       component = expression.async && componentFactoryExpression(expression) !== undefined;
     }
 

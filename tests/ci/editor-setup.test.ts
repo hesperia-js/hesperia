@@ -60,6 +60,7 @@ async function resolveEditor(overrides: Record<string, unknown> = {}) {
         stderr: "pipe",
       },
     );
+
     return { result, output: await readFile(output, "utf8") };
   } finally {
     await rm(scratch, { recursive: true, force: true });

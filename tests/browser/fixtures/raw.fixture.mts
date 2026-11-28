@@ -35,6 +35,7 @@ const App = defineComponent((owner) => {
 
   const rows = rawHTML(owner, "rows", () => table.get(), null, "tbody");
   const options = rawHTML(owner, "options", () => choices.get(), null, "select");
+
   return element(owner, "main", {}, [
     hostRegion,
     element(owner, "table", {}, [element(owner, "tbody", {}, [rows])]),

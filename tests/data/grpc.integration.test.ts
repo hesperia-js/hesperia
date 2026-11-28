@@ -663,6 +663,7 @@ test("stream iterators skip pre-pull work and cancel pending opens on return, pa
 
     const returnIterator = stream.open(input, options)[Symbol.asyncIterator]();
     const returnWait = returnIterator.next();
+
     pendingCalls.push(returnWait);
 
     void returnWait.catch(() => undefined);
@@ -673,6 +674,7 @@ test("stream iterators skip pre-pull work and cancel pending opens on return, pa
       throw new Error("stream iterator does not expose return");
 
     const returning = returnIterator.return();
+
     pendingCalls.push(returning);
 
     void returning.catch(() => undefined);
@@ -689,6 +691,7 @@ test("stream iterators skip pre-pull work and cancel pending opens on return, pa
       .open(input, { ...options, abortSignal: externalParent.signal })
       [Symbol.asyncIterator]();
     const parentWait = parentIterator.next();
+
     pendingCalls.push(parentWait);
 
     void parentWait.catch(() => undefined);
@@ -709,6 +712,7 @@ test("stream iterators skip pre-pull work and cancel pending opens on return, pa
 
     const thrownIterator = stream.open(input, options)[Symbol.asyncIterator]();
     const thrownWait = thrownIterator.next();
+
     pendingCalls.push(thrownWait);
 
     void thrownWait.catch(() => undefined);
@@ -721,6 +725,7 @@ test("stream iterators skip pre-pull work and cancel pending opens on return, pa
       throw new Error("stream iterator does not expose throw");
 
     const throwing = thrownIterator.throw(thrownReason);
+
     pendingCalls.push(throwing);
 
     void throwing.catch(() => undefined);
@@ -897,6 +902,7 @@ test("stream setup failures preserve reasons and abort unfinished native calls",
 
 test("consumer cancellation interrupts a server stream waiting for its next native message", async () => {
   const modes = ["parent", "return", "throw"] as const;
+
   type Mode = (typeof modes)[number];
 
   const messageRequested: Record<Mode, ReturnType<typeof deferred<void>>> = {

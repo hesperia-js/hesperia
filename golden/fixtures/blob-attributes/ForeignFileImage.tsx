@@ -17,6 +17,7 @@ export function ForeignFileImage() {
   if (!initialFile) throw new Error("The parent document File was not supplied");
 
   const source = client.state<Blob | string>(initialFile);
+
   replaceSource = (file) => source.set(file);
   return <img id="foreign-file-image" src={source()} />;
 }

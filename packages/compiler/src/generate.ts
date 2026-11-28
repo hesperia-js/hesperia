@@ -180,6 +180,7 @@ export function generateModule(
     if (statement.kind === "import") {
       const specifiers = statement.specifiers.filter((specifier) => {
         const binding = generationOptions.clientBindings.get(specifier.bindingId ?? "");
+
         return (
           binding === undefined ||
           binding.kind === "import" ||
@@ -203,6 +204,7 @@ export function generateModule(
     ts({ boundaryTokens: true }),
     { sourceMapSource: options.filename, sourceMapContent: options.source },
   );
+
   return {
     code: result.code,
     map: result.map,
@@ -389,6 +391,7 @@ function generateStatement(
 
       if (statement.declaration.kind === "class") {
         const declaration = generateClassDeclaration(statement.declaration, options, runtime);
+
         return statement.exportKind === "default"
           ? {
               type: "ExportDefaultDeclaration",
@@ -420,6 +423,7 @@ function generateStatement(
             typeof first === "object" && first !== null && "init" in first
               ? (first as { readonly init?: GeneratedNode }).init
               : undefined;
+
           return {
             type: "ExportDefaultDeclaration",
             declaration: initializer ?? identifier("undefined", statement.span, options.source),
@@ -446,6 +450,7 @@ function generateStatement(
                 styleComponentName: statement.exportKind === "default" ? "default" : undefined,
               })!
             : generateExpression(expression, options);
+
         return {
           type:
             statement.exportKind === "default"
@@ -531,6 +536,7 @@ function generateFunction(
       body: block(statement.body, functionOptions, runtime),
       ...loc(statement.span, options.source),
     };
+
     return exported === "default"
       ? { type: "ExportDefaultDeclaration", declaration, ...loc(statement.span, options.source) }
       : exported
@@ -648,6 +654,7 @@ function generateFunction(
     ],
     ...loc(statement.span, options.source),
   };
+
   return exported === "default"
     ? {
         type: "ExportDefaultDeclaration",
@@ -781,6 +788,7 @@ function variable(
   sourceSpan: SourceSpan,
 ): GeneratedNode {
   const owner = runtimeOwner(options, sourceSpan);
+
   return {
     type: "VariableDeclaration",
     kind,
@@ -884,6 +892,7 @@ function generateAsyncBoundary(
           options.source,
         )
       : literal(null, child.span, options.source);
+
   return call(
     optionsRuntime(options),
     "asyncBoundary",
@@ -1004,6 +1013,7 @@ function generateChild(
       child.span,
       options.source,
     );
+
     return options.asyncBody
       ? {
           type: "YieldExpression",
@@ -1068,6 +1078,7 @@ function generateChild(
       ),
       ...loc(child.span, options.source),
     };
+
     return call(
       optionsRuntime(options),
       "region",
@@ -1796,6 +1807,7 @@ function generateImportExpression(
     optional: false,
     ...loc(expression.span, options.source),
   };
+
   return componentOperands
     ? {
         type: "YieldExpression",
@@ -1852,6 +1864,7 @@ function finiteImportBranches(
 
   for (let index = specifiers.length - 1; index >= 0; index--) {
     const specifier = specifiers[index]!;
+
     alternate = {
       type: "ConditionalExpression",
       test: {
@@ -2013,6 +2026,7 @@ function generateAssignmentTarget(
     const alias = expression.referenceId
       ? options.bindingAliases?.get(expression.referenceId)
       : undefined;
+
     return identifier(alias ?? expression.name, expression.span, options.source);
   }
 
@@ -2049,6 +2063,7 @@ function isBeforeLeaveReference(
     return false;
 
   const namespace = expression.object;
+
   return (
     namespace.kind === "identifier" &&
     namespace.referenceId !== undefined &&
@@ -2062,6 +2077,7 @@ function ownerBoundBeforeLeaveValue(
 ): GeneratedNode {
   const checkName = "__hesperiaDepartureCheck";
   const check = identifier(checkName, expression.span, options.source);
+
   return arrow(
     [check],
     call(
@@ -2108,6 +2124,7 @@ function propertyNode(
           key: generateExpression(propertyValue.key, options),
           computed: propertyValue.computed,
         };
+
   return {
     ...withKey,
     kind: propertyValue.propertyKind ?? "init",
@@ -2120,6 +2137,7 @@ function generateFunctionExpression(
   options: IndexedGeneratedOptions,
 ): GeneratedNode {
   const functionOptions = { ...options, asyncBody: false, importOperandContext: undefined };
+
   return {
     type: "FunctionExpression",
     id:
@@ -2171,6 +2189,7 @@ function generateComponentValue(
   const lowerFinal = (value: CanonicalExpression): GeneratedNode => {
     if (value.kind === "sequence") {
       const finalIndex = value.expressions.length - 1;
+
       return {
         type: "SequenceExpression",
         expressions: value.expressions.map((item, index) =>
@@ -2359,6 +2378,7 @@ function generateComponentExpression(
     value.span,
     options.source,
   );
+
   return {
     type: "CallExpression",
     callee: factory,
@@ -2404,6 +2424,7 @@ function projectPolicyDefinition(
   if (!options.styleRuntimeName || !options.styleEntryId) return policy;
 
   const local = identifier("__definition", span, options.source);
+
   return {
     type: "CallExpression",
     callee: arrow(
@@ -2589,6 +2610,7 @@ function generateClientCapability(
     return null;
 
   const capabilityName = uniqueName("__client", usedNames);
+
   return {
     name: capabilityName,
     declarations: [
@@ -2699,6 +2721,7 @@ function ownProperty(
   source: SourcePositions,
 ): GeneratedNode {
   const result = property(name, value, sourceSpan, source);
+
   return name === "__proto__"
     ? { ...result, computed: true, key: literal(name, sourceSpan, source) }
     : result;
@@ -2826,6 +2849,7 @@ function position(offset: number, positions: SourcePositions): Position {
   }
 
   const lineIndex = lineStartIndexAtOrBefore(positions.lineStarts, end);
+
   return { line: lineIndex + 1, column: end - positions.lineStarts[lineIndex]! };
 }
 

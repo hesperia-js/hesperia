@@ -91,21 +91,27 @@ function renderedPropCandidates(
   const visit = (value: unknown): void => {
     if (typeof value !== "object" || value === null || seen.has(value)) return;
     seen.add(value);
+
     if (Array.isArray(value)) {
       for (const child of value) visit(child);
       return;
     }
+
     const record = value as Record<string, unknown>;
+
     if (
       (record.kind === "component" || record.kind === "await-child") &&
       Array.isArray(record.props)
     ) {
       const component = value as RenderedComponent;
+
       for (const prop of component.props)
         if (prop.kind === "rendered") candidates.push({ component, prop });
     }
+
     for (const child of Object.values(record)) visit(child);
   };
+
   visit(module);
   return candidates;
 }
@@ -205,6 +211,7 @@ export async function analyzeComponentProps(
     rendered && renderedPropCandidates(rendered.module).length
       ? checkedDataEncoding(rendered.module, true)
       : undefined;
+
   if (
     rendered &&
     encoding !== undefined &&
@@ -220,13 +227,16 @@ export async function analyzeComponentProps(
       mapOffset,
       rendered.mapOffset,
     );
+
     if (encoding === checkedDataEncoding(rendered.module, true))
       checkedRenderedProps.set(result, { module: rendered.module, encoding, props });
   }
+
   if (includeStructuralEvidence)
     retainComponentPropsTypeEvidence(result, {
       byParameterStart: typeEvidenceByParameterStart,
     });
+
   return result;
 }
 
@@ -239,27 +249,34 @@ async function admitRenderedProps(
   canonicalOffset: (offset: number) => number,
 ): Promise<ReadonlySet<RenderedProp>> {
   const admitted = new Set<RenderedProp>();
+
   if (!trusted.helperSource) return admitted;
   const calls = new Map<number, CallExpressionNode[]>();
   const visit = (node: Node): void => {
     if (node.kind === SyntaxKind.CallExpression) {
       const call = node as CallExpressionNode;
+
       if (call.expression?.getText(source) === "__hesperia_component") {
         const start = checkingOffset(call.getStart(source));
+
         calls.set(start, [...(calls.get(start) ?? []), call]);
       }
     }
+
     node.forEachChild(visit);
   };
+
   visit(source);
 
   for (const { component, prop } of renderedPropCandidates(module)) {
     if (prop.name === "bind" || prop.name === "key") continue;
     const matches = calls.get(canonicalOffset(component.span.start));
+
     if (matches?.length !== 1) continue;
     const call = matches[0]!;
     const reference = call.arguments?.[0];
     const inputs = call.arguments?.[1];
+
     if (
       !reference ||
       !inputs ||
@@ -267,18 +284,25 @@ async function admitRenderedProps(
       checkingOffset(reference.getStart(source)) !== canonicalOffset(component.reference.span.start)
     )
       continue;
+
     const helper = call.expression && (await project.checker.getSymbolAtLocation(call.expression));
+
     if (!helper || helper.declarations.length === 0) continue;
     let trustedHelper = true;
+
     for (const handle of helper.declarations) {
       const declaration = await handle.resolve(project);
+
       if (!declaration || declaration.getSourceFile() !== trusted.helperSource)
         trustedHelper = false;
     }
+
     if (!trustedHelper) continue;
     const target = await project.checker.getTypeAtLocation(reference);
+
     if (!target) continue;
     const signatures = await project.checker.getSignaturesOfType(target, SignatureKind.Call);
+
     if (signatures.length !== 1) continue;
     const parameter = (await signatures[0]!.getParameters())[0];
     const mapped = parameter && (await project.checker.getTypeOfSymbol(parameter));
@@ -287,6 +311,7 @@ async function admitRenderedProps(
     const raw = branded && (await project.checker.getNonNullableType(branded));
     const member = raw && (await project.checker.getPropertyOfType(raw, prop.name));
     const expected = member && (await project.checker.getTypeOfSymbol(member));
+
     if (!expected || (await isCallable(project, expected))) continue;
     const properties = (inputs as Node & { readonly properties: readonly Node[] }).properties;
     const matching = properties.filter((property) => {
@@ -295,19 +320,27 @@ async function admitRenderedProps(
         checkingOffset(property.getStart(source)) !== canonicalOffset(prop.span.start)
       )
         return false;
+
       const name = (property as NamedDeclarationNode).name;
+
       if (!name || name.kind !== SyntaxKind.StringLiteral) return false;
       return (name as Node & { readonly text: string }).text === prop.name;
     });
+
     if (matching.length !== 1) continue;
     const initializer = (matching[0] as Node & { readonly initializer: Node }).initializer;
+
     if (checkingOffset(initializer.getStart(source)) !== canonicalOffset(prop.child.span.start))
       continue;
+
     const incoming = await project.checker.getTypeAtLocation(initializer);
+
     if (!incoming || incoming.flags & (TypeFlags.Any | TypeFlags.Unknown | TypeFlags.Never))
       continue;
+
     if (await project.checker.isTypeAssignableTo(incoming, expected)) admitted.add(prop);
   }
+
   return admitted;
 }
 
@@ -416,11 +449,13 @@ async function analyzeFunction(
   }
 
   const parameterStart = mapOffset(parameter.getStart(source));
+
   byParameterStart[String(parameterStart)] = {
     parameterStart,
     parameterEnd: mapOffset(parameter.end),
     props,
   };
+
   if (includeStructuralEvidence)
     typeEvidenceByParameterStart[String(parameterStart)] = { mapped: mappedEvidence };
 }
@@ -502,6 +537,7 @@ async function analyzePageFunction(
 
     if (includeStructuralEvidence) {
       const mappedType = await project.checker.getTypeOfSymbol(property);
+
       mappedEvidence[name] = mappedType
         ? await captureStructuralEvidence(project, mappedType)
         : { kind: "unproved", reason: "checker-error" };
@@ -513,6 +549,7 @@ async function analyzePageFunction(
 
     if (includeStructuralEvidence && authoredProperty) {
       const authoredPropType = await project.checker.getTypeOfSymbol(authoredProperty);
+
       authoredEvidence[name] = authoredPropType
         ? await captureStructuralEvidence(project, authoredPropType)
         : { kind: "unproved", reason: "checker-error" };
@@ -523,6 +560,7 @@ async function analyzePageFunction(
 
     if (!plain && name !== "bind" && authoredProperty) {
       const authoredType = await project.checker.getTypeOfSymbol(authoredProperty);
+
       callback = Boolean(authoredType && (await isCallable(project, authoredType)));
     }
 
@@ -540,11 +578,13 @@ async function analyzePageFunction(
   }
 
   const parameterStart = mapOffset(parameter.getStart(sourceFile));
+
   byParameterStart[String(parameterStart)] = {
     parameterStart,
     parameterEnd: mapOffset(parameter.end),
     props,
   };
+
   if (includeStructuralEvidence)
     typeEvidenceByParameterStart[String(parameterStart)] = {
       mapped: mappedEvidence,

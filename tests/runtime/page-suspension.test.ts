@@ -29,6 +29,7 @@ test("suspending a page retains its body state, pauses DOM work, and reruns effe
     bodies++;
     owner = current;
     const client = createClient(current);
+
     count = client.state(0);
 
     client.effect(() => {
@@ -87,6 +88,7 @@ test("a parked binding does not fault while suspended but still faults after res
   const App = defineComponent((current: Owner) => {
     owner = current;
     const bind = createClient(current).bind<HTMLInputElement>();
+
     input = element(current, "input", { bind });
     return input;
   });
@@ -118,6 +120,7 @@ test("an in-flight owner task settles while its page is suspended", async () => 
   const App = defineComponent((current: Owner) => {
     owner = current;
     const client = createClient(current);
+
     task = client.task(() => () => new Promise<string>((resolve) => (finish = resolve)));
     return element(current, "button", { "on:click": () => task.run() });
   });

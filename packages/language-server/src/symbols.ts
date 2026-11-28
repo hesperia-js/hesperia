@@ -32,6 +32,7 @@ export function extractDocumentSymbols(filename: string, source: string): Docume
             filename.toLowerCase().endsWith(".cts")
           ? "ts"
           : "js";
+
     program =
       node(
         parseSync(filename, source, {
@@ -80,6 +81,7 @@ function declarationSymbols(
       statement.type === "ExportDefaultDeclaration"
     ) {
       const declaration = node(statement.declaration);
+
       return declaration
         ? symbolsForDeclaration(declaration, source, lines, {
             rangeStart: statement.start,
@@ -115,6 +117,7 @@ function symbolsForDeclaration(
     case "FunctionDeclaration":
     case "TSDeclareFunction": {
       const id = node(declaration.id);
+
       return id
         ? [
             symbol(
@@ -133,6 +136,7 @@ function symbolsForDeclaration(
     case "ClassDeclaration":
     case "ClassExpression": {
       const id = node(declaration.id);
+
       return id
         ? [
             symbol(
@@ -150,6 +154,7 @@ function symbolsForDeclaration(
     }
     case "TSInterfaceDeclaration": {
       const id = node(declaration.id);
+
       return id
         ? [
             symbol(
@@ -167,6 +172,7 @@ function symbolsForDeclaration(
     }
     case "TSTypeAliasDeclaration": {
       const id = node(declaration.id);
+
       return id
         ? [
             symbol(
@@ -184,6 +190,7 @@ function symbolsForDeclaration(
     }
     case "TSEnumDeclaration": {
       const id = node(declaration.id);
+
       return id
         ? [
             symbol(
@@ -204,6 +211,7 @@ function symbolsForDeclaration(
     case "TSModuleDeclaration":
     case "TSGlobalDeclaration": {
       const id = node(declaration.id);
+
       return id
         ? [
             symbol(
@@ -240,6 +248,7 @@ function variableSymbols(
 
   if (bindings.length === 1 && id.type === "Identifier") {
     const binding = bindings[0]!;
+
     return [
       symbol(
         source,
@@ -384,6 +393,7 @@ function signatureSymbols(
 
 function enumMember(member: Syntax, source: string, lines: readonly number[]): DocumentSymbol[] {
   const id = node(member.id);
+
   return id
     ? [symbol(source, lines, keyName(id, source), SymbolKind.EnumMember, member, [], {}, id)]
     : [];
@@ -431,6 +441,7 @@ function objectProperty(
   if (!key) return [];
 
   const value = node(property.value);
+
   return [
     symbol(
       source,
@@ -471,6 +482,7 @@ function bindingSymbols(binding: Syntax, source: string): Binding[] {
 
         const value = node(property.value);
         const nested = value ? bindingSymbols(value, source) : [];
+
         return nested.map((item) => ({
           ...item,
           rangeStart: property.start,
@@ -501,6 +513,7 @@ function symbol(
     context.rangeEnd ?? item.end,
   );
   const selectionRange = makeRange(source, lines, selection.start, selection.end);
+
   return {
     name,
     kind,
@@ -540,6 +553,7 @@ function positionAt(source: string, lines: readonly number[], offset: number): P
   }
 
   const line = Math.max(0, low - 1);
+
   return { line, character: target - lines[line]! };
 }
 

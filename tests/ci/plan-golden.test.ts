@@ -73,6 +73,7 @@ function git(repo: string, args: readonly string[]): string {
 
   if (!result.success) {
     const detail = new TextDecoder().decode(result.stderr).trim();
+
     throw new Error(
       `Fixture Git command failed: git ${args.join(" ")}${detail ? `: ${detail}` : ""}`,
     );
@@ -131,6 +132,7 @@ function verifyGitHubOutput(
   const fields = new Map(
     lines.slice(1).map((line) => {
       const delimiter = line.indexOf("=");
+
       return [line.slice(0, delimiter), line.slice(delimiter + 1)];
     }),
   );
@@ -474,6 +476,7 @@ test("CLI handles inventory fallback, output publication failure, and release-ca
     const head = commit(root, "change mapped behavior a");
     const cliPath = resolve(import.meta.dir, "../../scripts/ci/plan-golden.ts");
     const childEnvironment = { ...process.env };
+
     delete childEnvironment.BUN_OPTIONS;
     delete childEnvironment.NODE_OPTIONS;
 
@@ -559,6 +562,7 @@ test("CLI handles inventory fallback, output publication failure, and release-ca
         stdout: "pipe",
         stderr: "pipe",
       });
+
       return {
         exitCode: result.exitCode,
         stdout: new TextDecoder().decode(result.stdout),

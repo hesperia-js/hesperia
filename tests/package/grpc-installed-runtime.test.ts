@@ -21,6 +21,7 @@ const hesperiaRoot = join(root, "packages/hesperia");
 
 function inside(parent: string, child: string): boolean {
   const path = relative(parent, child);
+
   return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
 }
 
@@ -35,12 +36,15 @@ async function run(command: string[], cwd: string, timeoutMs: number): Promise<s
     child.kill();
     forceTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
   }, timeoutMs);
+
   try {
     const [status, out, err] = await Promise.all([child.exited, stdout, stderr]);
+
     if (timedOut || status !== 0)
       throw new Error(
         `${command.join(" ")} ${timedOut ? "timed out" : `exited ${status}`}\n${out}\n${err}`,
       );
+
     return out;
   } finally {
     clearTimeout(timer);
@@ -53,17 +57,21 @@ test("installed gRPC archive serves the native HTTP/2 consumer", async () => {
   const workspaceReal = await realpath(workspace);
   const tempReal = await realpath(tmpdir());
   const checkoutReal = await realpath(root);
+
   if (
     !inside(tempReal, workspaceReal) ||
     inside(checkoutReal, workspaceReal) ||
     inside(workspaceReal, checkoutReal)
   )
     throw new Error(`Installed consumer is not in an independent temp directory: ${workspaceReal}`);
+
   const app = join(workspace, "consumer");
   let passed = false;
+
   try {
     await mkdir(app);
     let archive = await suppliedReleaseArchive(grpcRoot);
+
     if (!archive) {
       await run(
         [process.execPath, "pm", "pack", "--destination", workspace, "--ignore-scripts", "--quiet"],
@@ -71,13 +79,16 @@ test("installed gRPC archive serves the native HTTP/2 consumer", async () => {
         20_000,
       );
       const archives = (await readdir(workspace)).filter((name) => name.endsWith(".tgz"));
+
       if (archives.length !== 1) throw new Error(`Expected one archive, found ${archives.length}`);
       archive = join(workspace, archives[0]!);
     }
 
     let hesperiaArchive = await suppliedReleaseArchive(hesperiaRoot);
+
     if (!hesperiaArchive) {
       const before = new Set(await readdir(workspace));
+
       await run(
         [process.execPath, "pm", "pack", "--destination", workspace, "--ignore-scripts", "--quiet"],
         hesperiaRoot,
@@ -86,8 +97,10 @@ test("installed gRPC archive serves the native HTTP/2 consumer", async () => {
       const archives = (await readdir(workspace)).filter(
         (name) => name.endsWith(".tgz") && !before.has(name),
       );
+
       if (archives.length !== 1)
         throw new Error(`Expected one Hesperia archive, found ${archives.length}`);
+
       hesperiaArchive = join(workspace, archives[0]!);
     }
 
@@ -105,12 +118,16 @@ test("installed gRPC archive serves the native HTTP/2 consumer", async () => {
       "@hesperia/grpc": archive,
       hesperia: hesperiaArchive,
     };
+
     for (const name of names) {
       const version = versions[name];
+
       if (!version || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/u.test(version))
         throw new Error(`Expected exact ${name} version`);
+
       dependencies[name] = version;
     }
+
     await writeFile(
       join(app, "package.json"),
       `${JSON.stringify({ name: "grpc-installed-consumer", private: true, type: "module", dependencies }, null, 2)}\n`,
@@ -123,6 +140,7 @@ test("installed gRPC archive serves the native HTTP/2 consumer", async () => {
 
     const consumer = join(app, "tests/package/fixtures");
     const fixture = join(app, "tests/data/fixtures");
+
     await mkdir(consumer, { recursive: true });
     await mkdir(join(fixture, "grpc"), { recursive: true });
     await copyFile(
@@ -138,6 +156,7 @@ test("installed gRPC archive serves the native HTTP/2 consumer", async () => {
       join(fixture, "grpc-server.fixture.mjs"),
     );
     const config = join(app, "tsconfig.json");
+
     await writeFile(
       config,
       `${JSON.stringify({ compilerOptions: { target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext", strict: true, noEmitOnError: true, skipLibCheck: false, types: ["node"], rootDir: "tests", outDir: "emitted" }, files: ["tests/package/fixtures/grpc-native.mts", "tests/data/fixtures/grpc/service-all_pb.ts"] }, null, 2)}\n`,
@@ -149,8 +168,10 @@ test("installed gRPC archive serves the native HTTP/2 consumer", async () => {
     );
 
     const override = process.env.HESPERIA_GRPC_NODE;
+
     if (override && !isAbsolute(override))
       throw new Error("HESPERIA_GRPC_NODE must be an absolute path");
+
     const node = override ?? "node";
     const output = await run(
       [
@@ -167,13 +188,16 @@ test("installed gRPC archive serves the native HTTP/2 consumer", async () => {
       .map((line) => JSON.parse(line));
     const ready = records.filter((record) => record.event === "server-ready");
     const completed = records.filter((record) => record.event === "completed");
+
     expect(ready).toHaveLength(1);
     expect(completed).toHaveLength(1);
     const result = completed[0];
+
     expect(result.nodeVersion).toBe("22.23.2");
     if (override) expect(await realpath(result.nodeExecutable)).toBe(await realpath(override));
     expect(result.clientSessionState).toBe("closed");
     expect(result.serverCleanup).toBe("complete");
+
     for (const check of [
       "query-mutation-effects",
       "hesperia-owned-query",
@@ -185,7 +209,9 @@ test("installed gRPC archive serves the native HTTP/2 consumer", async () => {
       "early-return",
     ])
       expect(result.checks).toContain(check);
+
     const installed = await realpath(join(app, "node_modules/@hesperia/grpc"));
+
     expect(inside(await realpath(app), installed)).toBe(true);
     expect(await realpath(fileURLToPath(result.moduleResolutions.hesperiaGrpc))).toBe(
       await realpath(join(installed, "dist/index.js")),
@@ -194,6 +220,7 @@ test("installed gRPC archive serves the native HTTP/2 consumer", async () => {
       await realpath(join(installed, "dist/native.js")),
     );
     const installedHesperia = await realpath(join(app, "node_modules/hesperia"));
+
     expect(inside(await realpath(app), installedHesperia)).toBe(true);
     expect(await realpath(fileURLToPath(result.moduleResolutions.hesperiaRuntime))).toBe(
       await realpath(join(installedHesperia, "dist/runtime/index.js")),
@@ -202,6 +229,7 @@ test("installed gRPC archive serves the native HTTP/2 consumer", async () => {
       await realpath(join(installedHesperia, "dist/aeolia/index.js")),
     );
     const installedAeolia = await realpath(fileURLToPath(result.moduleResolutions.aeolia));
+
     expect(inside(await realpath(app), installedAeolia)).toBe(true);
     const receipt = {
       hesperiaArchiveIntegrity: archiveIntegrity(await readFile(hesperiaArchive)),
@@ -215,13 +243,18 @@ test("installed gRPC archive serves the native HTTP/2 consumer", async () => {
       serverCleanup: result.serverCleanup,
     };
     const evidenceRoot = process.env.HESPERIA_GRPC_PACKAGE_EVIDENCE_DIR;
+
     if (evidenceRoot) {
       if (!isAbsolute(evidenceRoot))
         throw new Error("HESPERIA_GRPC_PACKAGE_EVIDENCE_DIR must be absolute");
+
       const evidenceRootReal = await realpath(evidenceRoot);
+
       if (evidenceRootReal === workspaceReal || inside(workspaceReal, evidenceRootReal))
         throw new Error("Installed evidence directory must be outside the consumer workspace");
+
       const evidence = await mkdtemp(join(evidenceRootReal, "grpc-installed-"));
+
       await copyFile(archive, join(evidence, "hesperia-grpc.tgz"));
       await copyFile(hesperiaArchive, join(evidence, "hesperia.tgz"));
       await copyFile(join(app, "package.json"), join(evidence, "package.json"));
@@ -232,6 +265,7 @@ test("installed gRPC archive serves the native HTTP/2 consumer", async () => {
       );
       console.info(`Installed gRPC evidence: ${evidence}`);
     }
+
     console.info(`Installed gRPC receipt: ${JSON.stringify(receipt)}`);
     passed = true;
   } finally {

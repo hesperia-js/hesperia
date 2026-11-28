@@ -92,6 +92,7 @@ test("editor mappings retain authored identity across source order and transform
               filename: source,
               content: source === vendor ? injected : input.current,
             }));
+
             return {
               code: `${injected}\n${input.current}`,
               map: pluginSourceMap(
@@ -194,6 +195,7 @@ test("editor mappings retain authored identity across source order and transform
             span,
           }))
           .sort((left, right) => left.filename.localeCompare(right.filename));
+
         return {
           hover: hover?.type,
           definitions: definitions.map((location) => ({

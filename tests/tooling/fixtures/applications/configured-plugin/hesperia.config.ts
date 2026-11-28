@@ -8,6 +8,7 @@ export default defineConfig({
         palette: async (input) => {
           const contents = await input.file.blob.text();
           const label = input.importer.endsWith("app.tsx") ? "app" : "detail";
+
           return {
             declaration: {
               code: "declare const value: string; export default value;",

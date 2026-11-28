@@ -114,6 +114,7 @@ describe("project commands", () => {
     );
 
     const missing = await captureRejection(prepareBuild(root));
+
     expect(missing).toBeInstanceOf(ProjectError);
     expect(
       (missing as ProjectError).diagnostics.some((item) => item.code === "HES-ROUTE-PLAN"),
@@ -129,6 +130,7 @@ export default route({ render: {
     );
 
     const unsupported = await captureRejection(prepareBuild(root));
+
     expect(unsupported).toBeInstanceOf(ProjectError);
     expect(
       (unsupported as ProjectError).diagnostics.some((item) => item.code === "HES-ROUTE-PLAN"),
@@ -144,6 +146,7 @@ export default route({ load: () => "server", render: {
     );
 
     const request = await captureRejection(prepareBuild(root));
+
     expect(request).toBeInstanceOf(ProjectError);
     expect(
       (request as ProjectError).diagnostics.some((item) => item.code === "HES-STATIC-REQUEST"),
@@ -173,6 +176,7 @@ export default route({ load: () => "server", render: {
     );
 
     const failure = await captureRejection(prepareBuild(root));
+
     expect(failure).toBeInstanceOf(ProjectError);
     expect((failure as ProjectError).diagnostics).toEqual(
       expect.arrayContaining([
@@ -242,11 +246,13 @@ export default route({ load: () => "server", render: {
         const page = resource.host.handle(
           new Request("http://localhost/dashboard/items/42", { headers: { accept: "text/html" } }),
         );
+
         await page?.text();
 
         const missing = resource.host.handle(
           new Request("http://localhost/dashboard/missing", { headers: { accept: "text/html" } }),
         );
+
         await missing?.text();
 
         const publicFile = withPublic
@@ -275,6 +281,7 @@ export default route({ load: () => "server", render: {
       }
 
       const damaged = { ...built, files: new Map(built.files) };
+
       damaged.files.set(
         "/assets/static-routing.json",
         new Blob(["changed"], { type: "application/json" }),
@@ -315,6 +322,7 @@ export default route({ load: () => "server", render: {
 
           expect(html.status).toBe(200);
           const document = await html.text();
+
           expect(document).toContain(
             '<script type="module" crossorigin="use-credentials" src="https://assets.example.test/release/startup.js">',
           );
@@ -340,6 +348,7 @@ export default route({ load: () => "server", render: {
             join(output, stored.assetDirectory, "..", "static", "index.html"),
             "utf8",
           );
+
           expect(staticDocument).toBe(document);
           expect(
             await (await fetch(new URL("/moved/robots.txt", deployedPreview.url))).text(),
@@ -417,6 +426,7 @@ export default route({ load: () => "server", render: {
 
   test("browser preview serves retained assets at their published paths", async () => {
     const root = await temporaryProject();
+
     await mkdir(join(root, "src/routes"), { recursive: true });
     await writeBrowserStaticPolicy(root);
     await mkdir(join(root, "public"));
@@ -430,10 +440,12 @@ export default route({ load: () => "server", render: {
     );
     const page = join(root, "src/routes/+page.tsx");
     const robots = join(root, "public/robots.txt");
+
     await writeFile(page, "export default function Page() { return <main>Original page</main>; }");
     await writeFile(robots, "original public file");
 
     const first = await prepareBuild(root);
+
     await writeBuild(root, first, { generatedAssets: { baseURL: "/first-assets" } });
     await writeFile(
       page,
@@ -453,6 +465,7 @@ export default route({ load: () => "server", render: {
 
     try {
       const response = await fetch(new URL(earlierPath, original.url));
+
       expect(response.status).toBe(200);
       expect(await response.arrayBuffer()).toEqual(
         await first.files.get(earlierModule.path)!.arrayBuffer(),
@@ -468,6 +481,7 @@ export default route({ load: () => "server", render: {
       const response = await fetch(
         new URL("/second-assets" + second.hosting.startupAsset, replacement.url),
       );
+
       expect(response.status).toBe(200);
       expect(await response.arrayBuffer()).toEqual(
         await second.files.get(second.hosting.startupAsset)!.arrayBuffer(),
@@ -491,6 +505,7 @@ export default route({ load: () => "server", render: {
     }
 
     const collidingRoute = join(root, "src/routes", earlierPath.slice(1));
+
     await mkdir(collidingRoute, { recursive: true });
     await writeFile(
       join(collidingRoute, "+page.tsx"),
@@ -508,13 +523,16 @@ export default route({ load: () => "server", render: {
     const overlappingPreview = await captureRejection(
       previewProject(root, 0, { mountURL: earlierPath }).then((preview) => preview.close()),
     );
+
     expect(overlappingPreview).toMatchObject({
       message: `Retained generated asset collides with application path: ${earlierPath}`,
     });
 
     const retainedPreview = await previewProject(root, 0);
+
     try {
       const response = await fetch(new URL(earlierPath, retainedPreview.url));
+
       expect(response.status).toBe(200);
       expect(await response.arrayBuffer()).toEqual(
         await first.files.get(earlierModule.path)!.arrayBuffer(),
@@ -525,6 +543,7 @@ export default route({ load: () => "server", render: {
 
     await writeFile(join(root, "hesperia.config.json"), "{}");
     const legacy = await prepareBuild(root);
+
     await expect(writeBuild(root, legacy)).rejects.toThrow(
       "Retained generated asset collides with application path",
     );
@@ -535,17 +554,21 @@ export default route({ load: () => "server", render: {
       JSON.stringify({ mountURL: "/legacy-next" }),
     );
     const disjointLegacy = await prepareBuild(root);
+
     await writeBuild(root, disjointLegacy);
     const legacyPreview = await previewProject(root, 0);
+
     try {
       const page = await fetch(new URL("/legacy-next", legacyPreview.url), {
         headers: { accept: "text/html" },
       });
+
       await page.text();
       expect(page.status).toBe(200);
       expect(page.headers.get("content-type")).toContain("text/html");
 
       const retained = await fetch(new URL(earlierPath, legacyPreview.url));
+
       expect(retained.status).toBe(200);
       expect(await retained.arrayBuffer()).toEqual(
         await first.files.get(earlierModule.path)!.arrayBuffer(),
@@ -557,6 +580,7 @@ export default route({ load: () => "server", render: {
     const overlappingLegacyPreview = await captureRejection(
       previewProject(root, 0, { mountURL: "/" }).then((preview) => preview.close()),
     );
+
     expect(overlappingLegacyPreview).toMatchObject({
       message: expect.stringContaining("Retained generated asset collides with application path"),
     });
@@ -672,6 +696,7 @@ export default route({ load: () => "server", render: {
         new Response(child.stdout).text(),
         new Response(child.stderr).text(),
       ]);
+
       return { code, stdout, stderr };
     };
 
@@ -1481,6 +1506,7 @@ export default function App() {
         port: 0,
         report: (message) => reports.push(message),
       });
+
       mark("initial-build-complete");
 
       const abort = new AbortController();
@@ -1690,6 +1716,7 @@ export default function App() {
       const events = await fetch(new URL("/_hesperia/events", server.url), {
         signal: AbortSignal.any([abort.signal, AbortSignal.timeout(10000)]),
       });
+
       reader = events.body!.getReader();
 
       await reader.read();

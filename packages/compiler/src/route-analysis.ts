@@ -350,6 +350,7 @@ export function analyzeRouteModule(
 
   const requestMembers: RouteRequestMembers = { version: 1, declarations };
   const renderExtraction = extractRouteRenderPolicy(root, configuration);
+
   diagnostics.push(...renderExtraction.diagnostics);
 
   if (renderExtraction.diagnostics.length > 0)
@@ -400,6 +401,7 @@ export function analyzeRouteModule(
     return resultWithDiagnostics(root, diagnostics, tagProjection, renderPolicy, requestMembers);
 
   const artifact = analysis.artifact(entry);
+
   return {
     ...resultWithDiagnostics(root, diagnostics, tagProjection, renderPolicy, requestMembers),
     artifact,
@@ -426,6 +428,7 @@ function extractRouteRenderPolicy(
 
   if (renderProperties.length > 1) {
     const duplicate = renderProperties[1]!;
+
     diagnostics.push(
       routeDiagnostic(
         "HES-ROUTE-RENDER",
@@ -584,6 +587,7 @@ function extractRouteTagProjection(
   configuration: Extract<CanonicalExpression, { kind: "object" }>,
 ): RouteTagProjectionV1 {
   const unproved = () => Object.freeze({ version: 1 as const, kind: "unproved" as const });
+
   if (
     root.module.diagnostics.some(
       (diagnostic) =>
@@ -605,9 +609,11 @@ function extractRouteTagProjection(
     (property): property is CanonicalKeyedProperty =>
       property.kind === "property" && !property.computed && property.key === "tags",
   );
+
   if (declarations.length === 0) return Object.freeze({ version: 1, kind: "none" });
 
   const declaration = declarations[0];
+
   if (
     declarations.length !== 1 ||
     !declaration ||
@@ -619,6 +625,7 @@ function extractRouteTagProjection(
     return unproved();
 
   const tags = new Set<string>();
+
   for (const element of declaration.value.elements) {
     if (
       !element ||
@@ -627,6 +634,7 @@ function extractRouteTagProjection(
       !element.value
     )
       return unproved();
+
     tags.add(element.value);
   }
 
@@ -843,6 +851,7 @@ class SourceTable {
         const startUpper = module.mapOffset(expression.span.start, LEAST_UPPER_BOUND);
         const endLower = module.mapOffset(expression.span.end);
         const endUpper = module.mapOffset(expression.span.end, LEAST_UPPER_BOUND);
+
         return (
           (startLower === span.start ||
             (startLower < span.start && startUpper > span.start && startUpper < span.end)) &&
@@ -1521,6 +1530,7 @@ function parseModule(
     return emptyModule(filename, diagnostics, mapper, normalized.code, normalized.map);
 
   const normalizedModule = canonicalize(parsed.program, filename);
+
   return {
     module: { ...normalizedModule, diagnostics: [...diagnostics, ...normalizedModule.diagnostics] },
     debug: mapDebug(canonicalDebugSidecar(normalizedModule), mapper),
@@ -1544,6 +1554,7 @@ function emptyModule(
   normalizedMap: unknown;
 } {
   const module: CanonicalModule = { version: 1, filename, body: [], diagnostics };
+
   return {
     module,
     debug: canonicalDebugSidecar(module),
@@ -1653,11 +1664,13 @@ function projectStatement(
     const specifiers = statement.specifiers.filter(
       (item) => item.bindingId && selected.has(item.bindingId),
     );
+
     return specifiers.length ? [{ ...statement, specifiers }] : [];
   }
 
   if (statement.kind === "export-list") {
     const specifiers = statement.specifiers.filter((item) => selectedExports.has(item.exported));
+
     return specifiers.length ? [{ ...statement, specifiers }] : [];
   }
 
@@ -1672,6 +1685,7 @@ function projectStatement(
       return [statement];
 
     const projected = projectStatement(statement.declaration, selected, selectedExports);
+
     return projected.map((declaration) => ({
       kind: "export",
       exportKind: statement.exportKind,
@@ -1691,6 +1705,7 @@ function projectStatement(
     const declarations = statement.declarations.filter((item) =>
       patternBindingIds(item.pattern).some((id) => selected.has(id)),
     );
+
     return declarations.length ? [{ ...statement, declarations }] : [];
   }
 
@@ -2115,6 +2130,7 @@ function isServerImport(source: string): boolean {
 
 function moduleSpan(module: CanonicalModule): SourceSpan {
   const first = module.body[0];
+
   return first?.span ?? { start: 0, end: 0 };
 }
 
@@ -2160,6 +2176,7 @@ function authoredRouteSpan(
               if (!property || property.type !== "Property") return false;
 
               const key = rawNode(property.key);
+
               return key?.name === "guard" || key?.value === "guard";
             })
         : undefined;
@@ -2170,6 +2187,7 @@ function authoredRouteSpan(
             .find((property) => {
               if (!property || property.type !== "Property") return false;
               const key = rawNode(property.key);
+
               return key?.name === "render" || key?.value === "render";
             })
         : undefined;
@@ -2180,6 +2198,7 @@ function authoredRouteSpan(
             .filter((property) => {
               if (!property || property.type !== "Property") return false;
               const key = rawNode(property.key);
+
               return key?.name === renderField || key?.value === renderField;
             })[occurrence]
         : undefined;
@@ -2191,6 +2210,7 @@ function authoredRouteSpan(
             .find((property) => {
               if (!property || property.type !== "Property") return false;
               const key = rawNode(property.key);
+
               return key?.name === renderField || key?.value === renderField;
             })
         : undefined;
@@ -2208,6 +2228,7 @@ function authoredRouteSpan(
                 : part === "render"
                   ? rawNode(render?.value)
                   : rawNode(field?.value);
+
     return selected && typeof selected.start === "number" && typeof selected.end === "number"
       ? { start: selected.start, end: selected.end }
       : undefined;
@@ -2254,6 +2275,7 @@ function authoredSpan(module: ModuleSnapshot, span: SourceSpan): SourceSpan {
 
   const start = module.mapOffset(span.start);
   const mappedEnd = module.mapOffset(span.end);
+
   return {
     start,
     end: mappedEnd > start ? mappedEnd : start + Math.max(0, span.end - span.start),
@@ -2342,6 +2364,7 @@ function failedRouteResult(
   diagnostics: readonly RouteDiagnostic[],
 ): RouteAnalysisResult {
   const module: CanonicalModule = { version: 1, filename, body: [], diagnostics };
+
   return { filename, ir: module, debug: canonicalDebugSidecar(module), diagnostics };
 }
 
@@ -2385,6 +2408,7 @@ function authoredOffset(
   const trace = new TraceMap(map as SourceMapInput);
   const generatedLines = lineStarts(generated);
   const sourceLines = lineStarts(source);
+
   return (offset, bias) => {
     let low = 0;
     let high = generatedLines.length;
@@ -2401,6 +2425,7 @@ function authoredOffset(
       column: offset - generatedLines[low]!,
       ...(bias === undefined ? {} : { bias }),
     });
+
     return original.line === null || original.column === null
       ? 0
       : (sourceLines[original.line - 1] ?? source.length) + original.column;

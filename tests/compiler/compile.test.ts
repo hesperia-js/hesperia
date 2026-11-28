@@ -43,6 +43,7 @@ export function App() {
   return <Slot icon={<svg id="named-icon"><path d="M0 0 1 1" /></svg>} />;
 }`;
     const compiled = await compile(source, { filename: "named-rendered-props.tsx" });
+
     expect(compiled.diagnostics).toEqual([]);
     const generated = await importGenerated<{ App: Component<Record<string, never>> }>(
       compiled.code,
@@ -50,6 +51,7 @@ export function App() {
     const window = new Window();
     const target = window.document.createElement("div");
     let application: ReturnType<typeof mount> | undefined;
+
     try {
       application = mount(target as unknown as Element, generated.App, {});
       await application.settled();
@@ -69,6 +71,7 @@ function Slot(props: ${parameter}) { return null; }
 export function App() { return <Slot icon={<svg />} />; }`,
         { filename: "unproved-rendered-prop.tsx" },
       );
+
       expect(compiled.diagnostics).toContainEqual(
         expect.objectContaining({ code: "HES-EXPRESSION" }),
       );
@@ -82,6 +85,7 @@ export function App() { return <Slot icon={<svg />} />; }`,
       { filename: "raw-rendered-prop.tsx" },
     );
     const emitted = emitAnalysis({ ...raw, result: { ...raw.result, diagnostics: [] } });
+
     expect(emitted.diagnostics).toContainEqual(expect.objectContaining({ code: "HES-EXPRESSION" }));
     expect(emitted.code).toBe("");
   });
@@ -93,11 +97,14 @@ function Slot(props: Component.Props<{ icon: Rendered }>) { return <main>{props.
 export function App() { return <Slot icon={<svg />} />; }`;
     const session = await openCheckingProject([{ filename, source }]);
     const analysis = session.analyses.get(filename);
+
     expect(analysis).toBeDefined();
     if (!analysis) throw new Error("The checking session did not retain its analysis.");
+
     try {
       expect(emitAnalysis(analysis).diagnostics).toEqual([]);
       const copied = emitAnalysis({ ...analysis });
+
       expect(copied.diagnostics).toContainEqual(
         expect.objectContaining({ code: "HES-EXPRESSION" }),
       );
@@ -105,7 +112,9 @@ export function App() { return <Slot icon={<svg />} />; }`;
     } finally {
       await session.dispose();
     }
+
     const retired = emitAnalysis(analysis);
+
     expect(retired.diagnostics).toContainEqual(expect.objectContaining({ code: "HES-EXPRESSION" }));
     expect(retired.code).toBe("");
   });

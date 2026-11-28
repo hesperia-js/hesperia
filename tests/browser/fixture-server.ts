@@ -50,6 +50,7 @@ function drainProcessOutput(
 ): Promise<void> {
   if (!stream) {
     const error = "The native GraphQL child did not expose a piped output stream";
+
     output.error = error;
     onEnd();
 
@@ -558,6 +559,7 @@ const importedMarkupFiles = new Map(
     return [asset.path, file] as const;
   }),
 );
+
 startupJournal.mark("host-create-begin");
 
 const importedMarkupHost = await createHost(
@@ -618,6 +620,7 @@ function shutdownBrowserFixture(): Promise<void> {
     }
 
     if (errors.length === 1) throw errors[0];
+
     if (errors.length > 1)
       throw new AggregateError(errors, "Browser fixture cleanup was incomplete");
   })();
@@ -639,6 +642,7 @@ async function initializeNativeGraphQLFixture(): Promise<{
   readonly ready: NativeGraphQLReady;
 }> {
   const fixture = startNativeGraphQLFixture();
+
   nativeGraphQLFixture = fixture;
   const ready = await waitForNativeGraphQLReady(fixture);
 
@@ -740,6 +744,7 @@ const browserServerOptions = {
           [".woff2", "font/woff2"],
         ]).get(extension) ||
         "application/octet-stream";
+
       return new Response(importedMarkupFile, { headers: { "content-type": contentType } });
     }
 

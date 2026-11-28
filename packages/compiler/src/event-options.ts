@@ -374,6 +374,7 @@ export function analyzeNativeEventOptions(module: CanonicalModule): {
   ): boolean => {
     if (expression.kind === "sequence") {
       const value = expression.expressions.at(-1);
+
       return value ? unwrap(value, element, eventName, attributeSpan, fromHelper, seen) : false;
     }
 
@@ -619,6 +620,7 @@ export function analyzeNativeEventOptions(module: CanonicalModule): {
     }
 
     const value = literalValue(expression.property);
+
     return typeof value === "string" ? value : null;
   }
 }
@@ -722,6 +724,7 @@ function propertyKey(
   }
 
   const value = typeof property.key === "string" ? property.key : literalValue(property.key);
+
   return typeof value === "string" ? value : null;
 }
 
@@ -741,6 +744,7 @@ function isExpression(value: unknown): value is CanonicalExpression {
   if (typeof value !== "object" || value === null || !("kind" in value)) return false;
 
   const candidate = value as Parameters<typeof isCanonicalChild>[0];
+
   return candidate.kind !== "block" && !isCanonicalChild(candidate);
 }
 
@@ -780,6 +784,7 @@ function visit(value: unknown, callback: (value: Record<string, any>) => void): 
 
 function dedupeDiagnostics(diagnostics: readonly CompilerDiagnostic[]): CompilerDiagnostic[] {
   const seen = new Set<string>();
+
   return diagnostics.filter((item) => {
     const key = `${item.code}:${item.message}:${item.span?.start ?? -1}:${item.span?.end ?? -1}`;
 
@@ -795,6 +800,7 @@ function dedupeContexts(
   contexts: readonly NativeEventHandlerContext[],
 ): NativeEventHandlerContext[] {
   const seen = new Set<string>();
+
   return contexts.filter((item) => {
     const key = `${item.span.start}:${item.span.end}:${item.attributeSpan.start}:${item.attributeSpan.end}:${item.tag}:${item.namespace}:${item.eventName}`;
 

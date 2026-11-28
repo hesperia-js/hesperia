@@ -36,6 +36,7 @@ export function postcss(options: PostcssOptions): Plugin {
       });
       const diagnostics = result.warnings().map((warning): PluginDiagnostic => {
         const location = warningOrigin(warning, input);
+
         return {
           severity: "warning",
           message: `${warning.text}${location.unavailable ? " (Original CSS source location unavailable after plugin transform.)" : ""}`,
@@ -44,6 +45,7 @@ export function postcss(options: PostcssOptions): Plugin {
       });
       const watch = dependencyWatches(result.messages, input);
       const map = result.map?.toJSON() as unknown as PluginSourceMap | undefined;
+
       return {
         css: result.css,
         ...(map ? { map } : {}),
@@ -161,6 +163,7 @@ function traceableSourceMap(map: PluginSourceMap, mapBase: string): SourceMapInp
   const { sourceRoot, ...withoutSourceRoot } = map as PluginSourceMap & {
     readonly sourceRoot?: string;
   };
+
   return {
     ...withoutSourceRoot,
     sources: map.sources.map((source) => traceableSourceName(source, sourceRoot, mapBase)),
@@ -191,6 +194,7 @@ function traceableSourceName(
 
   if (sourceRoot && /^[a-z][a-z\d+.-]*:/iu.test(sourceRoot)) {
     const root = new URL(sourceRoot);
+
     root.pathname = root.pathname.endsWith("/") ? root.pathname : `${root.pathname}/`;
     root.search = "";
     root.hash = "";
@@ -203,6 +207,7 @@ function traceableSourceName(
 function offsetPosition(source: string, offset: number): { line: number; column: number } {
   const before = source.slice(0, Math.max(0, offset));
   const lastLine = before.lastIndexOf("\n");
+
   return { line: before.split("\n").length, column: offset - lastLine - 1 };
 }
 
@@ -276,6 +281,7 @@ function absoluteMappedFilename(source: string): string | undefined {
 function samePath(first: string, second: string): boolean {
   const left = resolve(first).replaceAll("\\", "/");
   const right = resolve(second).replaceAll("\\", "/");
+
   return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 

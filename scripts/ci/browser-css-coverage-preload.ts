@@ -57,6 +57,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
+
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
@@ -70,6 +71,7 @@ function packagePath(path: string): string | undefined {
   }
 
   const relativePath = relative(repoPath, absolute).split(sep).join("/");
+
   return packageNames.find((name) => relativePath.startsWith(`packages/${name}/dist/`));
 }
 
@@ -232,6 +234,7 @@ function readConfig(): BrowserCoverageConfig | undefined {
 
 function exactPathFilter(paths: readonly string[]): RegExp {
   const escaped = paths.map((path) => path.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
+
   return new RegExp(`^(?:${escaped.join("|")})$`, process.platform === "win32" ? "iu" : "u");
 }
 
@@ -390,11 +393,13 @@ function importedMarkupExpectedEntrypoints(fixtureRoot: string): readonly (reado
       .update(String(index))
       .digest("hex")
       .slice(0, 16);
+
     return [resolve(dirname(markupFilename), `.hesperia-inline-${token}.css`)];
   });
   const nativeStyles = ["src/native.css", "src/native-nested.css"].map((path) => [
     resolve(root, path),
   ]);
+
   return [
     ...generatedStyles,
     ...nativeStyles,
@@ -417,6 +422,7 @@ export async function withBrowserCssCoverageFixtureBuild<T>(
     requiredSourcePaths: [],
     build,
   });
+
   return result;
 }
 

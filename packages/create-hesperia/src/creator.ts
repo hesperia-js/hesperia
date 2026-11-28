@@ -221,12 +221,14 @@ async function writeOwnedFile(
   retirement: CreatorRetirementObservation,
 ): Promise<void> {
   const file = await open(filename, "wx");
+
   retirement.filePending = true;
 
   let identity: PathIdentity | undefined;
 
   try {
     const created = await file.stat({ bigint: true });
+
     identity = { device: created.dev, inode: created.ino };
     ownedFiles.set(filename, {
       ...identity,
@@ -416,6 +418,7 @@ async function installDependencies(
     resolveAbort = resolveAbortPromise;
   });
   const onAbort = (): void => resolveAbort();
+
   signal.addEventListener("abort", onAbort, { once: true });
 
   try {
@@ -431,6 +434,7 @@ async function installDependencies(
 
     if (outcome.status === "cancelled") {
       const stop = await stopInstallation(installation);
+
       retirement.installerPending = !stop.reaped || stop.pendingResource;
       return { status: "cancelled", stop };
     }
@@ -491,6 +495,7 @@ export async function executeCreator(
 
       const source = join(creatorTemplateRoot, template.variant, template.assetPath);
       const sourceContents = await readFile(source);
+
       checkCancellation(options.signal);
       let contents: string | Uint8Array = sourceContents;
 

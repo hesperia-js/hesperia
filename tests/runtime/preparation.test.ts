@@ -26,12 +26,14 @@ function root(): { target: Element; runtime: RuntimeRoot } {
   windows.push(window);
 
   const target = window.document.body as unknown as Element;
+
   return { target, runtime: createRuntimeRoot(target, { development: false }) };
 }
 
 test("preparation keeps the committed DOM untouched until installation", async () => {
   const { target, runtime } = root();
   const existing = target.ownerDocument.createElement("p");
+
   existing.textContent = "committed";
 
   target.append(existing);
@@ -71,6 +73,7 @@ test("preparation keeps the committed DOM untouched until installation", async (
 test("disposing a detached candidate removes its owned nodes without touching committed DOM", () => {
   const { target, runtime } = root();
   const existing = target.ownerDocument.createElement("p");
+
   existing.textContent = "committed";
 
   target.append(existing);
@@ -100,6 +103,7 @@ test("disposing a detached candidate removes its owned nodes without touching co
 test("render failures dispose the candidate and leave existing DOM in place", () => {
   const { target, runtime } = root();
   const existing = target.ownerDocument.createElement("p");
+
   existing.textContent = "committed";
 
   target.append(existing);

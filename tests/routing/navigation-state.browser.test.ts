@@ -24,6 +24,7 @@ beforeAll(async () => {
       target: "browser",
       format: "esm",
     });
+
     return [stateBuild, historyBuild] as const;
   };
 
@@ -188,6 +189,7 @@ for (const engine of [chromium, firefox, webkit]) {
               };
             }
           ).navigationStateFixture;
+
           return {
             classic: window.history.state,
             restoredAtStartup: fixture.restoredAtStartup,
@@ -263,6 +265,7 @@ for (const engine of [chromium, firefox, webkit]) {
               navigationStateFixture: { popstateStates: unknown[] };
             }
           ).navigationStateFixture;
+
           return {
             classic: window.history.state,
             popstate: fixture.popstateStates.at(-1),
@@ -609,6 +612,7 @@ for (const engine of [chromium, firefox, webkit]) {
             };
           }
         ).navigationStateFixture;
+
         return {
           classic: window.history.state,
           navigation: fixture.navigation.currentEntry?.getState(),
@@ -641,6 +645,7 @@ for (const engine of [chromium, firefox, webkit]) {
             };
           }
         ).navigationStateFixture;
+
         return {
           classic: window.history.state,
           navigation: fixture.navigation.currentEntry?.getState(),
@@ -668,6 +673,7 @@ for (const engine of [chromium, firefox, webkit]) {
             navigationStateFixture: { navigation: Navigation; popstateStates: unknown[] };
           }
         ).navigationStateFixture;
+
         return {
           classic: window.history.state,
           navigation: fixture.navigation.currentEntry?.getState(),
@@ -773,6 +779,7 @@ for (const engine of [chromium, firefox, webkit]) {
             navigationStateFixture: { popstateStates: unknown[] };
           }
         ).navigationStateFixture;
+
         return {
           classic: window.history.state,
           popstate: fixture.popstateStates.at(-1),
@@ -814,6 +821,7 @@ for (const engine of [chromium, firefox, webkit]) {
             navigationStateFixture: { popstateStates: unknown[] };
           }
         ).navigationStateFixture;
+
         return {
           classic: window.history.state,
           popstate: fixture.popstateStates.at(-1),
@@ -864,6 +872,7 @@ for (const engine of [chromium, firefox, webkit]) {
             };
           }
         ).navigationStateFixture;
+
         return fixture.restoredAtStartup;
       });
 

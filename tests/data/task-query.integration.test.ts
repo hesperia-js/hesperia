@@ -137,6 +137,7 @@ describe("owner-bound data primitives", () => {
     const deferred: Array<(value: string) => void> = [];
     let task!: ReturnType<typeof createTask<string, string>>;
     let factoryRuns = 0;
+
     task = createTask(current, ({ signal }) => {
       factoryRuns += 1;
 
@@ -262,6 +263,7 @@ describe("owner-bound data primitives", () => {
 
   test("task dispatch is rejected during a component body and owner disposal cancels a run", async () => {
     const current = owner();
+
     current.executingBody = true;
     const task = createTask(
       current,
@@ -442,6 +444,7 @@ describe("owner-bound data primitives", () => {
 
   test("resuming an owner restarts every pending query wait", async () => {
     const current = owner();
+
     current.context.scheduler = new Scheduler(current);
     let resolveFirst!: (value: string) => void;
     let resolveSecond!: (value: string) => void;
@@ -477,6 +480,7 @@ describe("owner-bound data primitives", () => {
       const resumed: string[] = [];
       const firstWait = Promise.resolve(firstView).then((accessor) => resumed.push(accessor()));
       const secondWait = Promise.resolve(secondView).then((accessor) => resumed.push(accessor()));
+
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       current.suspend();
@@ -902,6 +906,7 @@ describe("owner-bound data primitives", () => {
       const valueMode = client.state(false);
       const api = createContractApi(current, graph, contract);
       const view = api.query(undefined);
+
       setValueMode = (enabled) => valueMode.set(enabled);
       return asyncBoundary(
         current,
@@ -910,6 +915,7 @@ describe("owner-bound data primitives", () => {
         (content) =>
           text(content, () => {
             const status = view.status();
+
             return valueMode() ? `${status}:${view.value()}` : status;
           }),
       );

@@ -287,6 +287,7 @@ export class Router {
 
     const matchesInvalidRoute = (url: URL): boolean => {
       const routeId = developmentRouteId(this, url);
+
       return (
         url.origin === options.window.location.origin &&
         routeId !== undefined &&
@@ -351,6 +352,7 @@ export class Router {
     if (this.active) return this.active.state;
 
     const entry = this.history.read();
+
     return entry ? entry.state : this.options.window.history.state;
   }
 
@@ -681,6 +683,7 @@ export class Router {
             : destinationEntry;
         const appliedEntry =
           inPlace && options.history !== "none" ? this.applyHistory(history, nextEntry) : nextEntry;
+
         activeAlias.url = url.href;
         activeAlias.state = appliedEntry ? appliedEntry.state : history.state;
         activeAlias.entry = appliedEntry;
@@ -928,6 +931,7 @@ export class Router {
 
         params = snapshotParams(candidate.params);
         const query = readonlyQueryParams(new URL(selected).search);
+
         context = () =>
           Object.freeze({
             url: new URL(selected),
@@ -1020,6 +1024,7 @@ export class Router {
           ),
         );
         const outgoing = this.active;
+
         parkedOutgoing = outgoing;
         const shared = outgoing
           ? new Set(
@@ -1133,6 +1138,7 @@ export class Router {
           committed.dispose(reason);
         },
       };
+
       this.active = nextActive;
       this.pending = undefined;
       let cleanupError: unknown;
@@ -1271,6 +1277,7 @@ export class Router {
           readRenderFailure = readFailure;
         },
       );
+
       return { ...result, afterCommit, readRenderFailure };
     } catch (error) {
       if (signal.aborted) return { status: "cancelled", url: entry.url };
@@ -1365,6 +1372,7 @@ export class Router {
       },
       readEntry: (url) => {
         const entry = this.history.read(url);
+
         return entry ? browserHistoryEntry(entry) : undefined;
       },
       onTraverse: (entry, signal) => this.navigateFromHistory(entry, signal),
@@ -1382,6 +1390,7 @@ export class Router {
       },
       onError: this.options.onError,
     });
+
     this.historyNavigation = adapter;
 
     const remove = () => {
@@ -1563,6 +1572,7 @@ export class Router {
     this.active?.controller.abort(reason);
 
     const active = this.active;
+
     this.active = undefined;
     const cleanupErrors: unknown[] = [];
 

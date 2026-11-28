@@ -20,6 +20,7 @@ test("nested public data keeps undefined, non-finite numbers and immutable brows
     "join\u200Dname": "zero-width-joiner",
   };
   const projected = projectPublicValues(original);
+
   original.SETTINGS.values[0] = "changed";
 
   expect(projected.values.SETTINGS).toStrictEqual({
@@ -75,6 +76,7 @@ test("nested public data keeps undefined, non-finite numbers and immutable brows
 
 test("public data rejects cycles, accessors, class instances, symbols and unsupported leaves", () => {
   const cycle: Record<string, unknown> = {};
+
   cycle.self = cycle;
 
   expect(() => projectPublicValues({ CYCLE: cycle })).toThrow("cycle");
@@ -106,6 +108,7 @@ test("public data rejects cycles, accessors, class instances, symbols and unsupp
   );
 
   const array = ["visible"] as string[] & { secret?: string };
+
   array.secret = "hidden";
 
   expect(() => projectPublicValues({ ARRAY: array })).toThrow("named array properties");

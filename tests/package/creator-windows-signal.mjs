@@ -17,8 +17,10 @@ import { admitCreatorWindowsConsole } from "./creator-windows-console.mjs";
 // This process owns only the installed-Creator cancellation fixture.
 const [driver, entry, destination, registryUrl, proofUrl, cache, outputRoot] =
   process.argv.slice(2);
+
 if (!outputRoot || process.platform !== "win32" || process.arch !== "x64")
   throw new Error("Invalid Creator Windows fixture.");
+
 mkdirSync(outputRoot);
 const startedPath = join(outputRoot, "installer-started.json");
 const exitedPath = join(outputRoot, "installer-exited.json");
@@ -82,6 +84,7 @@ const observePromise = (name, promise) => {
 };
 const observeHandle = (member) => {
   if (!admission || !member) return { state: "not-retained" };
+
   try {
     return admission.observeMember(member);
   } catch (error) {
@@ -91,6 +94,7 @@ const observeHandle = (member) => {
 const observeMarker = (path, jsonLines = false) => {
   let fd;
   let result;
+
   try {
     fd = openSync(path, "r");
     const buffer = Buffer.alloc(8193);
@@ -103,10 +107,12 @@ const observeMarker = (path, jsonLines = false) => {
     const summarize = (item) => {
       try {
         const record = JSON.parse(item);
+
         if (!record || typeof record !== "object" || Array.isArray(record)) {
           badRecords++;
           return;
         }
+
         const event = ["spawned", "exited", "kill-invoked", "kill-returned", "kill-threw"].includes(
           record.event,
         )
@@ -120,6 +126,7 @@ const observeMarker = (path, jsonLines = false) => {
             installer !== undefined &&
             record.installerPid === installer.pid,
         };
+
         if (jsonLines) {
           summary.signal =
             Array.isArray(record.args) && record.args.length === 1 && record.args[0] === "SIGINT"
@@ -139,18 +146,22 @@ const observeMarker = (path, jsonLines = false) => {
                 ? "SIGINT"
                 : "different";
         }
+
         records.push(summary);
       } catch {
         badRecords++;
       }
     };
+
     if (jsonLines) {
       const lines = text.split("\n");
+
       incompleteFinalLine = lines.pop().length > 0;
       for (const line of lines) summarize(line);
     } else if (!truncated) {
       summarize(text);
     }
+
     result = { state: truncated ? "truncated" : "read", badRecords, incompleteFinalLine, records };
   } catch (error) {
     result =
@@ -166,8 +177,10 @@ const observeMarker = (path, jsonLines = false) => {
       }
     }
   }
+
   return result;
 };
+
 try {
   admission = admitCreatorWindowsConsole(() => {
     throw new Error("Controller received Ctrl+C.");
@@ -186,16 +199,19 @@ try {
   observePromise("witness", witnessExit);
   phase = "witness-readiness";
   const witnessDeadline = Date.now() + 10000;
+
   while (!existsSync(witnessReady) && Date.now() < witnessDeadline) await wait(20);
   requireValue(existsSync(witnessReady), "Witness did not start.");
   witness = admission.openVerifiedLiveMember(witnessChild.pid);
   retained.push(witness);
   const witnessParent = admission.verifyParent(witness, controller);
   const witnessStart = Date.now();
+
   while (Date.now() - witnessStart < 2500) {
     admission.recheckMember(witness);
     await wait(50);
   }
+
   const inherited = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !key.toLowerCase().includes("registry")),
   );
@@ -210,8 +226,10 @@ try {
     HESPERIA_PROTOTYPE_NONCE: nonce,
   };
   const keys = Object.keys(env).map((key) => key.toLowerCase());
+
   requireValue(new Set(keys).size === keys.length, "Duplicate Windows environment keys.");
   const registry = new URL(registryUrl);
+
   requireValue(
     registry.protocol === "http:" && registry.hostname === "127.0.0.1",
     "Registry is not loopback.",
@@ -227,22 +245,28 @@ try {
     },
   );
   const deadline = Date.now() + 30000;
+
   cliExit = cliChild.exited;
   observePromise("cli", cliExit);
   let stdout = new Response(cliChild.stdout).text();
+
   observePromise("stdout", stdout);
   let stderr = new Response(cliChild.stderr).text();
+
   observePromise("stderr", stderr);
   phase = "installer-and-registry";
   let started;
   let held;
+
   while (Date.now() < deadline) {
     if (existsSync(startedPath)) started = JSON.parse(readFileSync(startedPath, "utf8"));
     const response = await fetch(proofUrl, { signal: AbortSignal.timeout(1000) });
+
     held = await response.json();
     if (started && held.live && held.ageMs < 9000) break;
     await wait(20);
   }
+
   requireValue(
     started?.event === "spawned" &&
       started.nonce === nonce &&
@@ -257,6 +281,7 @@ try {
   const cliParent = admission.verifyParent(cli, controller);
   const installerParent = admission.verifyParent(installer, cli);
   const holdStart = Date.now();
+
   while (Date.now() - holdStart < 2000) {
     requireValue(
       Date.now() - holdStart <= 2500 && Date.now() < deadline,
@@ -264,15 +289,18 @@ try {
     );
     for (const member of retained) admission.recheckMember(member);
     const response = await fetch(proofUrl, { signal: AbortSignal.timeout(1000) });
+
     held = await response.json();
     requireValue(held.live && held.ageMs < 9000, "Registry request ended during installer hold.");
     await wait(50);
   }
+
   requireValue(Date.now() - holdStart <= 2500, "Installer hold exceeded its ceiling.");
   phase = "census-and-dispatch";
   const expected = new Set(retained.map((member) => member.pid));
   const census = () => {
     const ids = admission.census();
+
     requireValue(
       ids.length === 4 && new Set(ids).size === 4 && ids.every((pid) => expected.has(pid)),
       "Console membership differs.",
@@ -282,6 +310,7 @@ try {
   };
   const first = census();
   const second = census();
+
   apiLibrary = dlopen("kernel32.dll", {
     SetConsoleCtrlHandler: { args: ["ptr", "i32"], returns: "i32" },
     GenerateConsoleCtrlEvent: { args: ["u32", "u32"], returns: "i32" },
@@ -293,6 +322,7 @@ try {
   masked = true;
   const final = census();
   const finalProof = await (await fetch(proofUrl, { signal: AbortSignal.timeout(1000) })).json();
+
   requireValue(finalProof.live && finalProof.ageMs < 9000, "Registry request ended before Ctrl+C.");
   census();
   requireValue(Date.now() < deadline, "Creator cancellation deadline expired before Ctrl+C.");
@@ -309,11 +339,13 @@ try {
     Promise.all([witnessExit, cliExit, stdout, stderr]),
     timeout,
   ]).finally(() => clearTimeout(timer));
+
   phase = "terminal-assertions";
   requireValue(/^[^\r\n]+\r?\n$/u.test(out), "Creator stdout was not one JSON record.");
   const witnessNativeExit = admission.verifyExitedMember(witness);
   const cliNativeExit = admission.verifyExitedMember(cli);
   const installerNativeExit = admission.verifyExitedMember(installer);
+
   requireValue(witnessNativeExit.exitCode >>> 0 === 0xc000013a, "Witness did not receive Ctrl+C.");
   requireValue(exitCode === 130 && cliChild.signalCode === null, "Creator exit differs.");
   requireValue(cliNativeExit.exitCode >>> 0 === 130, "Creator native exit differs.");
@@ -322,6 +354,7 @@ try {
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
+
   requireValue(
     ended.nonce === nonce &&
       ended.cliPid === cli.pid &&
@@ -368,6 +401,7 @@ try {
   let receiptError;
   let receiptCloseFailed = false;
   let receiptCloseError;
+
   try {
     writeSync(receiptFd, JSON.stringify(terminalEvidence) + "\n");
     fsyncSync(receiptFd);
@@ -382,12 +416,14 @@ try {
       receiptCloseError = error;
     }
   }
+
   if (receiptFailed && receiptCloseFailed) {
     throw new AggregateError(
       [receiptError, receiptCloseError],
       "Terminal receipt write and close failed.",
     );
   }
+
   if (receiptFailed) throw receiptError;
   if (receiptCloseFailed) throw receiptCloseError;
   for (const member of retained.splice(0)) admission.closeMember(member.handle);
@@ -404,6 +440,7 @@ try {
   Bun.gc(true);
   closeAttempted = true;
   const job = await admission.close();
+
   consoleDetached = true;
   admission = undefined;
   requireValue(
@@ -416,6 +453,7 @@ try {
 } catch (error) {
   primaryFailed = true;
   primaryError = error;
+
   try {
     const snapshot = {
       phase,
@@ -432,6 +470,7 @@ try {
         exited: observeMarker(exitedPath),
       },
     };
+
     process.stderr.write(`Creator failure snapshot: ${JSON.stringify(snapshot)}\n`);
   } catch (snapshotError) {
     try {
@@ -442,6 +481,7 @@ try {
       cleanupErrors.push(reportError);
     }
   }
+
   try {
     process.stderr.write(
       `Creator fixture failed; terminal receipt ${existsSync(join(outputRoot, "terminal-receipt.json")) ? "retained" : "unavailable"}: ${outputRoot}\n`,
@@ -460,6 +500,7 @@ try {
         }
       }
     }
+
     for (const member of retained.splice(0)) {
       try {
         admission.closeMember(member.handle);
@@ -467,15 +508,19 @@ try {
         cleanupErrors.push(error);
       }
     }
+
     if (admission && !closeAttempted) {
       closeAttempted = true;
+
       try {
         await admission.close();
       } catch (error) {
         cleanupErrors.push(error);
       }
     }
+
     if (admission?.isDetached()) consoleDetached = true;
+
     if (masked && apiLibrary) {
       if (consoleDetached) {
         try {
@@ -492,6 +537,7 @@ try {
       }
     }
   }
+
   if (apiLibrary) {
     try {
       apiLibrary.close();
@@ -500,9 +546,12 @@ try {
     }
   }
 }
+
 if (primaryFailed && cleanupErrors.length > 0) {
   throw new AggregateError([primaryError, ...cleanupErrors], "Creator fixture and cleanup failed.");
 }
+
 if (primaryFailed) throw primaryError;
+
 if (cleanupErrors.length > 0)
   throw new AggregateError(cleanupErrors, "Creator fixture cleanup failed.");

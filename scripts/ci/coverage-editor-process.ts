@@ -77,11 +77,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
   const actual = Object.keys(value);
+
   return actual.length === expected.length && actual.every((key) => expected.includes(key));
 }
 
 function normalizedPath(path: string): string {
   const absolute = resolve(path);
+
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
@@ -100,6 +102,7 @@ function sourcePaths(value: unknown, repoPath: string, description: string): str
     unique.size !== paths.length ||
     paths.some((path) => {
       const relativePath = relative(repoPath, path);
+
       return relativePath === "" || relativePath === ".." || relativePath.startsWith(`..${sep}`);
     })
   ) {
@@ -248,6 +251,7 @@ export function readEditorCoverageConfig(): EditorCoverageConfig {
     value.languageServerSourcePaths.some((path) => !isAbsolute(path)) ||
     languageServerSourcePaths.some((path) => {
       const relativePath = relative(repoPath, path);
+
       return relativePath === ".." || relativePath.startsWith(`..${sep}`) || relativePath === "";
     })
   ) {
@@ -456,6 +460,7 @@ export function writeEditorOwnerSupportCoverage(
     keys.some((path) => !allowed.has(normalizedPath(path))) ||
     keys.some((path) => {
       const record = coverage[path];
+
       return (
         !isRecord(record) ||
         typeof record.path !== "string" ||

@@ -66,6 +66,7 @@ export function enumerateFiniteStrings(
     if (seen.has(id)) return;
 
     const initializer = constants.get(id);
+
     return initializer
       ? enumerateFiniteStrings(initializer, constants, new Set([...seen, id]))
       : undefined;
@@ -73,18 +74,21 @@ export function enumerateFiniteStrings(
 
   if (expression.kind === "sequence") {
     const value = expression.expressions.at(-1);
+
     return value ? enumerateFiniteStrings(value, constants, seen) : undefined;
   }
 
   if (expression.kind === "conditional") {
     const consequent = enumerateFiniteStrings(expression.consequent, constants, seen);
     const alternate = enumerateFiniteStrings(expression.alternate, constants, seen);
+
     return consequent && alternate ? unionSpecifiers(consequent, alternate) : undefined;
   }
 
   if (expression.kind === "binary" && expression.operator === "+") {
     const left = enumerateFiniteStrings(expression.left, constants, seen);
     const right = enumerateFiniteStrings(expression.right, constants, seen);
+
     return left && right ? concatenateSpecifiers(left, right) : undefined;
   }
 

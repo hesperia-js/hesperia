@@ -11,6 +11,7 @@ function deferred() {
   const promise = new Promise<void>((accept) => {
     resolve = accept;
   });
+
   return { promise, resolve };
 }
 
@@ -37,6 +38,7 @@ function hostingBuild(
     startupAsset: "/assets/main.js",
     assets: assets.map((item) => item.record),
   };
+
   return {
     hosting,
     files: new Map(assets.map((item) => [item.record.path, item.blob])),
@@ -71,6 +73,7 @@ test("development observes a missing plugin watch directory after its creation",
 
       if (boundary >= 0) {
         const event = pendingEvents.slice(0, boundary);
+
         pendingEvents = pendingEvents.slice(boundary + 2);
 
         if (event.includes('data: "reload"')) {
@@ -249,6 +252,7 @@ test("development does not publish a build superseded during host validation", a
       return build("current");
     });
     const events = await fetch(new URL("/_hesperia/events", server.url));
+
     reader = events.body!.getReader();
 
     expect(new TextDecoder().decode((await reader.read()).value)).toContain(": connected");
@@ -356,6 +360,7 @@ test("CSS-only publication keeps previous hashed sheets available", async () => 
       return build(revision);
     });
     const events = await fetch(new URL("/_hesperia/events", server.url));
+
     reader = events.body!.getReader();
 
     await reader.read();

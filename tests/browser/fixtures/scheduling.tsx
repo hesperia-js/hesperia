@@ -10,6 +10,7 @@ let releaseActive: (() => void) | undefined;
 
 function output(id: string): HTMLOutputElement {
   const element = document.createElement("output");
+
   element.id = id;
 
   document.body.append(element);
@@ -182,6 +183,7 @@ const application = mount(
 );
 
 const remove = document.createElement("button");
+
 remove.id = "remove-scheduling";
 remove.textContent = "Remove scheduling component";
 
@@ -192,6 +194,7 @@ remove.addEventListener("click", () => {
 });
 
 const release = document.createElement("button");
+
 release.id = "release-active";
 release.textContent = "Release active callback";
 

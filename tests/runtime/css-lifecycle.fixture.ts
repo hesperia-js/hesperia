@@ -219,6 +219,7 @@ export function createCssLifecycleFixture(): CssLifecycleFixture {
 
   const mediaText = (stylesheet: HTMLLinkElement): string => {
     const sheet = stylesheet.sheet as unknown as { media: { mediaText: string } } | null;
+
     return sheet?.media.mediaText ?? "not all";
   };
 

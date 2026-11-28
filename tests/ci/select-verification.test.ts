@@ -68,6 +68,7 @@ test.each([
 test("product impact selects owner and static dependent roots without unrelated roots", async () => {
   await withRepo(async (repo) => {
     const path = "packages/hesperia/src/data/feed.ts";
+
     await put(repo, path, "export const value = 1;");
     await put(
       repo,
@@ -81,6 +82,7 @@ test("product impact selects owner and static dependent roots without unrelated 
     );
     await put(repo, "tests/hosting/unrelated.test.ts", "export const unrelated = true;");
     const base = commit(repo);
+
     await put(repo, path, "export const value = 2;");
     const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
 
@@ -124,6 +126,7 @@ test.each(["packages/hesperia/src/scheduling.ts", "packages/hesperia/src/schedul
         'import { value } from "hesperia/scheduling"; export { value };',
       );
       const base = commit(repo);
+
       await put(repo, changed, "export const value = 2;");
       const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
 
@@ -148,6 +151,7 @@ test.each(["missing target", "ambiguous target", "duplicate owner", "fallback ar
         node: "./dist/scheduling/node.js",
         default: "./dist/scheduling.js",
       };
+
       await put(
         repo,
         "packages/hesperia/package.json",
@@ -160,16 +164,20 @@ test.each(["missing target", "ambiguous target", "duplicate owner", "fallback ar
       );
       await put(repo, changed, "export const value = 1;");
       if (scenario !== "missing target") await put(repo, node, "export const value = 1;");
+
       if (scenario === "ambiguous target")
         await put(repo, "packages/hesperia/src/scheduling.tsx", "export const value = 1;");
+
       if (scenario === "duplicate owner")
         await put(repo, "packages/duplicate/package.json", JSON.stringify({ name: "hesperia" }));
+
       await put(
         repo,
         "tests/tooling/scheduling.test.ts",
         'import { value } from "hesperia/scheduling"; export { value };',
       );
       const base = commit(repo);
+
       await put(repo, changed, "export const value = 2;");
       const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
 
@@ -186,6 +194,7 @@ test.each(["missing target", "ambiguous target", "duplicate owner", "fallback ar
 test("single-source workspace exports retain legacy selection", async () => {
   await withRepo(async (repo) => {
     const changed = "packages/hesperia/src/single.ts";
+
     await put(
       repo,
       "packages/hesperia/package.json",
@@ -207,6 +216,7 @@ test("single-source workspace exports retain legacy selection", async () => {
       'import "hesperia/single"; import "hesperia/conditional-single";',
     );
     const base = commit(repo);
+
     await put(repo, changed, "export const value = 2;");
     const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
 
@@ -218,6 +228,7 @@ test("single-source workspace exports retain legacy selection", async () => {
 test("owned application fixtures include cross-root opaque readers and local configuration", async () => {
   await withRepo(async (repo) => {
     const path = "tests/tooling/fixtures/applications/example/tsconfig.json";
+
     await put(repo, path, '{"compilerOptions":{}}');
     await put(
       repo,
@@ -230,6 +241,7 @@ test("owned application fixtures include cross-root opaque readers and local con
       'import { read } from "../tooling/fixture-reader.ts"; export { read };',
     );
     const base = commit(repo);
+
     await put(repo, path, '{"compilerOptions":{"strict":true}}');
     const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
 
@@ -246,8 +258,10 @@ test("owned application fixtures include cross-root opaque readers and local con
 test("distributed documentation selects package consumers without coverage", async () => {
   await withRepo(async (repo) => {
     const path = "packages/tooling/docs/project-configuration.md";
+
     await put(repo, path, "Before");
     const base = commit(repo);
+
     await put(repo, path, "After");
     const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
 
@@ -261,6 +275,7 @@ test("distributed documentation selects package consumers without coverage", asy
 test("an unchanged unconstrained loader remains selected without a reverse edge", async () => {
   await withRepo(async (repo) => {
     const path = "packages/hesperia/src/data/feed.ts";
+
     await put(repo, path, "export const value = 1;");
     await put(
       repo,
@@ -268,6 +283,7 @@ test("an unchanged unconstrained loader remains selected without a reverse edge"
       "export const load = (name: string) => import(name);",
     );
     const base = commit(repo);
+
     await put(repo, path, "export const value = 2;");
     const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
 
@@ -281,6 +297,7 @@ test("an unchanged unconstrained loader remains selected without a reverse edge"
 test("unchanged staged fixture inputs retain their compiler consumers on production edits", async () => {
   await withRepo(async (repo) => {
     const path = "packages/hesperia/src/data/feed.ts";
+
     await put(repo, path, "export const value = 1;");
     await put(
       repo,
@@ -288,6 +305,7 @@ test("unchanged staged fixture inputs retain their compiler consumers on product
       'export { generated } from "./created-by-test.ts";',
     );
     const base = commit(repo);
+
     await put(repo, path, "export const value = 2;");
     const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
 
@@ -299,6 +317,7 @@ test("unchanged staged fixture inputs retain their compiler consumers on product
 test("removed imports and deleted sources retain their base-side test consumers", async () => {
   await withRepo(async (repo) => {
     const path = "packages/hesperia/src/runtime/removed.ts";
+
     await put(repo, path, "export const value = 1;");
     await put(
       repo,
@@ -306,6 +325,7 @@ test("removed imports and deleted sources retain their base-side test consumers"
       'export { value } from "../../packages/hesperia/src/runtime/removed.ts";',
     );
     const base = commit(repo);
+
     await rm(join(repo, path));
     await put(repo, "tests/tooling/removed.test.ts", "export const value = 2;");
     const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
@@ -324,6 +344,7 @@ test("new unimported source files retain their subsystem owner", async () => {
   await withRepo(async (repo) => {
     await put(repo, "README.md", "Fixture");
     const base = commit(repo);
+
     await put(repo, "packages/hesperia/src/runtime/new.ts", "export const value = 1;");
     const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
 
@@ -348,6 +369,7 @@ test.each([
   await withRepo(async (repo) => {
     await put(repo, path, path.endsWith(".json") ? "{}" : "before");
     const base = commit(repo);
+
     await put(repo, path, path.endsWith(".json") ? '{"changed":true}' : "after");
     const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
 
@@ -360,9 +382,11 @@ test.each([
 test("unowned opaque consumers fail closed rather than dropping possible dependencies", async () => {
   await withRepo(async (repo) => {
     const path = "packages/hesperia/src/data/feed.ts";
+
     await put(repo, path, "export const value = 1;");
     await put(repo, "unmapped/loader.ts", "export const load = (name: string) => import(name);");
     const base = commit(repo);
+
     await put(repo, path, "export const value = 2;");
     const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
 
@@ -378,9 +402,11 @@ test.each(['export { value } from "./missing.ts";', "export const = ;"])(
   async (source) => {
     await withRepo(async (repo) => {
       const path = "packages/hesperia/src/data/feed.ts";
+
       await put(repo, path, "export const value = 1;");
       await put(repo, "tests/tooling/invalid.test.ts", source);
       const base = commit(repo);
+
       await put(repo, path, "export const value = 2;");
       const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
 
@@ -400,9 +426,11 @@ test.each([
 ])("unowned or executable fixture errors stay full: %s", async (fixture) => {
   await withRepo(async (repo) => {
     const path = "packages/hesperia/src/data/feed.ts";
+
     await put(repo, path, "export const value = 1;");
     await put(repo, fixture, 'export { value } from "./missing.ts";');
     const base = commit(repo);
+
     await put(repo, path, "export const value = 2;");
     const result = selectVerification({ repoPath: repo, base, head: commit(repo) });
 
@@ -417,6 +445,7 @@ test("explicit full, empty comparisons, dirty workspaces and invalid revisions s
   await withRepo(async (repo) => {
     await put(repo, "README.md", "Fixture");
     const base = commit(repo);
+
     await put(repo, "README.md", "Changed");
     const head = commit(repo);
 
@@ -431,8 +460,10 @@ test("explicit full, empty comparisons, dirty workspaces and invalid revisions s
 test("the CLI publishes the same selected scope consumed by the workflow", async () => {
   await withRepo(async (repo) => {
     const path = "packages/tooling/docs/project-configuration.md";
+
     await put(repo, path, "Before");
     const base = commit(repo);
+
     await put(repo, path, "After");
     const head = commit(repo);
     const output = join(tmpdir(), `hesperia-verification-output-${crypto.randomUUID()}`);
@@ -448,6 +479,7 @@ test("the CLI publishes the same selected scope consumed by the workflow", async
 
       expect(result.exitCode).toBe(0);
       const selection = JSON.parse(new TextDecoder().decode(result.stdout));
+
       expect(selection.full).toBe(false);
       expect(selection.package).toBe(true);
       const outputs = Object.fromEntries(
@@ -456,10 +488,12 @@ test("the CLI publishes the same selected scope consumed by the workflow", async
           .split("\n")
           .map((line) => line.split("=")),
       );
+
       expect(outputs.full).toBe("false");
       expect(outputs.all_count).toBe("1");
       expect(outputs.package).toBe("true");
       expect(outputs.scope_complete).toBe("true");
+
       for (const root of [
         "compiler",
         "runtime",
@@ -505,10 +539,12 @@ test.each([
 ])("the complete repository selects a partial scope for $path", async (entry) => {
   await withRepo(async (repo) => {
     const workspace = resolve(import.meta.dir, "../..");
+
     git(repo, "clone", "--quiet", "--shared", "--no-checkout", workspace, ".");
     git(repo, "checkout", "--quiet", "--detach", git(workspace, "rev-parse", "HEAD"));
     const base = git(repo, "rev-parse", "HEAD");
     const source = await readFile(join(repo, entry.path), "utf8");
+
     await put(
       repo,
       entry.path,

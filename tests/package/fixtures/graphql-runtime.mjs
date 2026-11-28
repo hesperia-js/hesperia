@@ -295,6 +295,7 @@ async function readFixtureState() {
 /** @param {string} route @param {string} session @param {string} id @param {{ method?: string, query?: Record<string, string>, body?: unknown }} [options] */
 async function requestSubscriptionControl(route, session, id, options = {}) {
   const url = new URL(`${controlUrl}/${route}`);
+
   url.searchParams.set("session", session);
   url.searchParams.set("id", id);
 

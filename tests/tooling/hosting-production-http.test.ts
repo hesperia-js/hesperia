@@ -394,6 +394,7 @@ function observePublicWatches(root: string, context: () => unknown) {
   const nativeDirectory = (path: string): string => String(filesystem.realpathSync.native(path));
   const entryPath = (path: string): string => {
     const absolute = resolve(path);
+
     return join(nativeDirectory(dirname(absolute)), basename(absolute));
   };
   const canonicalRoot = nativeDirectory(root);
@@ -520,6 +521,7 @@ function observePublicWatches(root: string, context: () => unknown) {
 
   try {
     const activeSpy = spyOn(filesystem, "watch");
+
     watchSpy = activeSpy;
     activeSpy.mockImplementation(((...args: Parameters<typeof filesystem.watch>) => {
       const raw = args[0];
@@ -527,6 +529,7 @@ function observePublicWatches(root: string, context: () => unknown) {
       if (typeof raw !== "string") return Reflect.apply(originalWatch, filesystem, args);
 
       const request = { raw, canonical: undefined as string | undefined, state: "unresolved" };
+
       requests.push(request);
 
       let directory: string;
@@ -557,6 +560,7 @@ function observePublicWatches(root: string, context: () => unknown) {
 
       if (beforeRegistration && directory === beforeRegistration.directory) {
         const action = beforeRegistration;
+
         beforeRegistration = undefined;
         action.run();
       }
@@ -575,10 +579,12 @@ function observePublicWatches(root: string, context: () => unknown) {
               Reflect.apply(callback, this, [event, filename]);
               return;
             }
+
             if (exactNativeHold?.target === changed) {
               exactNativeHold.onNotification();
               return;
             }
+
             const controlled = [...heldNotifications].some((target) => {
               const fromTarget = relative(target, changed);
               const fromChange = relative(changed, target);
@@ -595,6 +601,7 @@ function observePublicWatches(root: string, context: () => unknown) {
           Reflect.apply(callback, this, [event, filename]);
         },
       ]) as filesystem.FSWatcher;
+
       request.state = "native watch returned";
       const close = registration.close.bind(registration);
       const record: ObservedWatch = {
@@ -693,8 +700,10 @@ function observePublicWatches(root: string, context: () => unknown) {
     },
     holdFileNotifications(filename: string, onNotification: () => void): void {
       const target = entryPath(filename);
+
       if (!isWithinFixture(target) || exactNativeHold)
         throw new Error("File notification hold is not owned by this fixture");
+
       exactNativeHold = { target, onNotification };
     },
     forwardedNativeCallbacks(): number {
@@ -1153,6 +1162,7 @@ test("public collisions reject before replacing the last published build", async
         hopCreated = true;
         await symlink(hop, link, "file");
       } else await symlink(publicRoot, link, directoryLinkType);
+
       linkCreated = true;
 
       const failure = await buildFailure(root);
@@ -1230,6 +1240,7 @@ test("development preserves public HTML bytes while instrumenting the applicatio
   for (const format of ["json", "typescript"] as const) {
     const root = await createProjectRoot(`hesperia-public-html-${format}-`, format, "/shop");
     const publicRoot = join(root, "public");
+
     await mkdir(publicRoot);
     await writeFile(join(publicRoot, "café #%.html"), payload);
     const server = await devProject(root, { port: 0 });
@@ -1238,17 +1249,20 @@ test("development preserves public HTML bytes while instrumenting the applicatio
       const document = await fetch(new URL("/shop/", server.url), {
         headers: { accept: "text/html" },
       });
+
       expect(document.status).toBe(200);
       expect(await document.text()).toContain("/shop/_hesperia/client.js");
 
       const url = new URL("/shop/caf%C3%A9%20%23%25.html?request=one", server.url);
       const head = await fetch(url, { method: "HEAD", headers: { accept: "text/html" } });
+
       expect(head.status).toBe(200);
       expect(head.headers.get("content-type")?.startsWith("text/html")).toBe(true);
       expect(head.headers.get("content-length")).toBe(String(payload.length));
       expect(new Uint8Array(await head.arrayBuffer())).toHaveLength(0);
 
       const response = await fetch(url, { headers: { accept: "text/html" } });
+
       expect(response.status).toBe(200);
       expect([...new Uint8Array(await response.arrayBuffer())]).toStrictEqual([...payload]);
       expect(response.headers.get("content-type")).toBe(head.headers.get("content-type"));
@@ -1460,9 +1474,11 @@ async function verifyDevelopmentLinkedTarget(format: ConfigurationFormat): Promi
     expect([...new Uint8Array(await initial.arrayBuffer())]).toStrictEqual([...first]);
 
     const events = await fetch(new URL("/_hesperia/events", server.url), { signal });
+
     expect(events.status).toBe(200);
     reader = events.body!.getReader();
     const nextEvent = nextDevelopmentEvent(reader, signal);
+
     await nextEvent();
 
     await writeFile(join(firstTarget, "live.bin"), updated);
@@ -1475,6 +1491,7 @@ async function verifyDevelopmentLinkedTarget(format: ConfigurationFormat): Promi
     await waitForPublicBytes(nextEvent, linkedURL, replacement, signal);
 
     const reportsBeforeFailure = reports.length;
+
     await rename(nextTarget, removedTarget);
 
     for (;;) {
@@ -1493,6 +1510,7 @@ async function verifyDevelopmentLinkedTarget(format: ConfigurationFormat): Promi
     }
 
     const lastGood = await fetch(linkedURL, { signal });
+
     expect(lastGood.status).toBe(200);
     expect([...new Uint8Array(await lastGood.arrayBuffer())]).toStrictEqual([...replacement]);
 
@@ -1561,16 +1579,20 @@ async function verifyDevelopmentFileLinks(format: ConfigurationFormat): Promise<
     const rootURL = new URL("/root.bin", server.url);
     const middleURL = new URL("/middle.bin", server.url);
     const missingURL = new URL("/missing.bin", server.url);
+
     for (const url of [rootURL, middleURL, missingURL]) {
       const response = await fetch(url, { signal });
+
       expect(response.status).toBe(200);
       expect([...new Uint8Array(await response.arrayBuffer())]).toStrictEqual([...first]);
     }
 
     const events = await fetch(new URL("/_hesperia/events", server.url), { signal });
+
     expect(events.status).toBe(200);
     reader = events.body!.getReader();
     const nextEvent = nextDevelopmentEvent(reader, signal);
+
     await nextEvent();
 
     await writeFile(rootTarget, updated);
@@ -1586,11 +1608,13 @@ async function verifyDevelopmentFileLinks(format: ConfigurationFormat): Promise<
     );
 
     const reportsBeforeFailure = reports.length;
+
     await retarget(missingLink, missingTarget);
     await withAbort(
       (async () => {
         for (;;) {
           const event = await nextEvent();
+
           if (
             reports
               .slice(reportsBeforeFailure)
@@ -1610,6 +1634,7 @@ async function verifyDevelopmentFileLinks(format: ConfigurationFormat): Promise<
     );
 
     const lastGood = await fetch(missingURL, { signal });
+
     expect(lastGood.status).toBe(200);
     expect([...new Uint8Array(await lastGood.arrayBuffer())]).toStrictEqual([...first]);
 
@@ -2021,6 +2046,7 @@ test("public dependency replacement and rollback use the existing native watcher
       reports,
       lastPreparedWatchTargets,
     }));
+
     watches = observed;
     observed.holdNotifications(publicRoot, rootFile, ...Object.values(directories));
 
@@ -2040,6 +2066,7 @@ test("public dependency replacement and rollback use the existing native watcher
           async (project, attemptSignal) => {
             preparations++;
             const held = holdFailure;
+
             holdFailure = false;
 
             if (held)
@@ -2047,6 +2074,7 @@ test("public dependency replacement and rollback use the existing native watcher
 
             try {
               const prepared = await prepareBuild(project, true);
+
               lastPreparedWatchTargets = prepared.watch;
               return prepared;
             } catch (error) {
@@ -2067,6 +2095,7 @@ test("public dependency replacement and rollback use the existing native watcher
       ),
       signal,
     );
+
     server = activeServer;
     reader = (
       await fetch(new URL("/_hesperia/events?updateProtocol=2", activeServer.url), { signal })
@@ -2076,6 +2105,7 @@ test("public dependency replacement and rollback use the existing native watcher
     await nextEvent();
 
     const liveURL = new URL("/live.bin", activeServer.url);
+
     expect(observed.records.length).toBeGreaterThan(0);
 
     const oldWatch = observed.registration(directories.a!);
@@ -2316,6 +2346,7 @@ test("public dependency replacement and rollback use the existing native watcher
     await waitForPublicBytes(nextEvent, liveURL, repaired, signal);
 
     const beforeStaleFailure = observed.records.length;
+
     holdFailure = true;
 
     await unlink(alias);
@@ -2377,6 +2408,7 @@ test("public dependency replacement and rollback use the existing native watcher
     },
     () => {
       if (!watches) return;
+
       if (!startupSucceeded || !serverClosed)
         throw new Error(`Retained Q10 watcher spies after uncertain server retirement: ${root}`);
 
@@ -2475,12 +2507,14 @@ for (const { targetSnapshot, closeDuringCheck } of [
         await withAbort(track(writeFile(join(root, "hesperia.config.json"), "{}")), signal);
 
         const observed = observePublicWatches(root, () => ({ heldCount, armed }));
+
         watches = observed;
         observed.holdNotifications(root);
         observed.beforeRegistration(root, () => {
           armed = true;
         });
         const originalClose = API.prototype.close;
+
         nativeCloseSpy = spyOn(API.prototype, "close").mockImplementation(async function (
           this: API,
           ...args: Parameters<API["close"]>
@@ -2489,6 +2523,7 @@ for (const { targetSnapshot, closeDuringCheck } of [
           if (heldApis.has(this)) nativeRetired.resolve();
         });
         const originalSnapshot = API.prototype.updateSnapshot;
+
         snapshotSpy = spyOn(API.prototype, "updateSnapshot").mockImplementation(async function (
           this: API,
           ...args: Parameters<API["updateSnapshot"]>
@@ -2504,6 +2539,7 @@ for (const { targetSnapshot, closeDuringCheck } of [
             heldCount++;
             heldApis.add(this);
             const getProject = snapshot.getProject;
+
             snapshotGetProjectSpy = spyOn(snapshot, "getProject").mockImplementation(
               (...arguments_) => {
                 obsoleteGetProjectCalls++;
@@ -2511,6 +2547,7 @@ for (const { targetSnapshot, closeDuringCheck } of [
               },
             );
             const dispose = snapshot.dispose;
+
             snapshotDisposeSpy = spyOn(snapshot, "dispose").mockImplementation(
               async (...arguments_) => {
                 await Reflect.apply(dispose, snapshot, arguments_);
@@ -2536,14 +2573,17 @@ for (const { targetSnapshot, closeDuringCheck } of [
           ),
           signal,
         );
+
         await withAbort(nativeHeld.promise, signal);
         expect(heldCount).toBe(1);
         expect(observed.forwardedNativeCallbacks()).toBe(0);
 
         const events = await fetch(new URL("/_hesperia/events", activeServer.url), { signal });
+
         expect(events.status).toBe(200);
         reader = events.body!.getReader();
         const nextEvent = nextDevelopmentEvent(reader, signal);
+
         await nextEvent();
 
         async function servedModule(marker: string): Promise<readonly [string, string]> {
@@ -2551,18 +2591,22 @@ for (const { targetSnapshot, closeDuringCheck } of [
             await fetch(activeServer.url, { headers: { accept: "text/html" }, signal })
           ).text();
           const startup = html.match(/src="(\/_hesperia\/startup\.js)"/)?.[1];
+
           if (!startup) throw new Error("The served startup module is missing");
           const urls = new Set([new URL(startup, activeServer.url).href]);
           const scanner = new Bun.Transpiler({ loader: "js" });
 
           for (const url of urls) {
             const response = await fetch(url, { signal });
+
             expect(response.status).toBe(200);
             const source = await response.text();
+
             if (source.includes(marker)) return [url, source];
 
             for (const dependency of scanner.scanImports(source)) {
               const target = new URL(dependency.path, url);
+
               expect(target.origin).toBe(activeServer.url.origin);
               urls.add(target.href);
             }
@@ -2578,10 +2622,12 @@ for (const { targetSnapshot, closeDuringCheck } of [
               !record.closed && record.directory === String(filesystem.realpathSync.native(root)),
           )
           .at(-1);
+
         if (!rootWatch) throw new Error("The root watcher was not retained");
 
         if (closeDuringCheck) {
           let closeSettled = false;
+
           pendingServerClose = activeServer.close();
           void pendingServerClose.then(
             () => {
@@ -2606,6 +2652,7 @@ for (const { targetSnapshot, closeDuringCheck } of [
             ),
             signal,
           );
+
           expect("error" in terminal || terminal.value.done).toBe(true);
           reader.releaseLock();
           reader = undefined;
@@ -2628,6 +2675,7 @@ for (const { targetSnapshot, closeDuringCheck } of [
         rootWatch.notify("app.tsx");
         while (!(await nextEvent()).includes('data: "reload"')) {}
         const recovered = await servedModule(recoveredMarker);
+
         expect(recovered[1]).toContain(recoveredMarker);
         expect(observed.forwardedNativeCallbacks()).toBe(0);
         completed = true;
@@ -2649,8 +2697,10 @@ for (const { targetSnapshot, closeDuringCheck } of [
         },
         () => {
           if (!watches) return;
+
           if (!serverClosed)
             throw new Error(`Retained watcher spies after uncertain retirement: ${root}`);
+
           watches.restore();
           snapshotSpy?.mockRestore();
           snapshotGetProjectSpy?.mockRestore();
@@ -2673,9 +2723,12 @@ for (const { targetSnapshot, closeDuringCheck } of [
             throw new Error(
               `Retained cancellation fixture after failure or unsettled work: ${root}`,
             );
+
           await withAbort(track(unlinkFrameworkPackages(root)), cleanup!.signal);
+
           if (cleanup!.signal.aborted || operationRejected || pending.size > 0)
             throw new Error(`Retained cancellation fixture after incomplete unlink: ${root}`);
+
           cleanup!.close();
           await rm(root, { recursive: true, force: true });
         },
@@ -2721,17 +2774,20 @@ for (const mode of ["aborted", "live", "cleanup"] as const) {
       await withAbort(writeFile(join(root, "hesperia.config.json"), "{}"), deadline.signal);
 
       const originalClose = API.prototype.close;
+
       nativeCloseSpy = spyOn(API.prototype, "close").mockImplementation(async function (
         this: API,
         ...args: Parameters<API["close"]>
       ) {
         await Reflect.apply(originalClose, this, args);
+
         if (heldApis.has(this)) {
           actualCloseReturned = true;
           if (mode === "cleanup") throw cleanupFailure;
         }
       });
       const originalSnapshot = API.prototype.updateSnapshot;
+
       snapshotSpy = spyOn(API.prototype, "updateSnapshot").mockImplementation(async function (
         this: API,
         ...args: Parameters<API["updateSnapshot"]>
@@ -2741,6 +2797,7 @@ for (const mode of ["aborted", "live", "cleanup"] as const) {
           this,
           args,
         );
+
         heldApis.add(this);
         heldSnapshot = snapshot;
         entered.resolve();
@@ -2756,19 +2813,24 @@ for (const mode of ["aborted", "live", "cleanup"] as const) {
       if (mode !== "live") cancellation.abort(abortReason);
       release.resolve();
       const outcome = await withAbort(operation, deadline.signal);
+
       operationSettled = true;
       expect(actualCloseReturned).toBe(true);
       const actualSnapshot = heldSnapshot as Awaited<ReturnType<API["updateSnapshot"]>> | undefined;
+
       expect(actualSnapshot?.isDisposed()).toBe(true);
       if (outcome.ok) throw new Error("The controlled checking failure unexpectedly succeeded");
+
       if (mode === "cleanup") {
         expect(outcome.error).toBeInstanceOf(AggregateError);
         const aggregate = outcome.error as AggregateError;
+
         expect(aggregate.errors).toEqual([checkingFailure, cleanupFailure]);
         expect(aggregate.cause).toBe(checkingFailure);
       } else {
         expect(outcome.error).toBe(mode === "aborted" ? abortReason : checkingFailure);
       }
+
       bodyCompleted = true;
     }, [
       () => {
@@ -2785,12 +2847,14 @@ for (const mode of ["aborted", "live", "cleanup"] as const) {
       () => {
         if (operation && !operationSettled)
           throw new Error(`Retained native spies after uncertain retirement: ${root}`);
+
         snapshotSpy?.mockRestore();
         nativeCloseSpy?.mockRestore();
       },
       async () => {
         if (!bodyCompleted || (operation && !operationSettled) || cleanup!.signal.aborted)
           throw new Error(`Retained checking fixture after failure or unsettled work: ${root}`);
+
         if (linked) await withAbort(unlinkFrameworkPackages(root), cleanup!.signal);
         cleanup!.close();
         await rm(root, { recursive: true, force: true });
@@ -2828,6 +2892,7 @@ export default function Page() {
       const releaseSnapshot = completion();
       const snapshotHeld = completion();
       const completedNotice = completion();
+
       type Attempt = { readonly signal: AbortSignal | undefined; sawEmpty: boolean };
       let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
       let browserStarted: ReturnType<typeof chromium.launch> | undefined;
@@ -2868,6 +2933,7 @@ export default function Page() {
         );
         await withAbort(writeFile(route, pageSource("first")), signal);
         const observed = observePublicWatches(root, () => ({ held: held !== undefined }));
+
         watches = observed;
 
         const holdRouteNotifications = () => {
@@ -2883,19 +2949,23 @@ export default function Page() {
 
         if (worker) {
           const token = crypto.randomUUID();
+
           gate = Bun.serve({
             hostname: "127.0.0.1",
             port: 0,
             async fetch(request) {
               const owner = active;
+
               if (request.method !== "POST" || new URL(request.url).pathname !== "/" + token)
                 return new Response(null, { status: 404 });
+
               const capture = (await request.json()) as {
                 pid?: number;
                 filename?: string;
                 authored?: string;
                 current?: string;
               };
+
               if (
                 !armed ||
                 held ||
@@ -2910,6 +2980,7 @@ export default function Page() {
                 capture.pid! <= 0
               )
                 return new Response(null, { status: 409 });
+
               owner.sawEmpty = true;
               held = owner;
               holdRouteNotifications();
@@ -2918,6 +2989,7 @@ export default function Page() {
             },
           });
           const rendezvous = new URL(token, gate.url).href;
+
           await withAbort(
             writeFile(
               join(root, "hesperia.config.ts"),
@@ -2942,6 +3014,7 @@ export default function Page() {
           );
         } else {
           const originalReadFile = filesystemPromises.readFile;
+
           readSpy = spyOn(filesystemPromises, "readFile").mockImplementation((async (
             ...args: Parameters<typeof filesystemPromises.readFile>
           ) => {
@@ -2951,6 +3024,7 @@ export default function Page() {
               filesystemPromises,
               args,
             );
+
             if (
               armed &&
               owner?.signal &&
@@ -2960,10 +3034,12 @@ export default function Page() {
               source === ""
             )
               owner.sawEmpty = true;
+
             return source;
           }) as typeof filesystemPromises.readFile);
 
           const originalSnapshot = API.prototype.updateSnapshot;
+
           snapshotSpy = spyOn(API.prototype, "updateSnapshot").mockImplementation(async function (
             this: API,
             ...args: Parameters<API["updateSnapshot"]>
@@ -2974,6 +3050,7 @@ export default function Page() {
               this,
               args,
             );
+
             if (
               armed &&
               !held &&
@@ -2986,6 +3063,7 @@ export default function Page() {
               holdRouteNotifications();
               await releaseSnapshot.promise;
             }
+
             return snapshot;
           });
         }
@@ -2997,7 +3075,9 @@ export default function Page() {
             expect(projectRoot).toBe(root);
             expect(active).toBeUndefined();
             const owner: Attempt = { signal: ownerSignal, sawEmpty: false };
+
             active = owner;
+
             try {
               return await prepareDevelopmentBuild(projectRoot, ownerSignal);
             } finally {
@@ -3008,22 +3088,27 @@ export default function Page() {
         server = await withAbort(ready, signal);
         const url = new URL("/nested", server.url);
         const events = await fetch(new URL("/_hesperia/events", server.url), { signal });
+
         expect(events.status).toBe(200);
         reader = events.body!.getReader();
         const nextEvent = nextDevelopmentEvent(reader, signal);
         const current = await nextEvent();
+
         expect(current).toContain('data: {"type":"current"}');
         firstPublication = /^id: ([\w-]+)$/mu.exec(current)?.[1];
         expect(firstPublication).toBeString();
 
         const published = async () => {
           const response = await fetch(url, { headers: { accept: "text/html" }, signal });
+
           expect(response.status).toBe(200);
           const html = await response.text();
           const publication = /\/_hesperia\/client\.js\?publication=([\w-]+)/u.exec(html)?.[1];
+
           expect(publication).toBeString();
           return publication;
         };
+
         expect(await published()).toBe(firstPublication);
         armed = true;
         await withAbort(writeFile(route, ""), signal);
@@ -3039,6 +3124,7 @@ export default function Page() {
           expect((await withAbort(readFile(route), signal)).equals(second)).toBe(true);
           await withAbort(completedNotice.promise, signal);
         }
+
         expect(held).toBe(active);
         expect(held?.signal?.aborted).toBe(false);
         expect(await published()).toBe(firstPublication);
@@ -3046,12 +3132,14 @@ export default function Page() {
 
         for (;;) {
           const event = await nextEvent();
+
           if (event.includes(routeDiagnostic)) {
             actual = "route-diagnostic";
             expect(/^id: ([\w-]+)$/mu.exec(event)?.[1]).toBe(firstPublication);
             expect(reports.some((report) => report.endsWith(routeDiagnostic))).toBe(true);
             break;
           }
+
           if (event.includes('data: "reload"')) {
             actual = "reload";
             reloadPublication = /^id: ([\w-]+)$/mu.exec(event)?.[1];
@@ -3060,7 +3148,9 @@ export default function Page() {
             break;
           }
         }
+
         lastPublication = await published();
+
         if (actual === "route-diagnostic") expect(lastPublication).toBe(firstPublication);
         else {
           expect(lastPublication).toBe(reloadPublication);
@@ -3068,12 +3158,14 @@ export default function Page() {
           browser = await withAbort(browserStarted, signal);
           const page = await withAbort(browser.newPage(), signal);
           const navigation = await withAbort(page.goto(url.href, { timeout: 10_000 }), signal);
+
           expect(navigation?.status()).toBe(200);
           expect(navigation?.url()).toBe(url.href);
           const documentBytes = await withAbort(navigation!.body(), signal);
           const publication = /\/_hesperia\/client\.js\?publication=([\w-]+)/u.exec(
             documentBytes.toString(),
           )?.[1];
+
           expect(publication).toBe(reloadPublication);
           await withAbort(
             page.waitForFunction(
@@ -3086,6 +3178,7 @@ export default function Page() {
           expect(page.url()).toBe(url.href);
           expect(await published()).toBe(publication);
         }
+
         expect(noticeFailure).toBeUndefined();
         sampled = true;
       }, [
@@ -3119,6 +3212,7 @@ export default function Page() {
         async () => {
           if (!sampled || !closed)
             throw new Error("Control fixture retained after incomplete sample or retirement");
+
           await withAbort(unlinkFrameworkPackages(root), cleanup!.signal);
           await withAbort(rm(root, { recursive: true, force: true }), cleanup!.signal);
         },

@@ -230,11 +230,13 @@ let configuredPluginBuildCwd: string | undefined;
 
 function canonicalPath(path: string): string {
   const absolute = resolve(path);
+
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
 function isWithin(parent: string, candidate: string): boolean {
   const path = relative(resolve(parent), resolve(candidate));
+
   return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
 }
 
@@ -250,17 +252,20 @@ function bindCliMain(
 > {
   const bin = readFileSync(binPath);
   const normalBin = readFileSync(resolve(repoPath, cliBinDist));
+
   if (!bin.equals(normalBin))
     throw new Error("CLI executable differs from the current package dist entry");
 
   const binRealPath = realpathSync.native(binPath);
   const entryPath = Bun.resolveSync("#hesperia-cli-main", dirname(binPath));
   const entryRealPath = realpathSync.native(entryPath);
+
   if (canonicalPath(entryRealPath) !== canonicalPath(join(dirname(binRealPath), "cli-main.js")))
     throw new Error("CLI private main did not resolve to the executable's package");
 
   const main = readFileSync(entryPath);
   const normalMain = readFileSync(resolve(repoPath, cliMainDist));
+
   if (!main.equals(normalMain))
     throw new Error("CLI private main differs from the current package dist output");
 
@@ -564,6 +569,7 @@ async function runCapturedChild(
 ): Promise<CommandResult> {
   const installedMode = configuration.mode === "installed-cli";
   const childEnvironment: Record<string, string | undefined> = { ...process.env };
+
   delete childEnvironment.BUN_OPTIONS;
   delete childEnvironment.NODE_OPTIONS;
 
@@ -608,6 +614,7 @@ async function runCapturedChild(
       const reasons = [stdoutResult, stderrResult]
         .filter((result) => result.status === "rejected")
         .map((result) => String(result.reason));
+
       throw new Error(
         `${modeLabel} child exited naturally with ${status}, but output capture failed: ${reasons.join("; ")}`,
       );
@@ -698,6 +705,7 @@ export async function runInstalledCli(input: InstalledCliAdapterInput): Promise<
     expectedArgs: input.args,
   };
   const spawnArgs = [input.execPath, "--preload", configuration.childPreloadPath, ...input.args];
+
   return runCapturedChild(configuration, receiptDirectory, spawnArgs);
 }
 
@@ -778,6 +786,7 @@ export async function runConfiguredPluginBuildCli(
     ...configuration.expectedArgs,
   ];
   const expectedStatus = ordinal === 1 ? 0 : 1;
+
   return runCapturedChild(configuration, receiptDirectory, spawnArgs, {
     code: expectedStatus,
     label: `Configured plugin build ${ordinal}`,
@@ -890,6 +899,7 @@ function creatorProfileFromEnvironment(): CreatorCaptureProfile {
   const ownerId = requiredEnvironment("HESPERIA_COVERAGE_OWNER_ID");
   const outputDirectory = resolve(requiredEnvironment("HESPERIA_COVERAGE_OUTPUT_DIR"));
   const profilePath = resolve(requiredEnvironment(creatorCliProfileEnvironment));
+
   return creatorProfileFromValue(
     JSON.parse(readFileSync(profilePath, "utf8")) as unknown,
     profilePath,
@@ -1025,6 +1035,7 @@ export async function runCreatorCli(input: CreatorCliAdapterInput): Promise<{
   writeFileSync(configPath, JSON.stringify(configuration), { flag: "wx" });
 
   const childEnvironment: Record<string, string | undefined> = { ...input.env };
+
   delete childEnvironment.BUN_OPTIONS;
   delete childEnvironment.NODE_OPTIONS;
 
@@ -1070,6 +1081,7 @@ export async function runCreatorCli(input: CreatorCliAdapterInput): Promise<{
       const reasons = [stdoutResult, stderrResult]
         .filter((result) => result.status === "rejected")
         .map((result) => String(result.reason));
+
       throw new Error(
         `Creator CLI child exited naturally with ${status}, but output capture failed: ${reasons.join("; ")}`,
       );
@@ -1108,6 +1120,7 @@ function childConfiguration(): ChildCaptureConfiguration | undefined {
 
   try {
     const configuration = JSON.parse(raw) as ChildCaptureConfiguration;
+
     return configuration.mode === mode &&
       isStringArray(configuration.relativeImports) &&
       isStringArray(configuration.expectedArgs) &&
@@ -1175,6 +1188,7 @@ function installChildCapture(): void {
       }
 
       const main = bindCliMain(configuration.expectedArgs[0]!);
+
       if (
         canonicalPath(main.binRealPath) !== canonicalPath(configuration.binRealPath) ||
         main.binSha256 !== configuration.binSha256 ||
@@ -1232,6 +1246,7 @@ function installChildCapture(): void {
 
               installedBytes = readFileSync(args.path);
               const originalSha256 = sha256(installedBytes);
+
               state.substitutedEntryPath = args.path;
               state.entrySha256 = originalSha256;
               const realPath = realpathSync.native(args.path);
@@ -1373,6 +1388,7 @@ function installChildCapture(): void {
           sourcePopulation,
           coverage,
         });
+
         hitArtifactPath = writeCoverageFragment({
           directory: configuration.outputDirectory,
           contextId: `${configuration.contextId}-hits`,
@@ -1566,6 +1582,7 @@ function installCreatorChildCapture(): void {
           sourcePopulation: state.profile.sourcePopulation,
           coverage,
         });
+
         hitArtifactPath = writeCoverageFragment({
           directory: state.profile.outputDirectory,
           contextId: `${configuration.contextId}-hits`,

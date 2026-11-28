@@ -214,6 +214,7 @@ function onError(name: string): (error: unknown) => void {
 
 function button(owner: Owner, name: string, className = "css-red-node"): HTMLButtonElement {
   const node = element(owner, "button", { class: className, "data-css-name": name });
+
   node.textContent = name;
 
   directButtons.push(node);
@@ -236,6 +237,7 @@ const DirectRed = defineComponent((owner) => {
 
   const registrations = { count: 0 };
   const registerRelease = owner.onRelease.bind(owner);
+
   owner.onRelease = (release) => {
     registrations.count++;
 
@@ -353,6 +355,7 @@ const DocumentShell = defineComponent((owner) => {
     "document text ",
     button(owner, "document", "css-document-node"),
   ]);
+
   body.style.display = "grid";
   const html = element(owner, "html", {}, [head, body]);
 
@@ -576,6 +579,7 @@ window.__cssRuntimeHarness = {
       () => ({ status: "resolved" }),
       (error: unknown) => ({ status: "rejected", kind: (error as { kind?: string }).kind }),
     );
+
     revisionPromise = runtime.prepareRevision(nextRevisionPlan, document.head);
     return Promise.race([
       first,
@@ -605,6 +609,7 @@ window.__cssRuntimeHarness = {
 
   async prepareRevisionWithLateBlue() {
     const pending = runtime.prepareRevision(nextRevisionPlan, document.head);
+
     nextName = "late-blue";
     const blueApplication = mount(
       document.querySelector("#blue-target")!,
@@ -661,6 +666,7 @@ window.__cssRuntimeHarness = {
     const oldHeadLeaseCount = originalHead
       ? [...(state?.leases ?? [])].filter((lease) => lease.group?.head === originalHead).length
       : 0;
+
     return {
       effects: effects.slice(),
       faults: allFaults,

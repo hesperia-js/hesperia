@@ -341,6 +341,7 @@ async function readTypeScriptConfiguration(root: string): Promise<{
     stdout: "pipe",
     stderr: "pipe",
   });
+
   return {
     exitCode: result.exitCode,
     stdout: new TextDecoder().decode(result.stdout).trim(),

@@ -189,6 +189,7 @@ function requestsFull(outcome: string, outputs: Record<string, string>, full = f
     .slice("${{ ".length, -" }}".length)
     .replaceAll(" != ", " !== ")
     .replaceAll(" == ", " === ");
+
   return new Function("inputs", "steps", `return (${expression});`)(
     { full },
     { paths: { outcome, outputs } },
@@ -274,6 +275,7 @@ function verification(full: boolean, integrations: boolean, behavior = true) {
   const outputs = Object.fromEntries(
     ["browser", "package", "vscode", "golden"].map((key) => [key, String(integrations)]),
   );
+
   return {
     checks: {
       result: "success" as Result,
@@ -312,6 +314,7 @@ describe("verification result gate", () => {
       for (const result of ["failure", "cancelled", "skipped"] as const) {
         if (name === "source-quality" && result === "skipped") continue;
         const jobs = verification(true, true);
+
         jobs[name]!.result = result;
         const probe = aggregate(jobs);
 
@@ -327,6 +330,7 @@ describe("verification result gate", () => {
       (name) => !["coverage-groups", "coverage-platform", "combined-coverage"].includes(name),
     )) {
       const jobs = verification(false, true);
+
       jobs[name]!.result = "skipped";
 
       expect(aggregate(jobs).exitCode).not.toBe(0);
@@ -344,6 +348,7 @@ describe("verification result gate", () => {
     ]) {
       for (const result of ["failure", "cancelled"] as const) {
         const jobs = verification(false, false);
+
         jobs[name]!.result = result;
 
         expect(aggregate(jobs).exitCode).not.toBe(0);

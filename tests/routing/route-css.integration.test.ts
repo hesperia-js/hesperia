@@ -79,6 +79,7 @@ function stylePlan(): CompiledStylePlan {
     { entryId: entries.error, styles: [styles.shell, styles.layout, styles.error] },
     { entryId: entries.independent, styles: [styles.independent] },
   ];
+
   return {
     assets: Object.entries(styles).map(([name, id]) => ({
       id,
@@ -149,6 +150,7 @@ function ready(link: HTMLLinkElement, window: Window): void {
 function enabled(document: Window["document"], styleId: StyleId): boolean {
   return links(document).some((link) => {
     const sheet = link.sheet as unknown as { media: { mediaText: string } } | null;
+
     return (
       link.getAttribute("data-hesperia-style-id") === styleId && sheet?.media.mediaText === "all"
     );
@@ -160,6 +162,7 @@ function enabledInHead(head: Window["document"]["head"], styleId: StyleId): bool
     const sheet = (link as unknown as HTMLLinkElement).sheet as unknown as {
       media: { mediaText: string };
     } | null;
+
     return (
       link.getAttribute("data-hesperia-style-id") === styleId && sheet?.media.mediaText === "all"
     );

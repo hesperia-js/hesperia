@@ -33,6 +33,7 @@ async function runCreator(
         readonly env: Record<string, string | undefined>;
       }): Promise<CommandResult>;
     };
+
     return adapter.runCreatorCli({
       cwd,
       execPath: process.execPath,
@@ -55,6 +56,7 @@ async function runCreator(
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
   ]);
+
   return { exitCode, stdout, stderr };
 }
 
@@ -570,6 +572,7 @@ test("does not start an installer cancelled by its progress callback", async () 
     expect(await readFile(join(destination, "app.tsx"), "utf8")).toContain("application");
   } finally {
     const started = installerStarted();
+
     spawnSpy.mockRestore();
     if (!started) await rm(root, { recursive: true, force: true });
   }
@@ -630,11 +633,13 @@ test("reaps a running installer after cancellation and retains the scaffold", as
     );
 
     const deadline = Date.now() + 15_000;
+
     while (!existsSync(marker) && Date.now() < deadline) await Bun.sleep(25);
     expect(existsSync(marker)).toBe(true);
     controller.abort();
 
     const result = await execution;
+
     expect(result.status).toBe("cancelled");
     if (result.status !== "cancelled") throw new Error("Expected installation to cancel");
 
@@ -651,12 +656,15 @@ test("reaps a running installer after cancellation and retains the scaffold", as
   } finally {
     controller.abort();
     let result: Awaited<ReturnType<typeof executeCreator>> | undefined;
+
     try {
       result = await execution;
     } finally {
       spawnSpy.mockRestore();
     }
+
     await Bun.sleep(5_100);
+
     if (
       observedInstaller === undefined ||
       (result?.status === "cancelled" &&

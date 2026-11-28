@@ -243,6 +243,7 @@ for (const profile of qualifiedNodeProfiles) {
       const nativeTargetPath = resolve(packageRoot, nativeTarget as string);
       const nativeEntry = pathToFileURL(nativeTargetPath).href;
       const expectedNativePath = await realpath(nativeTargetPath);
+
       expect(defaultEntry).not.toBe(nativeEntry);
       const result = await runQualifiedChild(profile, executable, [
         probe,

@@ -83,6 +83,7 @@ function pluginServerProject(
       .filter(([filename]) => !prepared.modules.some((module) => module.filename === filename))
       .map(([filename, diagnostics]) => ({ filename, diagnostics })),
   ];
+
   return {
     diagnostics: {
       ...project.diagnostics,
@@ -99,6 +100,7 @@ function pluginServerProject(
         filename,
         prepared.generatedOffset(filename, offset),
       );
+
       return entries.map((entry) =>
         entry.replacement
           ? {
@@ -117,6 +119,7 @@ function pluginServerProject(
         filename,
         prepared.generatedOffset(filename, offset),
       );
+
       return locations.map((location) => {
         const mapped = prepared.declarationLocation(
           location.filename,
@@ -291,6 +294,7 @@ export function startLanguageServer(
         try {
           if (typescriptConfiguration) {
             const controller = new AbortController();
+
             workerAbort = controller;
             let wire: Awaited<ReturnType<typeof editorInProjectProcess>>;
 
@@ -314,6 +318,7 @@ export function startLanguageServer(
               : configuration
                 ? "the last valid configuration"
                 : "default configuration";
+
           configurationError = `${error instanceof Error ? error.message : String(error)}. Editor checking uses ${fallback} until this file is repaired.`;
 
           if (typescriptConfiguration) pluginInputs = lastPluginInputs;
@@ -368,6 +373,7 @@ export function startLanguageServer(
           const editorSources = new Map(
             [...sources.values()].map(({ filename, source }) => [filename, source]),
           );
+
           pluginInputs ??=
             configuration &&
             (configuration.plugins?.length ||
@@ -387,6 +393,7 @@ export function startLanguageServer(
                 }
               : {}),
           });
+
           candidate = pluginInputs ? pluginServerProject(checked, pluginInputs) : checked;
 
           if (stopped || requested !== revision) {
@@ -398,6 +405,7 @@ export function startLanguageServer(
 
           const outgoingProject = candidate;
           const previous = project;
+
           project = outgoingProject;
           projectRevision = requested;
 
@@ -461,6 +469,7 @@ export function startLanguageServer(
                 ...(outgoing.get(document.uri)?.diagnostics ?? []),
                 ...module.diagnostics.map((item) => {
                   const end = document.positionAt(document.getText().length);
+
                   return {
                     code: item.code,
                     source: "hesperia",
@@ -522,6 +531,7 @@ export function startLanguageServer(
   ): Promise<ServerRequest | undefined> {
     while (!stopped) {
       const work = pending;
+
       await work;
 
       if (work === pending) break;
@@ -556,6 +566,7 @@ export function startLanguageServer(
     disposal = (async () => {
       await pending;
       const currentProject = project;
+
       project = undefined;
 
       for (const watcher of pluginWatchers.values()) watcher.close();
@@ -641,6 +652,7 @@ export function startLanguageServer(
     const results = await Promise.all(
       locations.map(async (location) => {
         const document = await documentFor(location.filename);
+
         return document
           ? {
               uri: document.uri,
@@ -652,6 +664,7 @@ export function startLanguageServer(
           : undefined;
       }),
     );
+
     return current(request) ? results.filter((location) => location !== undefined) : [];
   });
 
@@ -663,6 +676,7 @@ export function startLanguageServer(
     if (!belongs(filename)) return [];
 
     const document = await documentFor(filename);
+
     return document ? extractDocumentSymbols(filename, document.getText()) : [];
   });
 

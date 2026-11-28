@@ -56,6 +56,7 @@ test("native traversal runs before commit with router-owned terminal effects", a
   const navigation = new EventTarget() as EventTarget & {
     currentEntry: NavigationHistoryEntry;
   };
+
   navigation.currentEntry = {
     key: "a",
     index: 0,
@@ -157,6 +158,7 @@ test("native programmatic commit associates logical state after the physical ent
   const navigation = new EventTarget() as EventTarget & {
     currentEntry: NavigationHistoryEntry;
   };
+
   navigation.currentEntry = nativeEntry("native-home", 0, "https://example.test/", {
     native: "home",
   });
@@ -219,6 +221,7 @@ test("native physical entry changes can precede logical commit notification", ()
   const navigation = new EventTarget() as EventTarget & {
     currentEntry: NavigationHistoryEntry;
   };
+
   navigation.currentEntry = nativeEntry("native-home", 0, "https://example.test/", {
     native: "home",
   });
@@ -279,6 +282,7 @@ test("a redirected logical URL is not assigned to the outgoing native entry", as
   const navigation = new EventTarget() as EventTarget & {
     currentEntry: NavigationHistoryEntry;
   };
+
   navigation.currentEntry = nativeEntry("native-home", 0, "https://example.test/", {
     native: "home",
   });
@@ -361,6 +365,7 @@ test("an aborted native programmatic entry cannot capture a later logical commit
   const navigation = new EventTarget() as EventTarget & {
     currentEntry: NavigationHistoryEntry;
   };
+
   navigation.currentEntry = nativeEntry("native-home", 0, "https://example.test/", {
     native: "home",
   });
@@ -482,6 +487,7 @@ test("native veto rejects the precommit without changing the adapter entry", asy
   const navigation = new EventTarget() as EventTarget & {
     currentEntry: NavigationHistoryEntry;
   };
+
   navigation.currentEntry = {
     key: "a",
     index: 0,
@@ -536,6 +542,7 @@ test("aborted native traversals drop deferred terminal presentation", async () =
   const navigation = new EventTarget() as EventTarget & {
     currentEntry: NavigationHistoryEntry;
   };
+
   navigation.currentEntry = {
     key: "a",
     index: 0,
@@ -635,6 +642,7 @@ test("legacy traversal restores the exact tracked position after a veto", async 
     readEntry: (url) => entries.get(url),
     onTraverse: () => ({ status: "denied" }),
   });
+
   href = "https://example.test/b";
 
   target.dispatchEvent(new Event("popstate"));
@@ -670,6 +678,7 @@ test("legacy traversal reports foreign entries instead of guessing a history del
     onTraverse: () => ({ status: "committed" }),
     onError: (error) => errors.push(error),
   });
+
   href = "https://example.test/foreign";
 
   target.dispatchEvent(new Event("popstate"));
@@ -688,6 +697,7 @@ test("partial native Navigation falls back to tracked History traversal", () => 
   const navigation = new EventTarget() as EventTarget & {
     currentEntry: NavigationHistoryEntry;
   };
+
   navigation.currentEntry = {
     key: "partial",
     index: 0,
@@ -750,6 +760,7 @@ test("legacy traversal runs terminal presentation after the accepted entry", asy
       resolveCommitted();
     },
   });
+
   href = "https://example.test/b";
 
   target.dispatchEvent(new Event("popstate"));
@@ -790,6 +801,7 @@ test("legacy fragment traversal waits for hashchange before terminal presentatio
     }),
     onCommit: () => callbacks.push("commit"),
   });
+
   href = "https://example.test/a#two";
 
   target.dispatchEvent(new Event("popstate"));
@@ -855,6 +867,7 @@ test("legacy fragment traversal keeps the hash barrier while guards are pending"
     onTraverse: () => traversal,
     onCommit: () => callbacks.push("commit"),
   });
+
   href = "https://example.test/a#two";
 
   target.dispatchEvent(new Event("popstate"));

@@ -68,6 +68,7 @@ const application = mount(host, EmbedSecurity, {});
 await application.settled();
 
 const probe = getEmbedSecurityProbe();
+
 window.hesperiaEmbedGolden = {
   messages,
   loads: probe.loads,

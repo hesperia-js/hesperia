@@ -279,6 +279,7 @@ export function child(owner: Owner, read: () => unknown): DocumentFragment {
             previous && typeof previous.value !== "object"
               ? (previous.nodes[0] as Text)
               : document.createTextNode("");
+
           scalar.data = String(value);
           return { value, nodes: [scalar] };
         }
@@ -417,6 +418,7 @@ export function attribute(owner: Owner, node: Element, name: string, read: () =>
     }
 
     const previousURLs = ownedURLs;
+
     ownedURLs = nextURLs;
 
     for (const [blob, entry] of previousURLs) {
@@ -478,6 +480,7 @@ function createOwnedObjectURL(document: Document, blob: Blob): OwnedObjectURL {
     throw new RenderFault("blob-url", "This document cannot create and release Blob object URLs");
 
   const value = url.createObjectURL(blob);
+
   return { url: value, release: () => url.revokeObjectURL(value) };
 }
 
@@ -675,6 +678,7 @@ export function createRuntimeRoot(
     nextGeneration: 0,
   } as RuntimeContext;
   const owner = new Owner(context, null, "root");
+
   context.scheduler = new Scheduler(owner);
   return { context, owner };
 }
@@ -825,6 +829,7 @@ function documentShell(fragment: DocumentFragment): DocumentShell {
     throw new RenderFault("document-shell", "A Document mount requires one native head and body");
 
   const body = bodies[0] as HTMLBodyElement;
+
   return { html: root, head: heads[0] as HTMLHeadElement, body, bodyBefore: body.nextSibling };
 }
 
@@ -982,6 +987,7 @@ function startDirectStyles(
       previous?.release();
 
       const next = runtime.prepareDirectTarget(entryId, nextHead);
+
       current = next;
       const id = ++attemptId;
 
@@ -1051,6 +1057,7 @@ function startDocumentStyles(
   const begin = (head: HTMLHeadElement): void => {
     const id = ++attemptId;
     const nextController = new AbortController();
+
     controller = nextController;
     currentHead = head;
 
@@ -1113,6 +1120,7 @@ function startDocumentStyles(
 
     const previousController = controller;
     const previousLease = currentLease;
+
     controller = undefined;
     currentLease = undefined;
 
@@ -1171,6 +1179,7 @@ export function installStyledDocument(
     return startDocumentStyles(prepared.owner, runtime, selection.compositionId, restoreBody);
 
   const preparation = runtime.prepareDirectTarget(selection.entryId, shell.head);
+
   return startDirectStyles(
     prepared.owner,
     runtime,
@@ -1254,6 +1263,7 @@ export function mount<P>(
     }
 
     const reveal = installHiddenRange(container as Element, prepared.fragment, owner);
+
     return mountedHandle(
       owner,
       context,

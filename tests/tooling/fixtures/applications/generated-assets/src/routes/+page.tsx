@@ -40,6 +40,7 @@ export default function Page() {
         id="load-dynamic"
         on:click={async () => {
           const loaded = await import("../../dynamic.ts");
+
           dynamicResult.set(loaded.dynamicProof);
         }}
       >

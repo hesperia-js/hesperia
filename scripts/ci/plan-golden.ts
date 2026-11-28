@@ -461,6 +461,7 @@ export function toGitHubOutputs(plan: GoldenPlan): string {
     caseToSuite: plan.caseToSuite,
     fallbackReasons: plan.fallbackReasons,
   };
+
   return [
     `matrix=${JSON.stringify(matrix)}`,
     `full_suite=${plan.fullSuite}`,

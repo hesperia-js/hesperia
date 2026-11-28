@@ -10,6 +10,7 @@ function Consumer(props: Component.Props<{ name: string }>) {
     initial: 0,
     step: (sum, item) => sum + item,
   });
+
   return (
     <div>
       <output data-consumer={props.name()}>
@@ -24,6 +25,7 @@ function Consumer(props: Component.Props<{ name: string }>) {
 export default function Streams() {
   const first = client.state(true);
   const second = client.state(true);
+
   return (
     <main>
       <button on:click={() => emitNumber(1)}>Emit one</button>

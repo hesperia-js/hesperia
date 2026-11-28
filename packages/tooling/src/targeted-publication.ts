@@ -378,6 +378,7 @@ export async function publishTargetedBuild(
         ...(expectedVersion === 3 ? { serverDirectory: `.captures/${captureId}/server` } : {}),
       };
       const completedBytes = new TextEncoder().encode(JSON.stringify(completed, null, 2) + "\n");
+
       temporaryHandle = await open(temporary, "wx");
       temporaryCreated = true;
 
@@ -674,10 +675,12 @@ export function assertRetainedBrowserAssetDestination(
     return;
 
   const url = new URL(destination.origin ?? applicationOrigin ?? "https://hesperia.invalid");
+
   url.pathname = destination.pathname;
 
   if (routing) {
     const location = classifyBrowserStaticPath(routing, url, mount.pathname);
+
     if (location.kind !== "page" && location.kind !== "public") return;
   } else {
     const { pathname } = url;
@@ -686,6 +689,7 @@ export function assertRetainedBrowserAssetDestination(
       pathname === mount.pathname ||
       pathname.startsWith(mount.pathname + "/");
     const managed = pathname === mount.assetPath || pathname.startsWith(mount.assetPath + "/");
+
     if (!inMount || managed) return;
   }
 
@@ -731,6 +735,7 @@ async function browserStaticFiles(
   const routing = await readBrowserStaticRouting(inventory);
   const host = await createHostForDeployment(inventory, deployment, routing);
   const applicationOrigin = deployment.version === 2 ? deployment.applicationOrigin : undefined;
+
   assertRetainedBrowserAssetsFit(host.mount, routing, applicationOrigin, history);
 
   if (

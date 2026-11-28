@@ -290,6 +290,7 @@ export default function Page() {
           ? (result.targetSelectionRange ?? result.targetRange)
           : result.range;
       const targetDocument = await vscode.workspace.openTextDocument(targetUri);
+
       return { uri: targetUri, text: targetDocument.getText(targetRange) };
     };
 

@@ -31,6 +31,7 @@ function git(repo: string, args: readonly string[]): string {
 
   if (!result.success) {
     const detail = new TextDecoder().decode(result.stderr).trim();
+
     throw new Error(
       `Fixture Git command failed: git ${args.join(" ")}${detail ? `: ${detail}` : ""}`,
     );
@@ -171,6 +172,7 @@ test("configuration target domains include case-folded filenames on supported fi
     await writeRepoFile(repo, "src/changed.ts", "export const value = 1;\n");
     await writeRepoFile(repo, "src/unrelated.ts", "export const unrelated = true;\n");
     const base = commit(repo, "case-folded configuration input");
+
     await writeRepoFile(repo, "src/changed.ts", "export const value = 2;\n");
     const result = selection(
       repo,

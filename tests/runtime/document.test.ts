@@ -65,6 +65,7 @@ test("document installation activates effects only after the shell and keeps bin
   const prepared = prepareTree(owner, () => {
     const client = createClient(owner);
     const binding = client.bind<HTMLInputElement>();
+
     input = element(owner, "input", { bind: binding });
 
     client.effect(() => {

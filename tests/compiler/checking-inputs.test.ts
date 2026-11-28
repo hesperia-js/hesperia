@@ -54,6 +54,7 @@ test("typing evidence stays tied to the actual emitted module population", async
     expect(evidence?.unavailableTypeLocations).toContain("component-props");
 
     const modules = compilation.modules as Map<string, NonNullable<typeof emitted>>;
+
     modules.delete(filename);
     expect(issuedProjectTypingEvidence(compilation)).toBeUndefined();
     modules.set(filename, emitted!);
@@ -175,10 +176,12 @@ export function Page(props: Component.Props<{ title: string; serial: bigint }>) 
     expect(evidence?.unavailableTypeLocations).toContain("component-props");
     expect(evidence?.modules.map((item) => item.filename)).toEqual([filename]);
     const moduleEvidence = evidence?.modules[0];
+
     expect(moduleEvidence?.sourceDigest).toBe(sourceDigest);
     expect(moduleEvidence?.sourceJoin).toBe(true);
     expect(moduleEvidence?.components).toHaveLength(1);
     const component = moduleEvidence?.components[0];
+
     expect(component?.emittedComponentJoin).toBe("matched");
     expect(component?.parameterStart).toBe(source.indexOf("props: Component"));
     expect(component?.props).toMatchObject({

@@ -122,6 +122,7 @@ export async function releaseWorkspace(workspaceRoot: string, branch?: string) {
         JSON.parse(await readFile(resolve(target.packageRoot, "package.json"), "utf8")) as Manifest,
     ),
   );
+
   return { ...validateReleaseManifests(root, packages, branch), plan, packages };
 }
 
@@ -261,6 +262,7 @@ async function checkRelease() {
     );
 
     const pending = await preflightPublication(candidate);
+
     published = pending.length === 0;
     anyPublished = pending.length < candidate.packages.length;
   }

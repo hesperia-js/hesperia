@@ -33,6 +33,7 @@ test("await uses the request state after opening a failed query starts another f
     },
   };
   const firstOwner = new Owner(context, null, "first");
+
   context.scheduler = new Scheduler(firstOwner);
   const secondOwner = new Owner(context, null, "second");
 
@@ -61,6 +62,7 @@ test("await uses the request state after opening a failed query starts another f
       (read) => ({ kind: "resolved", value: read() }),
       (reason: unknown) => ({ kind: "rejected", reason }),
     );
+
     await recoveryStart;
 
     expect(requests).toHaveLength(2);

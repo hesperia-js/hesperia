@@ -220,6 +220,7 @@ function nativeReferenceSource(
 
   if (parts[1] === "static.mjs")
     return { source: "globalThis.__hesperiaNativeReferenceStatic = true;\n", contentType };
+
   if (parts[1] === "dynamic.mjs")
     return { source: "globalThis.__hesperiaNativeReferenceDynamic = true;\n", contentType };
 
@@ -584,6 +585,7 @@ export async function createGeneratedAssetProviderFixture(
       const stylesheetRequested = deferred();
       const stylesheetGate = deferred();
       const seedURL = new URL("/__seed_generated_asset_cookie", root.origin);
+
       seedURL.searchParams.set("path", root.pathname);
       const current: ActiveScenario = {
         id: input.id,

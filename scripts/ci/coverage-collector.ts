@@ -209,6 +209,7 @@ function canonicalKey(path: string, repoPath: string): string | undefined {
     return undefined;
 
   const normalized = relativePath.split(sep).join("/");
+
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
@@ -219,6 +220,7 @@ function stableJson(value: unknown): string {
     const entries = Object.entries(value as Record<string, unknown>)
       .filter(([, entry]) => entry !== undefined)
       .sort(([left], [right]) => compareStrings(left, right));
+
     return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`).join(",")}}`;
   }
 
@@ -425,6 +427,7 @@ function ownerFileFromCoverage(coverage: CoverageFile, repoPath: string): Covera
 
 function preparedSourceFilter(paths: readonly string[]): RegExp {
   const escaped = paths.map((path) => path.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
+
   return new RegExp(`^(?:${escaped.join("|")})$`, process.platform === "win32" ? "iu" : "u");
 }
 
@@ -549,6 +552,7 @@ function typecheckCoverageBootstrap(
     source.slice(suppressionStart + "// @ts-ignore".length, tailStart) +
     typedTail +
     source.slice(bootstrapEnd);
+
   return { source: result, bootstrapHash };
 }
 
@@ -650,6 +654,7 @@ export async function prepareCoverageSource(
 
     sourceMap = normalizeInstrumentedSourceMap(rawSourceMap, sourcePath, root, authoredSource);
     const bootstrap = typecheckCoverageBootstrap(instrumentedSource, relativePath, sourcePath);
+
     instrumentedSource = bootstrap.source;
     bootstrapHash = bootstrap.bootstrapHash;
     const typedBootstrap = instrumentedSource.replace(
@@ -669,6 +674,7 @@ export async function prepareCoverageSource(
     ? `${instrumentedSource}\n;(globalThis as any)[${JSON.stringify(coverageVariable)}][${JSON.stringify(sourcePath)}].inputSourceMap=${JSON.stringify(sourceMap)};` +
       `(globalThis as any)[${JSON.stringify(coverageVariable)}][${JSON.stringify(sourcePath)}].__hesperiaInstrumentedSourceSha256=${JSON.stringify(instrumentedSourceIdentity)};\n`
     : instrumentedSource;
+
   seed.inputSourceMap = sourceMap;
   seed.__hesperiaInstrumentedSourceSha256 = instrumentedSourceIdentity;
 
@@ -682,6 +688,7 @@ export async function prepareCoverageSource(
     instrumentedSourceSha256: instrumentedSourceIdentity,
     unitLayoutSha256: unitLayoutSha256(seed),
   };
+
   return {
     path: sourcePath,
     relativePath,
@@ -846,6 +853,7 @@ export async function seedCoverageSources(
     fingerprint: populationSha256(populationFiles),
     files: populationFiles,
   };
+
   return { prepared, coverage, ownerFiles: prepared.map((item) => item.ownerFile), population };
 }
 
@@ -2049,6 +2057,7 @@ export function mergePlatformCoverageCaptures(options: {
     },
     {},
   );
+
   return {
     coverage: createCoverageMap(merged),
     population: windows.population,

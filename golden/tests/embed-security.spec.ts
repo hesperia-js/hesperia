@@ -95,6 +95,7 @@ test("embed-sandbox-isolation: scripts run while a same-origin child cannot writ
 
   await page.evaluate(() => {
     const control = document.createElement("iframe");
+
     control.name = "unsandboxed-negative-control";
     control.title = "Unsandboxed parent-access control";
     control.src = "/embed-child?case=unsandboxed-control";
@@ -165,6 +166,7 @@ test("embed-permission-replacement: the wrapper survives while the old frame is 
 
     const wrapperRect = wrapper.getBoundingClientRect();
     const frameRect = frame.getBoundingClientRect();
+
     return {
       wrapperStyleWidth: wrapper.style.width,
       wrapperStyleHeight: wrapper.style.height,
@@ -202,6 +204,7 @@ test("embed-wrapper-binding-sizing: authored numeric and CSS dimensions reach th
 
     const wrapperRect = wrapper.getBoundingClientRect();
     const frameRect = frame.getBoundingClientRect();
+
     return {
       wrapperTag: wrapper.tagName,
       wrapperIsHTMLElement: wrapper instanceof HTMLElement,

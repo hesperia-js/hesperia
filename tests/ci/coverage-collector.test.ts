@@ -410,6 +410,7 @@ test("direct TS collection preserves behavior and merges canonical hits with off
       const entries = Object.entries(value as Record<string, unknown>)
         .filter(([, entry]) => entry !== undefined)
         .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+
       return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableFixtureJson(entry)}`).join(",")}}`;
     }
 
@@ -450,6 +451,7 @@ test("direct TS collection preserves behavior and merges canonical hits with off
     });
     const hitCoverage = structuredClone(coverageSeed);
     const hit = hitCoverage[usedPath!]!;
+
     hit.s[aggregateStatement] = contribution;
     hit.f[aggregateFunction] = contribution;
     hit.b[aggregateBranch] = hit.b[aggregateBranch]!.map(() => contribution);
@@ -462,6 +464,7 @@ test("direct TS collection preserves behavior and merges canonical hits with off
       sourcePopulation: population,
       coverage: { [usedPath!]: hit },
     });
+
     return {
       family,
       runId,
@@ -537,6 +540,7 @@ test("direct TS collection preserves behavior and merges canonical hits with off
 
   let duplicateAggregateIdError: unknown;
   const duplicateAggregateIdRuns = [...originalRuns];
+
   duplicateAggregateIdRuns[1] = {
     ...duplicateAggregateIdRuns[1]!,
     runId: duplicateAggregateIdRuns[0]!.runId,
@@ -557,6 +561,7 @@ test("direct TS collection preserves behavior and merges canonical hits with off
 
   let duplicateAggregateFamilyError: unknown;
   const duplicateAggregateFamilyRuns = [...originalRuns];
+
   duplicateAggregateFamilyRuns[1] = {
     ...duplicateAggregateFamilyRuns[1]!,
     family: duplicateAggregateFamilyRuns[0]!.family,
@@ -580,6 +585,7 @@ test("direct TS collection preserves behavior and merges canonical hits with off
   const incompatibleCoverage = structuredClone(seeded.coverage);
   const incompatibleFile = incompatibleCoverage[usedPath!]!;
   const extraUnit = "aggregate-test-foreign-unit";
+
   incompatibleFile.statementMap[extraUnit] = structuredClone(
     incompatibleFile.statementMap[aggregateStatement]!,
   );
@@ -601,6 +607,7 @@ test("direct TS collection preserves behavior and merges canonical hits with off
     files: incompatiblePopulationFiles,
   };
   const incompatibleRuns = [...originalRuns];
+
   incompatibleRuns[2] = runWithContribution(
     "browser-css",
     3,
@@ -631,6 +638,7 @@ test("direct TS collection preserves behavior and merges canonical hits with off
   const changedFunctionKey = Object.keys(changedFunctionEndArtifact.coverage[usedPath!]!.fnMap)[0]!;
   const functionLocation =
     changedFunctionEndArtifact.coverage[usedPath!]!.fnMap[changedFunctionKey]!.loc;
+
   changedFunctionEndArtifact.coverage[usedPath!]!.fnMap[changedFunctionKey]!.loc = {
     ...functionLocation,
     end: {
@@ -689,6 +697,7 @@ test("direct TS collection preserves behavior and merges canonical hits with off
   const conflictingSeedCoverage = structuredClone(seeded.coverage);
   const conflictingFile = conflictingSeedCoverage[usedPath!]!;
   const changedFunction = Object.keys(conflictingFile.fnMap)[0]!;
+
   conflictingFile.fnMap[changedFunction]!.name += "_different";
   const conflictingSeed = createCoverageArtifact({
     repoPath: root,
@@ -757,6 +766,7 @@ test("direct TS collection preserves behavior and merges canonical hits with off
   );
 
   const staleMap = structuredClone(hitArtifact);
+
   staleMap.coverage[usedPath!]!.inputSourceMap = {
     ...staleMap.coverage[usedPath!]!.inputSourceMap!,
     mappings: `${staleMap.coverage[usedPath!]!.inputSourceMap!.mappings}A`,
@@ -784,6 +794,7 @@ test("direct TS collection preserves behavior and merges canonical hits with off
 
   for (const invalid of invalidSourceContents) {
     const staleContents = structuredClone(hitArtifact);
+
     staleContents.coverage[usedPath!]!.inputSourceMap = {
       ...staleContents.coverage[usedPath!]!.inputSourceMap!,
       sourcesContent: invalid.contents,
@@ -867,6 +878,7 @@ test("direct TS collection preserves behavior and merges canonical hits with off
     "1",
   ] as const) {
     const malformedCounter = structuredClone(hitArtifact);
+
     malformedCounter.coverage[usedPath!]!.s[Object.keys(used.s)[0]!] = value as number;
     let malformedCounterError: unknown;
 
@@ -889,6 +901,7 @@ test("direct TS collection preserves behavior and merges canonical hits with off
   expect(hitArtifact.coverage[usedPath!]!.s[hitStatement]).toBeGreaterThan(0);
 
   const oversizedHitArtifact = structuredClone(hitArtifact);
+
   oversizedHitArtifact.coverage[usedPath!]!.s[hitStatement] = Number.MAX_SAFE_INTEGER;
   let mergedCounterError: unknown;
 
